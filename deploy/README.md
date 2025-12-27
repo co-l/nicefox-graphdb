@@ -174,7 +174,8 @@ server {
 }
 
 server {
-    listen 443 ssl http2;
+    listen 443 ssl;
+    http2 on;
     server_name graphdb.nicefox.net;
 
     # SSL will be configured by certbot
