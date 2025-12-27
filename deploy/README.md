@@ -398,6 +398,26 @@ sudo -u graphdb node /opt/nicefox-graphdb/packages/cli/dist/index.js list \
 # Create new project
 sudo -u graphdb node /opt/nicefox-graphdb/packages/cli/dist/index.js create compta \
   --data /var/data/nicefox-graphdb
+
+# Add API key for a project
+sudo -u graphdb node /opt/nicefox-graphdb/packages/cli/dist/index.js apikey add compta \
+  --keys /opt/nicefox-graphdb/api-keys.json
+
+# Add production-only API key
+sudo -u graphdb node /opt/nicefox-graphdb/packages/cli/dist/index.js apikey add compta \
+  --env production --keys /opt/nicefox-graphdb/api-keys.json
+
+# Add admin API key
+sudo -u graphdb node /opt/nicefox-graphdb/packages/cli/dist/index.js apikey add admin \
+  --admin --keys /opt/nicefox-graphdb/api-keys.json
+
+# List API keys
+sudo -u graphdb node /opt/nicefox-graphdb/packages/cli/dist/index.js apikey list \
+  --keys /opt/nicefox-graphdb/api-keys.json
+
+# Remove API key by prefix
+sudo -u graphdb node /opt/nicefox-graphdb/packages/cli/dist/index.js apikey remove <prefix> \
+  --keys /opt/nicefox-graphdb/api-keys.json
 ```
 
 ## Updating the Application

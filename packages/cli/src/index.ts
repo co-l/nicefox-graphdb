@@ -9,6 +9,7 @@ import {
   GraphDatabase,
   Executor,
   BackupManager,
+  generateApiKey,
   VERSION,
 } from "@nicefox/graphdb";
 
@@ -145,6 +146,8 @@ program
     }
 
     console.log(`\nProject '${project}' is ready.`);
+    console.log(`\nNext: Add an API key for this project:`);
+    console.log(`  nicefox-graphdb apikey add ${project} --keys <api-keys.json>`);
   });
 
 // ============================================================================
@@ -478,6 +481,180 @@ program
     if (failCount > 0) {
       process.exit(1);
     }
+  });
+
+// ============================================================================
+// apikey - API Key Management
+// ============================================================================
+
+interface ApiKeyConfig {
+  project?: string;
+  env?: string;
+  admin?: boolean;
+}
+
+const apikey = program
+  .command("apikey")
+  .description("Manage API keys for project access");
+
+apikey
+  .command("add <project>")
+  .description("Generate and add a new API key for a project")
+  .option("-k, --keys <file>", "API keys JSON file", "./api-keys.json")
+  .option("-e, --env <env>", "Restrict to specific environment (production/test)")
+  .option("--admin", "Create an admin key (ignores project/env)", false)
+  .action((project: string, options: { keys: string; env?: string; admin: boolean }) => {
+    const keysFile = path.resolve(options.keys);
+
+    // Load existing keys or create new object
+    let keys: Record<string, ApiKeyConfig> = {};
+    if (fs.existsSync(keysFile)) {
+      try {
+        keys = JSON.parse(fs.readFileSync(keysFile, "utf-8"));
+      } catch (err) {
+        console.error(`Failed to parse ${keysFile}:`, err);
+        process.exit(1);
+      }
+    }
+
+    // Generate new key
+    const newKey = generateApiKey();
+
+    // Build config
+    const config: ApiKeyConfig = {};
+    if (options.admin) {
+      config.admin = true;
+    } else {
+      config.project = project;
+      if (options.env) {
+        if (options.env !== "production" && options.env !== "test") {
+          console.error(`Invalid environment: ${options.env}. Must be 'production' or 'test'.`);
+          process.exit(1);
+        }
+        config.env = options.env;
+      }
+    }
+
+    keys[newKey] = config;
+
+    // Write back
+    fs.writeFileSync(keysFile, JSON.stringify(keys, null, 2) + "\n");
+
+    console.log(`\nAPI key created:`);
+    console.log(`  Key:     ${newKey}`);
+    if (options.admin) {
+      console.log(`  Access:  admin (full access)`);
+    } else {
+      console.log(`  Project: ${project}`);
+      console.log(`  Env:     ${options.env || "all"}`);
+    }
+    console.log(`\nSaved to: ${keysFile}`);
+    console.log(`\nUsage:`);
+    console.log(`  curl -H "Authorization: Bearer ${newKey}" ...`);
+  });
+
+apikey
+  .command("list")
+  .description("List all API keys (shows prefixes only)")
+  .option("-k, --keys <file>", "API keys JSON file", "./api-keys.json")
+  .action((options: { keys: string }) => {
+    const keysFile = path.resolve(options.keys);
+
+    if (!fs.existsSync(keysFile)) {
+      console.log(`No keys file found at ${keysFile}`);
+      return;
+    }
+
+    let keys: Record<string, ApiKeyConfig> = {};
+    try {
+      keys = JSON.parse(fs.readFileSync(keysFile, "utf-8"));
+    } catch (err) {
+      console.error(`Failed to parse ${keysFile}:`, err);
+      process.exit(1);
+    }
+
+    if (Object.keys(keys).length === 0) {
+      console.log("No API keys configured.");
+      return;
+    }
+
+    console.log(`\nAPI Keys (${keysFile}):\n`);
+    console.log("  Prefix      | Access");
+    console.log("  ------------+---------------------------");
+
+    for (const [key, config] of Object.entries(keys)) {
+      const prefix = key.slice(0, 8) + "...";
+      let access: string;
+      if (config.admin) {
+        access = "admin";
+      } else if (config.project) {
+        access = config.env ? `${config.project}/${config.env}` : `${config.project}/*`;
+      } else {
+        access = "*/*";
+      }
+      console.log(`  ${prefix.padEnd(12)}| ${access}`);
+    }
+    console.log("");
+  });
+
+apikey
+  .command("remove <prefix>")
+  .description("Remove an API key by its prefix (first 8 characters)")
+  .option("-k, --keys <file>", "API keys JSON file", "./api-keys.json")
+  .action((prefix: string, options: { keys: string }) => {
+    const keysFile = path.resolve(options.keys);
+
+    if (!fs.existsSync(keysFile)) {
+      console.error(`No keys file found at ${keysFile}`);
+      process.exit(1);
+    }
+
+    let keys: Record<string, ApiKeyConfig> = {};
+    try {
+      keys = JSON.parse(fs.readFileSync(keysFile, "utf-8"));
+    } catch (err) {
+      console.error(`Failed to parse ${keysFile}:`, err);
+      process.exit(1);
+    }
+
+    // Find key by prefix
+    const matchingKeys = Object.keys(keys).filter((k) => k.startsWith(prefix));
+
+    if (matchingKeys.length === 0) {
+      console.error(`No key found with prefix: ${prefix}`);
+      process.exit(1);
+    }
+
+    if (matchingKeys.length > 1) {
+      console.error(`Multiple keys match prefix '${prefix}'. Please be more specific.`);
+      for (const key of matchingKeys) {
+        console.error(`  - ${key.slice(0, 12)}...`);
+      }
+      process.exit(1);
+    }
+
+    const keyToRemove = matchingKeys[0];
+    const config = keys[keyToRemove];
+    delete keys[keyToRemove];
+
+    // Write back
+    fs.writeFileSync(keysFile, JSON.stringify(keys, null, 2) + "\n");
+
+    console.log(`\nRemoved API key:`);
+    console.log(`  Prefix: ${keyToRemove.slice(0, 8)}...`);
+    if (config.admin) {
+      console.log(`  Access: admin`);
+    } else {
+      console.log(`  Access: ${config.project || "*"}/${config.env || "*"}`);
+    }
+  });
+
+apikey
+  .command("generate")
+  .description("Generate a random API key (does not save it)")
+  .action(() => {
+    const key = generateApiKey();
+    console.log(key);
   });
 
 // ============================================================================
