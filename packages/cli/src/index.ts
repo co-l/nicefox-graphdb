@@ -21,6 +21,37 @@ program
   .version(VERSION);
 
 // ============================================================================
+// API Keys Helper
+// ============================================================================
+
+interface ApiKeyConfig {
+  project?: string;
+  env?: string;
+  admin?: boolean;
+}
+
+function getApiKeysPath(dataPath: string): string {
+  return path.join(dataPath, "api-keys.json");
+}
+
+function loadApiKeys(dataPath: string): Record<string, ApiKeyConfig> {
+  const keysFile = getApiKeysPath(dataPath);
+  if (fs.existsSync(keysFile)) {
+    try {
+      return JSON.parse(fs.readFileSync(keysFile, "utf-8"));
+    } catch {
+      return {};
+    }
+  }
+  return {};
+}
+
+function saveApiKeys(dataPath: string, keys: Record<string, ApiKeyConfig>): void {
+  const keysFile = getApiKeysPath(dataPath);
+  fs.writeFileSync(keysFile, JSON.stringify(keys, null, 2) + "\n");
+}
+
+// ============================================================================
 // serve - Start the HTTP server
 // ============================================================================
 
@@ -31,8 +62,7 @@ program
   .option("-d, --data <path>", "Data directory for databases", "./data")
   .option("-H, --host <host>", "Host to bind to", "localhost")
   .option("-b, --backup <path>", "Backup directory (enables backup endpoints)")
-  .option("-k, --api-keys <file>", "JSON file containing API keys")
-  .action(async (options: { port: string; data: string; host: string; backup?: string; apiKeys?: string }) => {
+  .action(async (options: { port: string; data: string; host: string; backup?: string }) => {
     const port = parseInt(options.port, 10);
     const dataPath = path.resolve(options.data);
     const host = options.host;
@@ -41,26 +71,16 @@ program
     // Ensure data directory exists
     ensureDataDir(dataPath);
 
-    // Load API keys from file or environment
-    let apiKeys: Record<string, { project?: string; env?: string; admin?: boolean }> | undefined;
+    // Load API keys from data directory
+    let apiKeys: Record<string, ApiKeyConfig> | undefined;
+    const keysFile = getApiKeysPath(dataPath);
     
-    if (options.apiKeys) {
+    if (fs.existsSync(keysFile)) {
       try {
-        const keyFile = path.resolve(options.apiKeys);
-        const content = fs.readFileSync(keyFile, "utf-8");
-        apiKeys = JSON.parse(content);
-        console.log(`Loaded ${Object.keys(apiKeys!).length} API key(s) from ${keyFile}`);
+        apiKeys = JSON.parse(fs.readFileSync(keysFile, "utf-8"));
+        console.log(`Loaded ${Object.keys(apiKeys!).length} API key(s) from ${keysFile}`);
       } catch (err) {
-        console.error(`Failed to load API keys from ${options.apiKeys}:`, err);
-        process.exit(1);
-      }
-    } else if (process.env.API_KEYS) {
-      // Load from environment variable (JSON format)
-      try {
-        apiKeys = JSON.parse(process.env.API_KEYS);
-        console.log(`Loaded ${Object.keys(apiKeys || {}).length} API key(s) from environment`);
-      } catch (err) {
-        console.error("Failed to parse API_KEYS environment variable:", err);
+        console.error(`Failed to load API keys from ${keysFile}:`, err);
         process.exit(1);
       }
     }
@@ -119,13 +139,15 @@ program
 
 program
   .command("create <project>")
-  .description("Create a new project (creates both production and test databases)")
+  .description("Create a new project with databases and API key")
   .option("-d, --data <path>", "Data directory for databases", "./data")
-  .action((project: string, options: { data: string }) => {
+  .option("--no-key", "Skip API key generation")
+  .action((project: string, options: { data: string; key: boolean }) => {
     const dataPath = path.resolve(options.data);
     ensureDataDir(dataPath);
 
     const envs = ["production", "test"];
+    let created = false;
 
     for (const env of envs) {
       const dbPath = path.join(dataPath, env, `${project}.db`);
@@ -142,12 +164,29 @@ program
         db.initialize();
         db.close();
         console.log(`  [created] ${env}/${project}.db`);
+        created = true;
       }
     }
 
-    console.log(`\nProject '${project}' is ready.`);
-    console.log(`\nNext: Add an API key for this project:`);
-    console.log(`  nicefox-graphdb apikey add ${project} --keys <api-keys.json>`);
+    // Generate API key for the project
+    if (options.key && created) {
+      const keys = loadApiKeys(dataPath);
+      const newKey = generateApiKey();
+      keys[newKey] = { project };
+      saveApiKeys(dataPath, keys);
+
+      console.log(`\nProject '${project}' is ready.`);
+      console.log(`\nAPI Key: ${newKey}`);
+      console.log(`\nUsage:`);
+      console.log(`  curl -X POST http://localhost:3000/query/production/${project} \\`);
+      console.log(`    -H "Authorization: Bearer ${newKey}" \\`);
+      console.log(`    -H "Content-Type: application/json" \\`);
+      console.log(`    -d '{"cypher": "RETURN 1"}'`);
+    } else if (!created) {
+      console.log(`\nProject '${project}' already exists.`);
+    } else {
+      console.log(`\nProject '${project}' is ready (no API key generated).`);
+    }
   });
 
 // ============================================================================
@@ -156,7 +195,7 @@ program
 
 program
   .command("delete <project>")
-  .description("Delete a project (removes both production and test databases)")
+  .description("Delete a project (removes databases and API keys)")
   .option("-d, --data <path>", "Data directory for databases", "./data")
   .option("-f, --force", "Skip confirmation prompt", false)
   .action((project: string, options: { data: string; force: boolean }) => {
@@ -172,7 +211,11 @@ program
       }
     }
 
-    if (existing.length === 0) {
+    // Check for API keys
+    const keys = loadApiKeys(dataPath);
+    const projectKeys = Object.entries(keys).filter(([_, config]) => config.project === project);
+
+    if (existing.length === 0 && projectKeys.length === 0) {
       console.log(`Project '${project}' does not exist.`);
       process.exit(1);
     }
@@ -182,17 +225,29 @@ program
       for (const file of existing) {
         console.log(`  - ${file}`);
       }
+      if (projectKeys.length > 0) {
+        console.log(`  - ${projectKeys.length} API key(s)`);
+      }
       console.log(`\nUse --force to confirm deletion.`);
       process.exit(1);
     }
 
-    // Delete files
+    // Delete database files
     for (const env of envs) {
       const dbPath = path.join(dataPath, env, `${project}.db`);
       if (fs.existsSync(dbPath)) {
         fs.unlinkSync(dbPath);
         console.log(`  [deleted] ${env}/${project}.db`);
       }
+    }
+
+    // Delete API keys for this project
+    if (projectKeys.length > 0) {
+      for (const [key] of projectKeys) {
+        delete keys[key];
+      }
+      saveApiKeys(dataPath, keys);
+      console.log(`  [deleted] ${projectKeys.length} API key(s)`);
     }
 
     console.log(`\nProject '${project}' has been deleted.`);
@@ -235,10 +290,21 @@ program
       return;
     }
 
+    // Load API keys to show key count per project
+    const keys = loadApiKeys(dataPath);
+    const keyCountByProject = new Map<string, number>();
+    for (const config of Object.values(keys)) {
+      if (config.project) {
+        keyCountByProject.set(config.project, (keyCountByProject.get(config.project) || 0) + 1);
+      }
+    }
+
     console.log("\nProjects:\n");
     for (const [project, envs] of projects) {
       const envList = envs.map((e) => (e === "production" ? "prod" : "test")).join(", ");
-      console.log(`  ${project} [${envList}]`);
+      const keyCount = keyCountByProject.get(project) || 0;
+      const keyInfo = keyCount > 0 ? ` (${keyCount} key${keyCount > 1 ? "s" : ""})` : " (no keys)";
+      console.log(`  ${project} [${envList}]${keyInfo}`);
     }
     console.log("");
   });
@@ -487,12 +553,6 @@ program
 // apikey - API Key Management
 // ============================================================================
 
-interface ApiKeyConfig {
-  project?: string;
-  env?: string;
-  admin?: boolean;
-}
-
 const apikey = program
   .command("apikey")
   .description("Manage API keys for project access");
@@ -500,22 +560,12 @@ const apikey = program
 apikey
   .command("add <project>")
   .description("Generate and add a new API key for a project")
-  .option("-k, --keys <file>", "API keys JSON file", "./api-keys.json")
+  .option("-d, --data <path>", "Data directory", "./data")
   .option("-e, --env <env>", "Restrict to specific environment (production/test)")
   .option("--admin", "Create an admin key (ignores project/env)", false)
-  .action((project: string, options: { keys: string; env?: string; admin: boolean }) => {
-    const keysFile = path.resolve(options.keys);
-
-    // Load existing keys or create new object
-    let keys: Record<string, ApiKeyConfig> = {};
-    if (fs.existsSync(keysFile)) {
-      try {
-        keys = JSON.parse(fs.readFileSync(keysFile, "utf-8"));
-      } catch (err) {
-        console.error(`Failed to parse ${keysFile}:`, err);
-        process.exit(1);
-      }
-    }
+  .action((project: string, options: { data: string; env?: string; admin: boolean }) => {
+    const dataPath = path.resolve(options.data);
+    const keys = loadApiKeys(dataPath);
 
     // Generate new key
     const newKey = generateApiKey();
@@ -536,49 +586,31 @@ apikey
     }
 
     keys[newKey] = config;
+    saveApiKeys(dataPath, keys);
 
-    // Write back
-    fs.writeFileSync(keysFile, JSON.stringify(keys, null, 2) + "\n");
-
-    console.log(`\nAPI key created:`);
-    console.log(`  Key:     ${newKey}`);
+    console.log(`\nAPI Key: ${newKey}`);
     if (options.admin) {
-      console.log(`  Access:  admin (full access)`);
+      console.log(`Access:  admin (full access)`);
     } else {
-      console.log(`  Project: ${project}`);
-      console.log(`  Env:     ${options.env || "all"}`);
+      console.log(`Project: ${project}`);
+      console.log(`Env:     ${options.env || "all"}`);
     }
-    console.log(`\nSaved to: ${keysFile}`);
-    console.log(`\nUsage:`);
-    console.log(`  curl -H "Authorization: Bearer ${newKey}" ...`);
   });
 
 apikey
   .command("list")
   .description("List all API keys (shows prefixes only)")
-  .option("-k, --keys <file>", "API keys JSON file", "./api-keys.json")
-  .action((options: { keys: string }) => {
-    const keysFile = path.resolve(options.keys);
-
-    if (!fs.existsSync(keysFile)) {
-      console.log(`No keys file found at ${keysFile}`);
-      return;
-    }
-
-    let keys: Record<string, ApiKeyConfig> = {};
-    try {
-      keys = JSON.parse(fs.readFileSync(keysFile, "utf-8"));
-    } catch (err) {
-      console.error(`Failed to parse ${keysFile}:`, err);
-      process.exit(1);
-    }
+  .option("-d, --data <path>", "Data directory", "./data")
+  .action((options: { data: string }) => {
+    const dataPath = path.resolve(options.data);
+    const keys = loadApiKeys(dataPath);
 
     if (Object.keys(keys).length === 0) {
       console.log("No API keys configured.");
       return;
     }
 
-    console.log(`\nAPI Keys (${keysFile}):\n`);
+    console.log("\nAPI Keys:\n");
     console.log("  Prefix      | Access");
     console.log("  ------------+---------------------------");
 
@@ -599,23 +631,11 @@ apikey
 
 apikey
   .command("remove <prefix>")
-  .description("Remove an API key by its prefix (first 8 characters)")
-  .option("-k, --keys <file>", "API keys JSON file", "./api-keys.json")
-  .action((prefix: string, options: { keys: string }) => {
-    const keysFile = path.resolve(options.keys);
-
-    if (!fs.existsSync(keysFile)) {
-      console.error(`No keys file found at ${keysFile}`);
-      process.exit(1);
-    }
-
-    let keys: Record<string, ApiKeyConfig> = {};
-    try {
-      keys = JSON.parse(fs.readFileSync(keysFile, "utf-8"));
-    } catch (err) {
-      console.error(`Failed to parse ${keysFile}:`, err);
-      process.exit(1);
-    }
+  .description("Remove an API key by its prefix (first 8+ characters)")
+  .option("-d, --data <path>", "Data directory", "./data")
+  .action((prefix: string, options: { data: string }) => {
+    const dataPath = path.resolve(options.data);
+    const keys = loadApiKeys(dataPath);
 
     // Find key by prefix
     const matchingKeys = Object.keys(keys).filter((k) => k.startsWith(prefix));
@@ -637,24 +657,14 @@ apikey
     const config = keys[keyToRemove];
     delete keys[keyToRemove];
 
-    // Write back
-    fs.writeFileSync(keysFile, JSON.stringify(keys, null, 2) + "\n");
+    saveApiKeys(dataPath, keys);
 
-    console.log(`\nRemoved API key:`);
-    console.log(`  Prefix: ${keyToRemove.slice(0, 8)}...`);
+    console.log(`\nRemoved API key: ${keyToRemove.slice(0, 8)}...`);
     if (config.admin) {
-      console.log(`  Access: admin`);
+      console.log(`Access: admin`);
     } else {
-      console.log(`  Access: ${config.project || "*"}/${config.env || "*"}`);
+      console.log(`Access: ${config.project || "*"}/${config.env || "*"}`);
     }
-  });
-
-apikey
-  .command("generate")
-  .description("Generate a random API key (does not save it)")
-  .action(() => {
-    const key = generateApiKey();
-    console.log(key);
   });
 
 // ============================================================================

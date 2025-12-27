@@ -118,6 +118,7 @@ Type=simple
 User=graphdb
 Group=graphdb
 WorkingDirectory=/opt/nicefox-graphdb
+# API keys are automatically loaded from /var/data/nicefox-graphdb/api-keys.json
 ExecStart=/usr/bin/node /opt/nicefox-graphdb/packages/cli/dist/index.js serve --port 3000 --host 127.0.0.1 --data /var/data/nicefox-graphdb
 Restart=always
 RestartSec=10
@@ -395,29 +396,29 @@ sudo -u graphdb node /opt/nicefox-graphdb/packages/cli/dist/index.js backup --st
 sudo -u graphdb node /opt/nicefox-graphdb/packages/cli/dist/index.js list \
   --data /var/data/nicefox-graphdb
 
-# Create new project
+# Create new project (auto-generates API key)
 sudo -u graphdb node /opt/nicefox-graphdb/packages/cli/dist/index.js create compta \
   --data /var/data/nicefox-graphdb
 
-# Add API key for a project
+# Add additional API key for a project
 sudo -u graphdb node /opt/nicefox-graphdb/packages/cli/dist/index.js apikey add compta \
-  --keys /opt/nicefox-graphdb/api-keys.json
+  --data /var/data/nicefox-graphdb
 
 # Add production-only API key
 sudo -u graphdb node /opt/nicefox-graphdb/packages/cli/dist/index.js apikey add compta \
-  --env production --keys /opt/nicefox-graphdb/api-keys.json
+  --env production --data /var/data/nicefox-graphdb
 
 # Add admin API key
 sudo -u graphdb node /opt/nicefox-graphdb/packages/cli/dist/index.js apikey add admin \
-  --admin --keys /opt/nicefox-graphdb/api-keys.json
+  --admin --data /var/data/nicefox-graphdb
 
 # List API keys
 sudo -u graphdb node /opt/nicefox-graphdb/packages/cli/dist/index.js apikey list \
-  --keys /opt/nicefox-graphdb/api-keys.json
+  --data /var/data/nicefox-graphdb
 
 # Remove API key by prefix
 sudo -u graphdb node /opt/nicefox-graphdb/packages/cli/dist/index.js apikey remove <prefix> \
-  --keys /opt/nicefox-graphdb/api-keys.json
+  --data /var/data/nicefox-graphdb
 ```
 
 ## Updating the Application
