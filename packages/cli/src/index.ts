@@ -168,20 +168,19 @@ program
       }
     }
 
-    // Generate API key for the project
+    // Generate API keys for the project (one for production, one for test)
     if (options.key && created) {
       const keys = loadApiKeys(dataPath);
-      const newKey = generateApiKey();
-      keys[newKey] = { project };
+      const prodKey = generateApiKey();
+      const testKey = generateApiKey();
+      keys[prodKey] = { project, env: "production" };
+      keys[testKey] = { project, env: "test" };
       saveApiKeys(dataPath, keys);
 
       console.log(`\nProject '${project}' is ready.`);
-      console.log(`\nAPI Key: ${newKey}`);
-      console.log(`\nUsage:`);
-      console.log(`  curl -X POST http://localhost:3000/query/production/${project} \\`);
-      console.log(`    -H "Authorization: Bearer ${newKey}" \\`);
-      console.log(`    -H "Content-Type: application/json" \\`);
-      console.log(`    -d '{"cypher": "RETURN 1"}'`);
+      console.log(`\nAPI Keys:`);
+      console.log(`  production: ${prodKey}`);
+      console.log(`  test:       ${testKey}`);
     } else if (!created) {
       console.log(`\nProject '${project}' already exists.`);
     } else {
