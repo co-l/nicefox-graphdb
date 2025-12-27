@@ -3,6 +3,8 @@
 import { Hono } from "hono";
 import { DatabaseManager, GraphDatabase } from "./db";
 import { Executor, QueryResponse } from "./executor";
+import { BackupManager, BackupStatus } from "./backup";
+import { ApiKeyStore, authMiddleware } from "./auth";
 
 // ============================================================================
 // Types
@@ -21,8 +23,18 @@ export interface AppContext {
 // Create App
 // ============================================================================
 
-export function createApp(dbManager: DatabaseManager): Hono {
+export function createApp(
+  dbManager: DatabaseManager, 
+  dataPath?: string, 
+  backupManager?: BackupManager,
+  apiKeyStore?: ApiKeyStore
+): Hono {
   const app = new Hono();
+
+  // Add auth middleware if API key store is provided
+  if (apiKeyStore && apiKeyStore.hasKeys()) {
+    app.use("*", authMiddleware(apiKeyStore));
+  }
 
   // ============================================================================
   // Health Check
@@ -153,6 +165,95 @@ export function createApp(dbManager: DatabaseManager): Hono {
     });
   });
 
+  // ============================================================================
+  // Backup Endpoints
+  // ============================================================================
+
+  app.get("/admin/backup", (c) => {
+    if (!backupManager) {
+      return c.json(
+        {
+          success: false,
+          error: { message: "Backup not configured. Set backupPath in server options." },
+        },
+        400
+      );
+    }
+
+    const status = backupManager.getBackupStatus();
+    return c.json({
+      success: true,
+      data: status,
+    });
+  });
+
+  app.post("/admin/backup", async (c) => {
+    if (!backupManager || !dataPath) {
+      return c.json(
+        {
+          success: false,
+          error: { message: "Backup not configured. Set backupPath in server options." },
+        },
+        400
+      );
+    }
+
+    // Get optional query params
+    const project = c.req.query("project");
+    const includeTest = c.req.query("includeTest") === "true";
+
+    if (project) {
+      // Backup single project
+      const sourcePath = `${dataPath}/production/${project}.db`;
+      const result = await backupManager.backupDatabase(sourcePath, project);
+      
+      if (!result.success) {
+        return c.json(
+          {
+            success: false,
+            error: { message: result.error },
+          },
+          400
+        );
+      }
+
+      return c.json({
+        success: true,
+        data: {
+          project: result.project,
+          backupPath: result.backupPath,
+          sizeBytes: result.sizeBytes,
+          durationMs: result.durationMs,
+        },
+      });
+    }
+
+    // Backup all databases
+    const results = await backupManager.backupAll(dataPath, { includeTest });
+    
+    const successful = results.filter(r => r.success);
+    const failed = results.filter(r => !r.success);
+
+    return c.json({
+      success: failed.length === 0,
+      data: {
+        total: results.length,
+        successful: successful.length,
+        failed: failed.length,
+        backups: successful.map(r => ({
+          project: r.project,
+          backupPath: r.backupPath,
+          sizeBytes: r.sizeBytes,
+          durationMs: r.durationMs,
+        })),
+        errors: failed.map(r => ({
+          project: r.project,
+          error: r.error,
+        })),
+      },
+    });
+  });
+
   return app;
 }
 
@@ -163,17 +264,30 @@ export function createApp(dbManager: DatabaseManager): Hono {
 export interface ServerOptions {
   port?: number;
   dataPath?: string;
+  backupPath?: string;
+  apiKeys?: Record<string, { project?: string; env?: string; admin?: boolean }>;
 }
 
 export function createServer(options: ServerOptions = {}) {
-  const { port = 3000, dataPath = ":memory:" } = options;
+  const { port = 3000, dataPath = ":memory:", backupPath, apiKeys } = options;
 
   const dbManager = new DatabaseManager(dataPath);
-  const app = createApp(dbManager);
+  const backupManager = backupPath ? new BackupManager(backupPath) : undefined;
+  
+  // Set up API key authentication if keys are provided
+  let apiKeyStore: ApiKeyStore | undefined;
+  if (apiKeys) {
+    apiKeyStore = new ApiKeyStore();
+    apiKeyStore.loadKeys(apiKeys);
+  }
+
+  const app = createApp(dbManager, dataPath, backupManager, apiKeyStore);
 
   return {
     app,
     dbManager,
+    backupManager,
+    apiKeyStore,
     port,
     fetch: app.fetch,
   };

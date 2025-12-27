@@ -8,14 +8,15 @@ import {
   createServer,
   GraphDatabase,
   Executor,
+  BackupManager,
   VERSION,
-} from "@graphlite/server";
+} from "@nicefox/graphdb";
 
 const program = new Command();
 
 program
-  .name("graphlite")
-  .description("GraphLite - SQLite-based graph database with Cypher queries")
+  .name("nicefox-graphdb")
+  .description("NiceFox GraphDB - SQLite-based graph database with Cypher queries")
   .version(VERSION);
 
 // ============================================================================
@@ -24,31 +25,70 @@ program
 
 program
   .command("serve")
-  .description("Start the GraphLite HTTP server")
+  .description("Start the NiceFox GraphDB HTTP server")
   .option("-p, --port <port>", "Port to listen on", "3000")
   .option("-d, --data <path>", "Data directory for databases", "./data")
   .option("-H, --host <host>", "Host to bind to", "localhost")
-  .action(async (options: { port: string; data: string; host: string }) => {
+  .option("-b, --backup <path>", "Backup directory (enables backup endpoints)")
+  .option("-k, --api-keys <file>", "JSON file containing API keys")
+  .action(async (options: { port: string; data: string; host: string; backup?: string; apiKeys?: string }) => {
     const port = parseInt(options.port, 10);
     const dataPath = path.resolve(options.data);
     const host = options.host;
+    const backupPath = options.backup ? path.resolve(options.backup) : undefined;
 
     // Ensure data directory exists
     ensureDataDir(dataPath);
 
-    const { app, dbManager } = createServer({ port, dataPath });
+    // Load API keys from file or environment
+    let apiKeys: Record<string, { project?: string; env?: string; admin?: boolean }> | undefined;
+    
+    if (options.apiKeys) {
+      try {
+        const keyFile = path.resolve(options.apiKeys);
+        const content = fs.readFileSync(keyFile, "utf-8");
+        apiKeys = JSON.parse(content);
+        console.log(`Loaded ${Object.keys(apiKeys!).length} API key(s) from ${keyFile}`);
+      } catch (err) {
+        console.error(`Failed to load API keys from ${options.apiKeys}:`, err);
+        process.exit(1);
+      }
+    } else if (process.env.API_KEYS) {
+      // Load from environment variable (JSON format)
+      try {
+        apiKeys = JSON.parse(process.env.API_KEYS);
+        console.log(`Loaded ${Object.keys(apiKeys || {}).length} API key(s) from environment`);
+      } catch (err) {
+        console.error("Failed to parse API_KEYS environment variable:", err);
+        process.exit(1);
+      }
+    }
+
+    const { app, dbManager } = createServer({ 
+      port, 
+      dataPath,
+      backupPath,
+      apiKeys,
+    });
+
+    const authStatus = apiKeys ? "enabled" : "disabled";
+    const backupStatus = backupPath ? backupPath.slice(0, 30) : "disabled";
 
     console.log(`
 ╔═══════════════════════════════════════════════════════════╗
-║                  GraphLite Server v${VERSION}                  ║
+║              NiceFox GraphDB Server v${VERSION}                ║
 ╠═══════════════════════════════════════════════════════════╣
 ║  Endpoint:  http://${host}:${port.toString().padEnd(5)}                         ║
 ║  Data:      ${dataPath.slice(0, 43).padEnd(43)} ║
+║  Backups:   ${backupStatus.padEnd(43)} ║
+║  Auth:      ${authStatus.padEnd(43)} ║
 ║                                                           ║
 ║  Routes:                                                  ║
 ║    POST /query/:env/:project  - Execute Cypher queries    ║
 ║    GET  /health               - Health check              ║
 ║    GET  /admin/list           - List all projects         ║
+║    GET  /admin/backup         - Backup status             ║
+║    POST /admin/backup         - Trigger backup            ║
 ╚═══════════════════════════════════════════════════════════╝
 `);
 
@@ -167,7 +207,7 @@ program
     const dataPath = path.resolve(options.data);
 
     if (!fs.existsSync(dataPath)) {
-      console.log("No data directory found. Run 'graphlite create <project>' first.");
+      console.log("No data directory found. Run 'nicefox-graphdb create <project>' first.");
       return;
     }
 
@@ -222,7 +262,7 @@ program
 
     if (!fs.existsSync(dbPath)) {
       console.error(`Database not found: ${dbPath}`);
-      console.error(`Run 'graphlite create ${project}' first.`);
+      console.error(`Run 'nicefox-graphdb create ${project}' first.`);
       process.exit(1);
     }
 
@@ -337,8 +377,120 @@ program
   });
 
 // ============================================================================
+// backup - Backup databases
+// ============================================================================
+
+program
+  .command("backup")
+  .description("Backup production databases")
+  .option("-d, --data <path>", "Data directory for databases", "./data")
+  .option("-o, --output <path>", "Backup output directory", "./backups")
+  .option("-p, --project <name>", "Backup specific project only")
+  .option("--include-test", "Also backup test databases", false)
+  .option("--keep <count>", "Number of backups to keep per project", "5")
+  .option("--status", "Show backup status only", false)
+  .action(async (options: { data: string; output: string; project?: string; includeTest: boolean; keep: string; status: boolean }) => {
+    const dataPath = path.resolve(options.data);
+    const backupPath = path.resolve(options.output);
+    const keepCount = parseInt(options.keep, 10);
+
+    const manager = new BackupManager(backupPath);
+
+    // Status only mode
+    if (options.status) {
+      const status = manager.getBackupStatus();
+      console.log("\nBackup Status:\n");
+      console.log(`  Total backups:  ${status.totalBackups}`);
+      console.log(`  Total size:     ${formatBytes(status.totalSizeBytes)}`);
+      console.log(`  Projects:       ${status.projects.join(", ") || "(none)"}`);
+      if (status.oldestBackup) {
+        console.log(`  Oldest backup:  ${status.oldestBackup}`);
+      }
+      if (status.newestBackup) {
+        console.log(`  Newest backup:  ${status.newestBackup}`);
+      }
+      console.log("");
+      return;
+    }
+
+    // Check data directory exists
+    if (!fs.existsSync(dataPath)) {
+      console.error(`Data directory not found: ${dataPath}`);
+      process.exit(1);
+    }
+
+    // Single project backup
+    if (options.project) {
+      const sourcePath = path.join(dataPath, "production", `${options.project}.db`);
+      if (!fs.existsSync(sourcePath)) {
+        console.error(`Project not found: ${options.project}`);
+        process.exit(1);
+      }
+
+      console.log(`Backing up ${options.project}...`);
+      const result = await manager.backupDatabase(sourcePath, options.project);
+
+      if (result.success) {
+        console.log(`  [success] ${result.backupPath}`);
+        console.log(`  Size: ${formatBytes(result.sizeBytes || 0)}, Duration: ${result.durationMs}ms`);
+        
+        // Cleanup old backups
+        const deleted = manager.cleanOldBackups(options.project, keepCount);
+        if (deleted > 0) {
+          console.log(`  Cleaned up ${deleted} old backup(s)`);
+        }
+      } else {
+        console.error(`  [failed] ${result.error}`);
+        process.exit(1);
+      }
+      return;
+    }
+
+    // Backup all databases
+    console.log(`\nBacking up databases from ${dataPath}...\n`);
+    const results = await manager.backupAll(dataPath, { includeTest: options.includeTest });
+
+    if (results.length === 0) {
+      console.log("No databases found to backup.");
+      return;
+    }
+
+    let successCount = 0;
+    let failCount = 0;
+
+    for (const result of results) {
+      if (result.success) {
+        console.log(`  [success] ${result.project} → ${path.basename(result.backupPath!)}`);
+        successCount++;
+
+        // Cleanup old backups
+        const deleted = manager.cleanOldBackups(result.project, keepCount);
+        if (deleted > 0) {
+          console.log(`            Cleaned up ${deleted} old backup(s)`);
+        }
+      } else {
+        console.log(`  [failed]  ${result.project}: ${result.error}`);
+        failCount++;
+      }
+    }
+
+    console.log(`\nBackup complete: ${successCount} succeeded, ${failCount} failed`);
+    if (failCount > 0) {
+      process.exit(1);
+    }
+  });
+
+// ============================================================================
 // Helpers
 // ============================================================================
+
+function formatBytes(bytes: number): string {
+  if (bytes === 0) return "0 B";
+  const k = 1024;
+  const sizes = ["B", "KB", "MB", "GB"];
+  const i = Math.floor(Math.log(bytes) / Math.log(k));
+  return `${parseFloat((bytes / Math.pow(k, i)).toFixed(2))} ${sizes[i]}`;
+}
 
 function ensureDataDir(dataPath: string): void {
   if (!fs.existsSync(dataPath)) {

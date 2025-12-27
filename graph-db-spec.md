@@ -1,4 +1,4 @@
-# GraphLite: SQLite-Based Graph Database Service
+# NiceFox GraphDB: SQLite-Based Graph Database Service
 
 ## Project Overview
 
@@ -26,7 +26,7 @@ Build a lightweight, self-hosted graph database service that provides Cypher-lik
 ## Architecture
 
 ```
-/var/data/graphlite/
+/var/data/nicefox-graphdb/
 ├── production/
 │   ├── project-a.db
 │   └── project-b.db
@@ -141,37 +141,37 @@ GET    /health                          # Health check
 
 ```bash
 # Project management
-graphlite create <project>              # Creates both prod and test DBs
-graphlite delete <project>              # Deletes both (requires confirmation)
-graphlite list                          # List all projects
+nicefox-graphdb create <project>              # Creates both prod and test DBs
+nicefox-graphdb delete <project>              # Deletes both (requires confirmation)
+nicefox-graphdb list                          # List all projects
 
 # Environment management  
-graphlite clone <project>               # Copy production → test
-graphlite wipe <project>                # Wipe test DB only
+nicefox-graphdb clone <project>               # Copy production → test
+nicefox-graphdb wipe <project>                # Wipe test DB only
 
 # Backup
-graphlite backup                        # Trigger backup now
-graphlite backup --schedule "0 * * * *" # Show/set backup schedule
+nicefox-graphdb backup                        # Trigger backup now
+nicefox-graphdb backup --schedule "0 * * * *" # Show/set backup schedule
 
 # Query (for debugging)
-graphlite query <env> <project> "CYPHER QUERY HERE"
+nicefox-graphdb query <env> <project> "CYPHER QUERY HERE"
 
 # Server
-graphlite serve                         # Start the HTTP server
-graphlite serve --port 3000 --data /var/data/graphlite
+nicefox-graphdb serve                         # Start the HTTP server
+nicefox-graphdb serve --port 3000 --data /var/data/nicefox-graphdb
 ```
 
 ## TypeScript Client Library
 
 ```typescript
-import { GraphLite } from '@yourorg/graphlite-client';
+import { NiceFoxGraphDB } from '@nicefox/graphdb-client';
 
 // Initialize
-const graph = new GraphLite({
+const graph = new NiceFoxGraphDB({
   url: 'https://graph.yourdomain.com',
   project: 'myproject',
   env: process.env.NODE_ENV === 'production' ? 'production' : 'test',
-  apiKey: process.env.GRAPHLITE_API_KEY
+  apiKey: process.env.NICEFOX_GRAPHDB_API_KEY
 });
 
 // Query with Cypher
@@ -223,7 +223,7 @@ const alice = await graph.getNode('User', { id: 'abc123' });
 ## File Structure
 
 ```
-graphlite/
+nicefox-graphdb/
 ├── packages/
 │   ├── server/           # HTTP service
 │   │   ├── src/

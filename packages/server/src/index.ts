@@ -1,4 +1,4 @@
-// GraphLite Server - Entry Point
+// NiceFox GraphDB Server - Entry Point
 
 export { parse } from "./parser";
 export type {
@@ -33,6 +33,12 @@ export type { ExecutionResult, ExecutionError, QueryResponse } from "./executor"
 export { createApp, createServer } from "./routes";
 export type { QueryRequest, ServerOptions } from "./routes";
 
+export { BackupManager } from "./backup";
+export type { BackupResult, BackupStatus, BackupAllOptions } from "./backup";
+
+export { ApiKeyStore, authMiddleware, generateApiKey } from "./auth";
+export type { ApiKeyConfig, ValidationResult, KeyInfo } from "./auth";
+
 export const VERSION = "0.1.0";
 
 // If this file is run directly, start the server
@@ -45,7 +51,7 @@ if (import.meta.url === `file://${process.argv[1]}`) {
 
   const { app, dbManager } = createServer({ port, dataPath });
 
-  console.log(`GraphLite Server v${VERSION}`);
+  console.log(`NiceFox GraphDB Server v${VERSION}`);
   console.log(`Starting on http://localhost:${port}`);
   console.log(`Data path: ${dataPath}`);
 

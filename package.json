@@ -1,12 +1,12 @@
 {
-  "name": "graphlite",
+  "name": "nicefox-graphdb",
   "version": "0.1.0",
   "private": true,
   "type": "module",
   "scripts": {
     "test": "vitest run",
     "test:watch": "vitest",
-    "dev": "pnpm --filter @graphlite/server dev",
+    "dev": "pnpm --filter @nicefox/graphdb dev",
     "build": "pnpm -r build"
   },
   "devDependencies": {

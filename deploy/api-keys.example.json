@@ -1,0 +1,16 @@
+{
+  "your-admin-key-here": {
+    "admin": true
+  },
+  "project1-full-access-key": {
+    "project": "project1"
+  },
+  "project1-test-only-key": {
+    "project": "project1",
+    "env": "test"
+  },
+  "project2-prod-only-key": {
+    "project": "project2",
+    "env": "production"
+  }
+}
