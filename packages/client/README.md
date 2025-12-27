@@ -10,16 +10,18 @@ Install directly from GitHub:
 npm install github:co-l/nicefox-graphdb#main
 ```
 
-Then import the client:
+Then import the client (TypeScript):
 
 ```typescript
-import { NiceFoxGraphDB } from 'nicefox-graphdb/packages/client/src/index.js';
+import { NiceFoxGraphDB } from 'nicefox-graphdb/packages/client/src/index.ts';
 ```
+
+> **Note**: This imports TypeScript directly. Your project needs to support `.ts` imports (e.g., via `tsx`, `ts-node`, or a bundler like Vite/esbuild).
 
 ## Usage
 
 ```typescript
-import { NiceFoxGraphDB } from 'nicefox-graphdb/packages/client/src/index.js';
+import { NiceFoxGraphDB } from 'nicefox-graphdb/packages/client/src/index.ts';
 
 const graph = new NiceFoxGraphDB({
   url: 'https://graphdb.nicefox.net',
