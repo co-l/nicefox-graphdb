@@ -1,8 +1,8 @@
 // Query Executor - Full pipeline: Cypher → Parse → Translate → Execute → Format
 
-import { parse, ParseResult, Query } from "./parser";
-import { translate, TranslationResult, Translator } from "./translator";
-import { GraphDatabase } from "./db";
+import { parse, ParseResult, Query } from "./parser.js";
+import { translate, TranslationResult, Translator } from "./translator.js";
+import { GraphDatabase } from "./db.js";
 
 // ============================================================================
 // Types

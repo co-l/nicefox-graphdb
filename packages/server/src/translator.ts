@@ -18,7 +18,7 @@ import {
   ParameterRef,
   SetAssignment,
   ReturnItem,
-} from "./parser";
+} from "./parser.js";
 
 // ============================================================================
 // Types

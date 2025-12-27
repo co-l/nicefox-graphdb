@@ -1,6 +1,6 @@
 // NiceFox GraphDB Server - Entry Point
 
-export { parse } from "./parser";
+export { parse } from "./parser.js";
 export type {
   Query,
   Clause,
@@ -19,25 +19,25 @@ export type {
   ParameterRef,
   ParseResult,
   ParseError,
-} from "./parser";
+} from "./parser.js";
 
-export { translate, Translator } from "./translator";
-export type { SqlStatement, TranslationResult } from "./translator";
+export { translate, Translator } from "./translator.js";
+export type { SqlStatement, TranslationResult } from "./translator.js";
 
-export { GraphDatabase, DatabaseManager } from "./db";
-export type { Node, Edge, NodeRow, EdgeRow, QueryResult } from "./db";
+export { GraphDatabase, DatabaseManager } from "./db.js";
+export type { Node, Edge, NodeRow, EdgeRow, QueryResult } from "./db.js";
 
-export { Executor, executeQuery } from "./executor";
-export type { ExecutionResult, ExecutionError, QueryResponse } from "./executor";
+export { Executor, executeQuery } from "./executor.js";
+export type { ExecutionResult, ExecutionError, QueryResponse } from "./executor.js";
 
-export { createApp, createServer } from "./routes";
-export type { QueryRequest, ServerOptions } from "./routes";
+export { createApp, createServer } from "./routes.js";
+export type { QueryRequest, ServerOptions } from "./routes.js";
 
-export { BackupManager } from "./backup";
-export type { BackupResult, BackupStatus, BackupAllOptions } from "./backup";
+export { BackupManager } from "./backup.js";
+export type { BackupResult, BackupStatus, BackupAllOptions } from "./backup.js";
 
-export { ApiKeyStore, authMiddleware, generateApiKey } from "./auth";
-export type { ApiKeyConfig, ValidationResult, KeyInfo } from "./auth";
+export { ApiKeyStore, authMiddleware, generateApiKey } from "./auth.js";
+export type { ApiKeyConfig, ValidationResult, KeyInfo } from "./auth.js";
 
 export const VERSION = "0.1.0";
 

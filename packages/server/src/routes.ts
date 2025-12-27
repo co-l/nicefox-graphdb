@@ -1,10 +1,10 @@
 // HTTP Routes using Hono
 
 import { Hono } from "hono";
-import { DatabaseManager, GraphDatabase } from "./db";
-import { Executor, QueryResponse } from "./executor";
-import { BackupManager, BackupStatus } from "./backup";
-import { ApiKeyStore, authMiddleware } from "./auth";
+import { DatabaseManager, GraphDatabase } from "./db.js";
+import { Executor, QueryResponse } from "./executor.js";
+import { BackupManager, BackupStatus } from "./backup.js";
+import { ApiKeyStore, authMiddleware } from "./auth.js";
 
 // ============================================================================
 // Types
