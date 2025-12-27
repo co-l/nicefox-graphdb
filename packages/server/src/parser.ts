@@ -627,7 +627,7 @@ export class Parser {
 
       if (this.checkKeyword("AS")) {
         this.advance();
-        alias = this.expectIdentifier();
+        alias = this.expectIdentifierOrKeyword();
       }
 
       items.push({ expression, alias });

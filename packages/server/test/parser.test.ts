@@ -443,6 +443,32 @@ describe("Parser", () => {
       expect(returnClause.items[0].alias).toBe("total");
       expect(returnClause.limit).toBe(1);
     });
+
+    it("allows keywords as aliases", () => {
+      // 'count' is a keyword but should work as an alias
+      const query = expectSuccess("MATCH (n) RETURN COUNT(n) AS count");
+      const returnClause = query.clauses[1] as ReturnClause;
+
+      expect(returnClause.items[0].expression.functionName).toBe("COUNT");
+      expect(returnClause.items[0].alias).toBe("count");
+    });
+
+    it("allows lowercase 'as' for aliases", () => {
+      const query = expectSuccess("MATCH (n) RETURN n.name as name");
+      const returnClause = query.clauses[1] as ReturnClause;
+
+      expect(returnClause.items[0].alias).toBe("name");
+    });
+
+    it("allows various keywords as aliases", () => {
+      // Test multiple keywords that might be used as aliases
+      expectSuccess("MATCH (n) RETURN n.id AS id");
+      expectSuccess("MATCH (n) RETURN n.type AS type");
+      expectSuccess("MATCH (n) RETURN n.name AS name");
+      expectSuccess("MATCH (n) RETURN COUNT(n) AS total");
+      expectSuccess("MATCH (n) RETURN COUNT(n) AS count");
+      expectSuccess("MATCH (n) RETURN n AS match"); // 'match' is a keyword
+    });
   });
 
   describe("Parameters", () => {
