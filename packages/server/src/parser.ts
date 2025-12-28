@@ -160,6 +160,14 @@ export interface UnionClause {
   right: Query;
 }
 
+export interface CallClause {
+  type: "CALL";
+  procedure: string; // e.g., "db.labels", "db.relationshipTypes"
+  args: Expression[]; // Arguments to the procedure
+  yields?: string[]; // Variables to yield, e.g., ["label"] or ["type"]
+  where?: WhereCondition; // Optional WHERE filter after YIELD
+}
+
 export type Clause =
   | CreateClause
   | MatchClause
@@ -169,7 +177,8 @@ export type Clause =
   | ReturnClause
   | WithClause
   | UnwindClause
-  | UnionClause;
+  | UnionClause
+  | CallClause;
 
 export interface Query {
   clauses: Clause[];
@@ -269,6 +278,8 @@ const KEYWORDS = new Set([
   "EXISTS",
   "UNION",
   "ALL",
+  "CALL",
+  "YIELD",
 ]);
 
 class Tokenizer {
@@ -619,6 +630,8 @@ export class Parser {
         return this.parseWith();
       case "UNWIND":
         return this.parseUnwind();
+      case "CALL":
+        return this.parseCall();
       default:
         throw new Error(`Unexpected keyword '${token.value}'`);
     }
@@ -922,6 +935,56 @@ export class Parser {
     }
 
     throw new Error(`Expected array, parameter, or variable in UNWIND, got ${token.type} '${token.value}'`);
+  }
+
+  private parseCall(): CallClause {
+    this.expect("KEYWORD", "CALL");
+
+    // Parse procedure name (e.g., "db.labels" or "db.relationshipTypes")
+    // Procedure names can have dots, so we parse identifier.identifier...
+    let procedureName = this.expectIdentifier();
+    while (this.check("DOT")) {
+      this.advance();
+      procedureName += "." + this.expectIdentifier();
+    }
+
+    // Parse arguments in parentheses
+    this.expect("LPAREN");
+    const args: Expression[] = [];
+    if (!this.check("RPAREN")) {
+      do {
+        if (args.length > 0) {
+          this.expect("COMMA");
+        }
+        args.push(this.parseExpression());
+      } while (this.check("COMMA"));
+    }
+    this.expect("RPAREN");
+
+    // Parse optional YIELD clause
+    let yields: string[] | undefined;
+    let where: WhereCondition | undefined;
+
+    if (this.checkKeyword("YIELD")) {
+      this.advance();
+      yields = [];
+
+      // Parse yielded field names (can be identifiers or keywords like 'count')
+      do {
+        if (yields.length > 0) {
+          this.expect("COMMA");
+        }
+        yields.push(this.expectIdentifierOrKeyword());
+      } while (this.check("COMMA"));
+
+      // Parse optional WHERE after YIELD
+      if (this.checkKeyword("WHERE")) {
+        this.advance();
+        where = this.parseWhereCondition();
+      }
+    }
+
+    return { type: "CALL", procedure: procedureName, args, yields, where };
   }
 
   /**

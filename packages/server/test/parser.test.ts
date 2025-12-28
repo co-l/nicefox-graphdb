@@ -1423,6 +1423,77 @@ describe("Parser", () => {
     });
   });
 
+  describe("CALL procedures", () => {
+    it("parses CALL db.labels()", () => {
+      const query = expectSuccess("CALL db.labels()");
+      
+      expect(query.clauses).toHaveLength(1);
+      expect(query.clauses[0].type).toBe("CALL");
+      
+      const callClause = query.clauses[0] as any;
+      expect(callClause.procedure).toBe("db.labels");
+      expect(callClause.args).toEqual([]);
+    });
+
+    it("parses CALL db.relationshipTypes()", () => {
+      const query = expectSuccess("CALL db.relationshipTypes()");
+      
+      expect(query.clauses).toHaveLength(1);
+      expect(query.clauses[0].type).toBe("CALL");
+      
+      const callClause = query.clauses[0] as any;
+      expect(callClause.procedure).toBe("db.relationshipTypes");
+    });
+
+    it("parses CALL with YIELD", () => {
+      const query = expectSuccess("CALL db.labels() YIELD label");
+      
+      expect(query.clauses).toHaveLength(1);
+      const callClause = query.clauses[0] as any;
+      expect(callClause.type).toBe("CALL");
+      expect(callClause.yields).toEqual(["label"]);
+    });
+
+    it("parses CALL with multiple YIELD fields", () => {
+      const query = expectSuccess("CALL db.propertyKeys() YIELD key, count");
+      
+      const callClause = query.clauses[0] as any;
+      expect(callClause.yields).toEqual(["key", "count"]);
+    });
+
+    it("parses CALL with YIELD and RETURN", () => {
+      const query = expectSuccess("CALL db.labels() YIELD label RETURN label");
+      
+      expect(query.clauses).toHaveLength(2);
+      expect(query.clauses[0].type).toBe("CALL");
+      expect(query.clauses[1].type).toBe("RETURN");
+    });
+
+    it("parses CALL with YIELD and WHERE", () => {
+      const query = expectSuccess("CALL db.labels() YIELD label WHERE label <> 'System' RETURN label");
+      
+      expect(query.clauses).toHaveLength(2);
+      const callClause = query.clauses[0] as any;
+      expect(callClause.type).toBe("CALL");
+      expect(callClause.where).toBeDefined();
+    });
+
+    it("parses lowercase call", () => {
+      const query = expectSuccess("call db.labels()");
+      
+      expect(query.clauses[0].type).toBe("CALL");
+    });
+
+    it("parses CALL with arguments", () => {
+      const query = expectSuccess("CALL db.index.fulltext.queryNodes('myIndex', 'search term')");
+      
+      const callClause = query.clauses[0] as any;
+      expect(callClause.type).toBe("CALL");
+      expect(callClause.procedure).toBe("db.index.fulltext.queryNodes");
+      expect(callClause.args).toHaveLength(2);
+    });
+  });
+
   describe("UNWIND clause", () => {
     it("parses simple UNWIND with literal array", () => {
       const query = expectSuccess("UNWIND [1, 2, 3] AS x RETURN x");

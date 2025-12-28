@@ -2559,4 +2559,106 @@ describe("Integration Tests", () => {
       expect(keys).toContain("city");
     });
   });
+
+  describe("CALL procedures", () => {
+    it("returns all node labels with db.labels()", () => {
+      // Create nodes with different labels
+      executor.execute("CREATE (p:Person {name: 'Alice'})");
+      executor.execute("CREATE (c:Company {name: 'Acme'})");
+      executor.execute("CREATE (pr:Product {name: 'Widget'})");
+
+      const result = expectSuccess(
+        executor.execute("CALL db.labels()")
+      );
+
+      expect(result.data.length).toBeGreaterThanOrEqual(3);
+      const labels = result.data.map((r: Record<string, unknown>) => r.label);
+      expect(labels).toContain("Person");
+      expect(labels).toContain("Company");
+      expect(labels).toContain("Product");
+    });
+
+    it("returns all relationship types with db.relationshipTypes()", () => {
+      // Create nodes and relationships
+      executor.execute("CREATE (a:Person {name: 'Alice'})");
+      executor.execute("CREATE (b:Person {name: 'Bob'})");
+      executor.execute("CREATE (c:Company {name: 'Acme'})");
+      
+      const alice = db.getNodesByLabel("Person").find(n => n.properties.name === "Alice")!;
+      const bob = db.getNodesByLabel("Person").find(n => n.properties.name === "Bob")!;
+      const acme = db.getNodesByLabel("Company")[0];
+      
+      db.insertEdge("e1", "KNOWS", alice.id, bob.id);
+      db.insertEdge("e2", "WORKS_AT", alice.id, acme.id);
+
+      const result = expectSuccess(
+        executor.execute("CALL db.relationshipTypes()")
+      );
+
+      expect(result.data.length).toBeGreaterThanOrEqual(2);
+      const types = result.data.map((r: Record<string, unknown>) => r.type);
+      expect(types).toContain("KNOWS");
+      expect(types).toContain("WORKS_AT");
+    });
+
+    it("filters labels with YIELD and WHERE", () => {
+      executor.execute("CREATE (p:Person {name: 'Alice'})");
+      executor.execute("CREATE (s:SystemNode {internal: true})");
+      executor.execute("CREATE (c:Company {name: 'Acme'})");
+
+      const result = expectSuccess(
+        executor.execute("CALL db.labels() YIELD label WHERE label <> 'SystemNode' RETURN label")
+      );
+
+      const labels = result.data.map((r: Record<string, unknown>) => r.label);
+      expect(labels).toContain("Person");
+      expect(labels).toContain("Company");
+      expect(labels).not.toContain("SystemNode");
+    });
+
+    it("returns empty for db.labels() when no nodes exist", () => {
+      const result = expectSuccess(
+        executor.execute("CALL db.labels()")
+      );
+
+      expect(result.data).toHaveLength(0);
+    });
+
+    it("returns empty for db.relationshipTypes() when no relationships exist", () => {
+      executor.execute("CREATE (p:Person {name: 'Alice'})");
+
+      const result = expectSuccess(
+        executor.execute("CALL db.relationshipTypes()")
+      );
+
+      expect(result.data).toHaveLength(0);
+    });
+
+    it("uses CALL with ORDER BY", () => {
+      executor.execute("CREATE (c:Cat {name: 'Whiskers'})");
+      executor.execute("CREATE (b:Bear {name: 'Bruno'})");
+      executor.execute("CREATE (a:Ant {name: 'Andy'})");
+
+      const result = expectSuccess(
+        executor.execute("CALL db.labels() YIELD label RETURN label ORDER BY label ASC")
+      );
+
+      expect(result.data).toHaveLength(3);
+      expect(result.data[0].label).toBe("Ant");
+      expect(result.data[1].label).toBe("Bear");
+      expect(result.data[2].label).toBe("Cat");
+    });
+
+    it("uses CALL with LIMIT", () => {
+      executor.execute("CREATE (a:A {name: 'a'})");
+      executor.execute("CREATE (b:B {name: 'b'})");
+      executor.execute("CREATE (c:C {name: 'c'})");
+
+      const result = expectSuccess(
+        executor.execute("CALL db.labels() YIELD label RETURN label LIMIT 2")
+      );
+
+      expect(result.data).toHaveLength(2);
+    });
+  });
 });

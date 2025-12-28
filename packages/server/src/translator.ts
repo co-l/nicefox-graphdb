@@ -12,6 +12,7 @@ import {
   WithClause,
   UnwindClause,
   UnionClause,
+  CallClause,
   NodePattern,
   RelationshipPattern,
   EdgePattern,
@@ -80,6 +81,33 @@ export class Translator {
       }
     }
 
+    // Handle standalone CALL (no RETURN clause following)
+    const callClause = (this.ctx as any).callClause as {
+      procedure: string;
+      yields: string[];
+      returnColumn: string;
+      tableName: string;
+      columnName: string;
+      where?: WhereCondition;
+    } | undefined;
+
+    if (callClause && statements.length === 0) {
+      // Generate SQL for standalone CALL
+      const params: unknown[] = [];
+      let sql = `SELECT DISTINCT ${callClause.columnName} AS ${callClause.returnColumn} FROM ${callClause.tableName}`;
+      sql += ` WHERE ${callClause.columnName} IS NOT NULL AND ${callClause.columnName} <> ''`;
+      
+      // Add WHERE from CALL...YIELD...WHERE
+      if (callClause.where) {
+        const whereResult = this.translateCallWhere(callClause.where, callClause.returnColumn);
+        sql += ` AND (${whereResult.sql})`;
+        params.push(...whereResult.params);
+      }
+
+      statements.push({ sql, params });
+      returnColumns = [callClause.returnColumn];
+    }
+
     return { statements, returnColumns };
   }
 
@@ -105,6 +133,8 @@ export class Translator {
         return { statements: this.translateUnwind(clause) };
       case "UNION":
         return this.translateUnion(clause as UnionClause);
+      case "CALL":
+        return this.translateCall(clause as CallClause);
       default:
         throw new Error(`Unknown clause type: ${(clause as Clause).type}`);
     }
@@ -408,6 +438,20 @@ export class Translator {
   // ============================================================================
 
   private translateReturn(clause: ReturnClause): { statements: SqlStatement[]; returnColumns: string[] } {
+    // Check if this is a RETURN after CALL
+    const callClause = (this.ctx as any).callClause as {
+      procedure: string;
+      yields: string[];
+      returnColumn: string;
+      tableName: string;
+      columnName: string;
+      where?: WhereCondition;
+    } | undefined;
+
+    if (callClause) {
+      return this.translateReturnFromCall(clause, callClause);
+    }
+
     const selectParts: string[] = [];
     const returnColumns: string[] = [];
     const fromParts: string[] = [];
@@ -876,6 +920,104 @@ export class Translator {
   // ============================================================================
 
   // ============================================================================
+  // CALL procedure RETURN handling
+  // ============================================================================
+
+  private translateReturnFromCall(
+    clause: ReturnClause,
+    callClause: {
+      procedure: string;
+      yields: string[];
+      returnColumn: string;
+      tableName: string;
+      columnName: string;
+      where?: WhereCondition;
+    }
+  ): { statements: SqlStatement[]; returnColumns: string[] } {
+    const params: unknown[] = [];
+    const returnColumns: string[] = [];
+
+    // Build SELECT parts
+    const selectParts: string[] = [];
+    for (const item of clause.items) {
+      // For CALL, variables reference the yield column
+      let exprSql: string;
+      if (item.expression.type === "variable") {
+        // Check if this variable is a yield variable
+        const yieldRef = (this.ctx as any)[`call_yield_${item.expression.variable}`];
+        if (yieldRef) {
+          exprSql = yieldRef;
+        } else {
+          throw new Error(`Unknown variable: ${item.expression.variable}`);
+        }
+      } else {
+        const translated = this.translateExpression(item.expression);
+        exprSql = translated.sql;
+        params.push(...translated.params);
+      }
+      const alias = item.alias || this.getExpressionName(item.expression);
+      selectParts.push(`${exprSql} AS ${alias}`);
+      returnColumns.push(alias);
+    }
+
+    // Build base query
+    let sql = `SELECT DISTINCT ${selectParts.join(", ")} FROM ${callClause.tableName}`;
+    
+    // Add WHERE conditions
+    const whereParts: string[] = [];
+    
+    // Base condition: exclude null/empty values
+    whereParts.push(`${callClause.columnName} IS NOT NULL`);
+    whereParts.push(`${callClause.columnName} <> ''`);
+    
+    // Add WHERE from CALL...YIELD...WHERE
+    if (callClause.where) {
+      const whereResult = this.translateCallWhere(callClause.where, callClause.returnColumn);
+      whereParts.push(whereResult.sql);
+      params.push(...whereResult.params);
+    }
+    
+    sql += ` WHERE ${whereParts.join(" AND ")}`;
+
+    // Handle ORDER BY
+    if (clause.orderBy && clause.orderBy.length > 0) {
+      const orderParts: string[] = [];
+      for (const order of clause.orderBy) {
+        let orderSql: string;
+        if (order.expression.type === "variable") {
+          const yieldRef = (this.ctx as any)[`call_yield_${order.expression.variable}`];
+          if (yieldRef) {
+            orderSql = yieldRef;
+          } else {
+            throw new Error(`Unknown variable: ${order.expression.variable}`);
+          }
+        } else {
+          const translated = this.translateExpression(order.expression);
+          orderSql = translated.sql;
+          params.push(...translated.params);
+        }
+        orderParts.push(`${orderSql} ${order.direction}`);
+      }
+      sql += ` ORDER BY ${orderParts.join(", ")}`;
+    }
+
+    // Handle SKIP
+    if (clause.skip !== undefined) {
+      sql += ` OFFSET ${clause.skip}`;
+    }
+
+    // Handle LIMIT
+    if (clause.limit !== undefined) {
+      sql += ` LIMIT ${clause.limit}`;
+    }
+
+    return {
+      statements: [{ sql, params }],
+      returnColumns,
+    };
+  }
+
+  // ============================================================================
   // Variable-length paths
   // ============================================================================
 
@@ -1156,6 +1298,159 @@ export class Translator {
     return [];
   }
 
+  private translateCall(clause: CallClause): { statements?: SqlStatement[]; returnColumns?: string[] } {
+    // CALL procedures for database introspection
+    // Supported procedures:
+    // - db.labels() - returns all distinct node labels
+    // - db.relationshipTypes() - returns all distinct relationship types
+
+    const procedure = clause.procedure.toLowerCase();
+    
+    let tableName: string;
+    let columnName: string;
+    let returnColumn: string;
+    const params: unknown[] = [];
+
+    switch (procedure) {
+      case "db.labels":
+        // Get distinct labels from nodes table
+        tableName = "nodes";
+        columnName = "label";
+        returnColumn = "label";
+        break;
+      case "db.relationshiptypes":
+        // Get distinct types from edges table
+        tableName = "edges";
+        columnName = "type";
+        returnColumn = "type";
+        break;
+      default:
+        throw new Error(`Unknown procedure: ${clause.procedure}`);
+    }
+
+    // Store call info in context for use in subsequent RETURN
+    (this.ctx as any).callClause = {
+      procedure: clause.procedure,
+      yields: clause.yields || [returnColumn],
+      returnColumn,
+      tableName,
+      columnName,
+      where: clause.where,
+    };
+
+    // Register yield variables for subsequent clauses
+    if (clause.yields) {
+      for (const yieldVar of clause.yields) {
+        // Use a special marker to track CALL yield variables
+        (this.ctx as any)[`call_yield_${yieldVar}`] = returnColumn;
+      }
+    } else {
+      // Default yield variable matches the return column
+      (this.ctx as any)[`call_yield_${returnColumn}`] = returnColumn;
+    }
+
+    // Don't generate SQL here - let translateReturn handle it if there's a RETURN clause
+    // Only generate standalone SQL if there's no RETURN clause following
+    return {
+      statements: [],
+      returnColumns: [returnColumn],
+    };
+  }
+
+  private translateCallWhere(condition: WhereCondition, yieldColumn: string): { sql: string; params: unknown[] } {
+    const params: unknown[] = [];
+
+    switch (condition.type) {
+      case "comparison": {
+        // Handle comparisons like "label <> 'SystemNode'"
+        let leftSql: string;
+        
+        if (condition.left?.type === "variable" && condition.left.variable === yieldColumn) {
+          leftSql = yieldColumn;
+        } else if (condition.left) {
+          const leftResult = this.translateExpressionForCall(condition.left, yieldColumn);
+          leftSql = leftResult.sql;
+          params.push(...leftResult.params);
+        } else {
+          throw new Error("Missing left side of comparison");
+        }
+
+        let rightSql: string;
+        if (condition.right) {
+          const rightResult = this.translateExpressionForCall(condition.right, yieldColumn);
+          rightSql = rightResult.sql;
+          params.push(...rightResult.params);
+        } else {
+          throw new Error("Missing right side of comparison");
+        }
+
+        return { sql: `${leftSql} ${condition.operator} ${rightSql}`, params };
+      }
+
+      case "and": {
+        const parts = condition.conditions!.map(c => this.translateCallWhere(c, yieldColumn));
+        const sql = parts.map(p => `(${p.sql})`).join(" AND ");
+        for (const p of parts) params.push(...p.params);
+        return { sql, params };
+      }
+
+      case "or": {
+        const parts = condition.conditions!.map(c => this.translateCallWhere(c, yieldColumn));
+        const sql = parts.map(p => `(${p.sql})`).join(" OR ");
+        for (const p of parts) params.push(...p.params);
+        return { sql, params };
+      }
+
+      case "not": {
+        const inner = this.translateCallWhere(condition.condition!, yieldColumn);
+        return { sql: `NOT (${inner.sql})`, params: inner.params };
+      }
+
+      default:
+        throw new Error(`Unsupported condition type in CALL WHERE: ${condition.type}`);
+    }
+  }
+
+  private translateExpressionForCall(expr: Expression, yieldColumn: string): { sql: string; params: unknown[] } {
+    const params: unknown[] = [];
+
+    switch (expr.type) {
+      case "variable":
+        // If the variable matches the yield column, use the column name directly
+        if (expr.variable === yieldColumn) {
+          return { sql: yieldColumn, params };
+        }
+        // Check if it's a yield variable
+        const yieldRef = (this.ctx as any)[`call_yield_${expr.variable}`];
+        if (yieldRef) {
+          return { sql: yieldRef, params };
+        }
+        throw new Error(`Unknown variable in CALL WHERE: ${expr.variable}`);
+
+      case "literal":
+        if (typeof expr.value === "string") {
+          return { sql: "?", params: [expr.value] };
+        }
+        if (typeof expr.value === "number") {
+          return { sql: "?", params: [expr.value] };
+        }
+        if (typeof expr.value === "boolean") {
+          return { sql: expr.value ? "1" : "0", params };
+        }
+        if (expr.value === null) {
+          return { sql: "NULL", params };
+        }
+        throw new Error(`Unsupported literal type in CALL WHERE: ${typeof expr.value}`);
+
+      case "parameter":
+        const paramValue = this.ctx.paramValues[expr.name!];
+        return { sql: "?", params: [paramValue] };
+
+      default:
+        throw new Error(`Unsupported expression type in CALL WHERE: ${expr.type}`);
+    }
+  }
+
   private translateExpression(expr: Expression): { sql: string; tables: string[]; params: unknown[] } {
     const tables: string[] = [];
     const params: unknown[] = [];
@@ -1168,6 +1463,13 @@ export class Translator {
           // This variable is actually an alias from WITH - translate the underlying expression
           const originalExpr = withAliases.get(expr.variable!)!;
           return this.translateExpression(originalExpr);
+        }
+        
+        // Check if this is a CALL yield variable
+        const callYieldRef = (this.ctx as any)[`call_yield_${expr.variable}`];
+        if (callYieldRef) {
+          // This variable comes from a CALL...YIELD clause
+          return { sql: callYieldRef, tables, params };
         }
         
         // Check if this is an UNWIND variable
