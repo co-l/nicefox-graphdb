@@ -1314,10 +1314,39 @@ export class Translator {
             case "function": {
                 if (expr.functionName === "COUNT") {
                     if (expr.args && expr.args.length > 0) {
-                        const argExpr = this.translateExpression(expr.args[0]);
+                        const arg = expr.args[0];
+                        const distinctKeyword = expr.distinct ? "DISTINCT " : "";
+                        // For count(DISTINCT n.property), we need to count distinct property values
+                        if (arg.type === "property") {
+                            const varInfo = this.ctx.variables.get(arg.variable);
+                            if (!varInfo) {
+                                throw new Error(`Unknown variable: ${arg.variable}`);
+                            }
+                            tables.push(varInfo.alias);
+                            return {
+                                sql: `COUNT(${distinctKeyword}json_extract(${varInfo.alias}.properties, '$.${arg.property}'))`,
+                                tables,
+                                params,
+                            };
+                        }
+                        else if (arg.type === "variable") {
+                            const varInfo = this.ctx.variables.get(arg.variable);
+                            if (!varInfo) {
+                                throw new Error(`Unknown variable: ${arg.variable}`);
+                            }
+                            tables.push(varInfo.alias);
+                            // For count(n) or count(DISTINCT n), count nodes by id
+                            return {
+                                sql: `COUNT(${distinctKeyword}${varInfo.alias}.id)`,
+                                tables,
+                                params,
+                            };
+                        }
+                        // For other expressions, fall back to COUNT(*)
+                        const argExpr = this.translateExpression(arg);
                         tables.push(...argExpr.tables);
                         params.push(...argExpr.params);
-                        return { sql: `COUNT(*)`, tables, params };
+                        return { sql: `COUNT(${distinctKeyword}${argExpr.sql})`, tables, params };
                     }
                     return { sql: "COUNT(*)", tables, params };
                 }
@@ -1336,6 +1365,7 @@ export class Translator {
                     expr.functionName === "MIN" || expr.functionName === "MAX") {
                     if (expr.args && expr.args.length > 0) {
                         const arg = expr.args[0];
+                        const distinctKeyword = expr.distinct ? "DISTINCT " : "";
                         if (arg.type === "property") {
                             const varInfo = this.ctx.variables.get(arg.variable);
                             if (!varInfo) {
@@ -1344,7 +1374,7 @@ export class Translator {
                             tables.push(varInfo.alias);
                             // Use json_extract for numeric properties in aggregations
                             return {
-                                sql: `${expr.functionName}(json_extract(${varInfo.alias}.properties, '$.${arg.property}'))`,
+                                sql: `${expr.functionName}(${distinctKeyword}json_extract(${varInfo.alias}.properties, '$.${arg.property}'))`,
                                 tables,
                                 params,
                             };
@@ -1357,7 +1387,7 @@ export class Translator {
                             tables.push(varInfo.alias);
                             // For variable, aggregate the id
                             return {
-                                sql: `${expr.functionName}(${varInfo.alias}.id)`,
+                                sql: `${expr.functionName}(${distinctKeyword}${varInfo.alias}.id)`,
                                 tables,
                                 params,
                             };
@@ -1369,12 +1399,26 @@ export class Translator {
                 if (expr.functionName === "COLLECT") {
                     if (expr.args && expr.args.length > 0) {
                         const arg = expr.args[0];
+                        // For DISTINCT, SQLite doesn't support json_group_array(DISTINCT ...)
+                        // We use json() to parse a JSON array string built from GROUP_CONCAT(DISTINCT ...)
+                        const useDistinct = expr.distinct === true;
                         if (arg.type === "property") {
                             const varInfo = this.ctx.variables.get(arg.variable);
                             if (!varInfo) {
                                 throw new Error(`Unknown variable: ${arg.variable}`);
                             }
                             tables.push(varInfo.alias);
+                            if (useDistinct) {
+                                // Build JSON array from GROUP_CONCAT(DISTINCT ...)
+                                // The trick: '[' || GROUP_CONCAT(DISTINCT json_quote(value)) || ']'
+                                // json_quote properly escapes strings for JSON
+                                const extractExpr = `json_extract(${varInfo.alias}.properties, '$.${arg.property}')`;
+                                return {
+                                    sql: `json('[' || GROUP_CONCAT(DISTINCT json_quote(${extractExpr})) || ']')`,
+                                    tables,
+                                    params,
+                                };
+                            }
                             return {
                                 sql: `json_group_array(json_extract(${varInfo.alias}.properties, '$.${arg.property}'))`,
                                 tables,
@@ -1387,7 +1431,7 @@ export class Translator {
                                 throw new Error(`Unknown variable: ${arg.variable}`);
                             }
                             tables.push(varInfo.alias);
-                            // For full variable, collect as JSON objects
+                            // For full variable, collect as JSON objects (DISTINCT on objects is complex, skip for now)
                             return {
                                 sql: `json_group_array(json_object('id', ${varInfo.alias}.id, 'label', ${varInfo.alias}.label, 'properties', ${varInfo.alias}.properties))`,
                                 tables,

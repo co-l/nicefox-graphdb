@@ -190,7 +190,8 @@ describe("Translator", () => {
     it("handles COUNT function", () => {
       const result = translateCypher("MATCH (n:Person) RETURN COUNT(n)");
 
-      expect(result.statements[0].sql).toContain("COUNT(*)");
+      // COUNT(n) counts nodes by their id
+      expect(result.statements[0].sql).toContain("COUNT(");
       expect(result.returnColumns).toEqual(["count"]);
     });
 
@@ -838,6 +839,30 @@ describe("Translator", () => {
 
       expect(result.statements[0].sql).toContain("SUM(");
       expect(result.statements[0].sql).toContain("LIMIT");
+    });
+
+    it("handles count(DISTINCT property)", () => {
+      const result = translateCypher("MATCH (n:Person) RETURN count(DISTINCT n.city) AS uniqueCities");
+
+      expect(result.statements[0].sql).toContain("COUNT(DISTINCT");
+      expect(result.statements[0].sql).toContain("json_extract");
+      expect(result.returnColumns).toEqual(["uniqueCities"]);
+    });
+
+    it("handles sum(DISTINCT property)", () => {
+      const result = translateCypher("MATCH (n:Order) RETURN sum(DISTINCT n.amount) AS uniqueTotal");
+
+      expect(result.statements[0].sql).toContain("SUM(DISTINCT");
+      expect(result.statements[0].sql).toContain("json_extract");
+      expect(result.returnColumns).toEqual(["uniqueTotal"]);
+    });
+
+    it("handles collect(DISTINCT property)", () => {
+      const result = translateCypher("MATCH (n:Product) RETURN collect(DISTINCT n.category) AS categories");
+
+      expect(result.statements[0].sql).toContain("DISTINCT");
+      expect(result.statements[0].sql).toContain("GROUP_CONCAT");
+      expect(result.returnColumns).toEqual(["categories"]);
     });
   });
 

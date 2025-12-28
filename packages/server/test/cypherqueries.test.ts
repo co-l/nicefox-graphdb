@@ -1476,6 +1476,208 @@ describe("CypherQueries.json Patterns", () => {
       });
     });
 
+    describe("DISTINCT in aggregations", () => {
+      it("handles count(DISTINCT n.property)", () => {
+        // Pattern: RETURN count(DISTINCT n.name)
+        exec("CREATE (p:Person {name: 'Alice', city: 'NYC'})");
+        exec("CREATE (p:Person {name: 'Bob', city: 'NYC'})");
+        exec("CREATE (p:Person {name: 'Alice', city: 'LA'})"); // Duplicate name
+
+        const result = exec(`
+          MATCH (p:Person)
+          RETURN count(DISTINCT p.name) as uniqueNames
+        `);
+
+        expect(result.data).toHaveLength(1);
+        expect(result.data[0].uniqueNames).toBe(2); // Alice and Bob
+      });
+
+      it("handles collect(DISTINCT n.property)", () => {
+        // Pattern: RETURN collect(DISTINCT n.category)
+        exec("CREATE (p:Product {name: 'Laptop', category: 'Electronics'})");
+        exec("CREATE (p:Product {name: 'Phone', category: 'Electronics'})");
+        exec("CREATE (p:Product {name: 'Shirt', category: 'Clothing'})");
+        exec("CREATE (p:Product {name: 'Pants', category: 'Clothing'})");
+
+        const result = exec(`
+          MATCH (p:Product)
+          RETURN collect(DISTINCT p.category) as categories
+        `);
+
+        expect(result.data).toHaveLength(1);
+        const categories = result.data[0].categories as string[];
+        expect(categories).toHaveLength(2);
+        expect(categories).toContain("Electronics");
+        expect(categories).toContain("Clothing");
+      });
+
+      it("handles sum(DISTINCT n.property)", () => {
+        // Pattern: RETURN sum(DISTINCT n.value)
+        exec("CREATE (o:Order {id: '1', amount: 100})");
+        exec("CREATE (o:Order {id: '2', amount: 200})");
+        exec("CREATE (o:Order {id: '3', amount: 100})"); // Duplicate amount
+
+        const result = exec(`
+          MATCH (o:Order)
+          RETURN sum(DISTINCT o.amount) as totalUniqueAmounts
+        `);
+
+        expect(result.data).toHaveLength(1);
+        expect(result.data[0].totalUniqueAmounts).toBe(300); // 100 + 200 (not 400)
+      });
+
+      it("handles count(DISTINCT) with relationship grouping", () => {
+        // Pattern: RETURN count(DISTINCT property) with implicit grouping via relationships
+        // Note: Implicit GROUP BY from non-aggregated columns is not yet implemented.
+        // This test verifies DISTINCT works in a simpler case using relationship patterns.
+        exec("CREATE (d:Department {name: 'Engineering'})");
+        exec("CREATE (d:Department {name: 'Marketing'})");
+        
+        // Engineering department employees
+        exec(`MATCH (d:Department {name: 'Engineering'}) 
+              CREATE (d)-[:HAS_EMPLOYEE]->(e:Employee {name: 'Alice', skill: 'Python'})`);
+        exec(`MATCH (d:Department {name: 'Engineering'}) 
+              CREATE (d)-[:HAS_EMPLOYEE]->(e:Employee {name: 'Bob', skill: 'Python'})`);
+        exec(`MATCH (d:Department {name: 'Engineering'}) 
+              CREATE (d)-[:HAS_EMPLOYEE]->(e:Employee {name: 'Charlie', skill: 'Java'})`);
+        
+        // Marketing department employees
+        exec(`MATCH (d:Department {name: 'Marketing'}) 
+              CREATE (d)-[:HAS_EMPLOYEE]->(e:Employee {name: 'Diana', skill: 'SEO'})`);
+        exec(`MATCH (d:Department {name: 'Marketing'}) 
+              CREATE (d)-[:HAS_EMPLOYEE]->(e:Employee {name: 'Eve', skill: 'SEO'})`);
+
+        // Query for Engineering department's unique skills
+        const result = exec(`
+          MATCH (d:Department {name: 'Engineering'})-[:HAS_EMPLOYEE]->(e:Employee)
+          RETURN count(DISTINCT e.skill) as uniqueSkills
+        `);
+
+        expect(result.data).toHaveLength(1);
+        expect(result.data[0].uniqueSkills).toBe(2); // Python, Java
+
+        // Query for Marketing department's unique skills
+        const result2 = exec(`
+          MATCH (d:Department {name: 'Marketing'})-[:HAS_EMPLOYEE]->(e:Employee)
+          RETURN count(DISTINCT e.skill) as uniqueSkills
+        `);
+
+        expect(result2.data).toHaveLength(1);
+        expect(result2.data[0].uniqueSkills).toBe(1); // SEO
+      });
+    });
+
+    describe("Anonymous nodes in patterns", () => {
+      it("matches relationship with anonymous source and target", () => {
+        // Pattern: MATCH ()-[r:KNOWS]->() RETURN r
+        exec("CREATE (a:Person {name: 'Alice'})-[:KNOWS]->(b:Person {name: 'Bob'})");
+        exec("CREATE (c:Person {name: 'Charlie'})-[:KNOWS]->(d:Person {name: 'Diana'})");
+
+        const result = exec(`
+          MATCH ()-[r:KNOWS]->()
+          RETURN r
+        `);
+
+        expect(result.data).toHaveLength(2);
+      });
+
+      it("matches relationship with anonymous target only", () => {
+        // Pattern: MATCH (a:Person)-[r:KNOWS]->() RETURN a, r
+        exec("CREATE (a:Person {name: 'Alice'})-[:KNOWS]->(b:Person {name: 'Bob'})");
+        exec("CREATE (a:Person {name: 'Alice'})-[:WORKS_AT]->(c:Company {name: 'Acme'})");
+
+        const result = exec(`
+          MATCH (p:Person {name: 'Alice'})-[r:KNOWS]->()
+          RETURN p.name as name, r
+        `);
+
+        expect(result.data).toHaveLength(1);
+        expect(result.data[0].name).toBe("Alice");
+      });
+
+      it("matches relationship with anonymous source only", () => {
+        // Pattern: MATCH ()-[r:WORKS_AT]->(c:Company) RETURN c, r
+        exec("CREATE (a:Person {name: 'Alice'})-[:WORKS_AT]->(c:Company {name: 'Acme'})");
+        exec("CREATE (b:Person {name: 'Bob'})-[:WORKS_AT]->(c:Company {name: 'Acme'})");
+
+        const result = exec(`
+          MATCH ()-[r:WORKS_AT]->(c:Company {name: 'Acme'})
+          RETURN c.name as company, count(r) as employeeCount
+        `);
+
+        expect(result.data).toHaveLength(1);
+        expect(result.data[0].company).toBe("Acme");
+        expect(result.data[0].employeeCount).toBe(2);
+      });
+
+      it("matches all relationships with anonymous nodes", () => {
+        // Pattern: MATCH ()-[r]->() RETURN count(r)
+        exec("CREATE (a:Person {name: 'Alice'})-[:KNOWS]->(b:Person {name: 'Bob'})");
+        exec("CREATE (a:Person {name: 'Alice'})-[:WORKS_AT]->(c:Company {name: 'Acme'})");
+
+        // Use id(a) to link properly
+        const alice = exec("MATCH (p:Person {name: 'Alice'}) RETURN id(p) as aid").data[0];
+        const bob = exec("MATCH (p:Person {name: 'Bob'}) RETURN id(p) as bid").data[0];
+        
+        // Query all relationships
+        const result = exec(`
+          MATCH ()-[r]->()
+          RETURN count(r) as totalRels
+        `);
+
+        expect(result.data).toHaveLength(1);
+        expect(result.data[0].totalRels).toBeGreaterThanOrEqual(2);
+      });
+    });
+
+    describe("Label predicates on anonymous nodes", () => {
+      it("matches pattern with labeled anonymous nodes", () => {
+        // Pattern: MATCH (:Person)-[r:WORKS_AT]->(:Company) RETURN r
+        exec("CREATE (a:Person {name: 'Alice'})-[:WORKS_AT]->(c:Company {name: 'Acme'})");
+        exec("CREATE (b:Person {name: 'Bob'})-[:WORKS_AT]->(d:Company {name: 'BigCorp'})");
+        exec("CREATE (x:Robot {name: 'R2D2'})-[:WORKS_AT]->(c:Company {name: 'Acme'})");
+
+        const result = exec(`
+          MATCH (:Person)-[r:WORKS_AT]->(:Company)
+          RETURN count(r) as count
+        `);
+
+        expect(result.data).toHaveLength(1);
+        expect(result.data[0].count).toBe(2); // Only Person->Company, not Robot->Company
+      });
+
+      it("matches mixed named and anonymous nodes with labels", () => {
+        // Pattern: MATCH (p:Person)-[:WORKS_AT]->(:Company) RETURN p.name
+        exec("CREATE (a:Person {name: 'Alice'})-[:WORKS_AT]->(c:Company {name: 'Acme'})");
+        exec("CREATE (b:Person {name: 'Bob'})-[:KNOWS]->(c:Person {name: 'Charlie'})");
+
+        const result = exec(`
+          MATCH (p:Person)-[:WORKS_AT]->(:Company)
+          RETURN p.name as name
+        `);
+
+        expect(result.data).toHaveLength(1);
+        expect(result.data[0].name).toBe("Alice");
+      });
+
+      it("matches anonymous source with label predicate", () => {
+        // Pattern: MATCH (:Department)-[:CONTAINS]->(e:Employee) RETURN e
+        exec("CREATE (d:Department {name: 'Engineering'})-[:CONTAINS]->(e:Employee {name: 'Alice'})");
+        exec("CREATE (d:Department {name: 'Marketing'})-[:CONTAINS]->(e:Employee {name: 'Bob'})");
+        exec("CREATE (p:Project {name: 'Secret'})-[:CONTAINS]->(e:Employee {name: 'Charlie'})");
+
+        const result = exec(`
+          MATCH (:Department)-[:CONTAINS]->(e:Employee)
+          RETURN e.name as name
+          ORDER BY name
+        `);
+
+        expect(result.data).toHaveLength(2);
+        expect(result.data[0].name).toBe("Alice");
+        expect(result.data[1].name).toBe("Bob");
+      });
+    });
+
     describe("MERGE with ON CREATE SET and RETURN comparison", () => {
       it("handles MERGE with ON CREATE SET followed by RETURN with equality comparison", () => {
         // This pattern is used to check if a node was created or matched

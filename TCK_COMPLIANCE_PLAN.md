@@ -2,9 +2,23 @@
 
 ## Current Status
 
-- **Compliance**: 62.9% (814/1294 tests passing)
+- **Compliance**: ~65% (estimated, based on Phase 1 completion)
 - **TCK Source**: https://github.com/opencypher/openCypher/tree/main/tck
 - **Test Runner**: `packages/server/test/tck/tck.test.ts.skip`
+
+## Recently Completed
+
+### DISTINCT in Aggregations (December 2024)
+- `count(DISTINCT n.property)` - Implemented
+- `sum(DISTINCT n.property)` - Implemented  
+- `collect(DISTINCT n.property)` - Implemented using GROUP_CONCAT
+- Parser updated to handle DISTINCT keyword after function open paren
+- Translator updated to generate SQL DISTINCT for COUNT/SUM/AVG/MIN/MAX
+
+### Anonymous Nodes & Label Predicates (Already Supported)
+- `MATCH ()-[r:KNOWS]->() RETURN r` - Works
+- `MATCH (a)-[r]->() RETURN a, r` - Works
+- `MATCH (:Person)-[r]->(:Company) RETURN r` - Works
 
 ## How to Run TCK Tests
 
@@ -69,17 +83,21 @@ MATCH (n:A:B) RETURN n
 
 ## Tier 2: Medium Impact, Low-Medium Effort (~10-20 tests each)
 
-### 4. DISTINCT in Aggregations
-**Failures**: ~9 tests
+### 4. DISTINCT in Aggregations - COMPLETED
+**Status**: Implemented
 
 ```cypher
-RETURN count(DISTINCT n.name)
-RETURN collect(DISTINCT n.category)
+RETURN count(DISTINCT n.name)    -- Uses COUNT(DISTINCT json_extract(...))
+RETURN collect(DISTINCT n.category) -- Uses GROUP_CONCAT(DISTINCT ...) + json()
+RETURN sum(DISTINCT n.value)     -- Uses SUM(DISTINCT json_extract(...))
 ```
 
-**Implementation**:
-- Parser: handle `DISTINCT` keyword after function name
-- Translator: add `DISTINCT` to SQL aggregate
+**Implementation Notes**:
+- Parser: handles `DISTINCT` keyword after function open parenthesis
+- Added `distinct` boolean field to Expression interface
+- Translator: adds DISTINCT to SQL for COUNT/SUM/AVG/MIN/MAX
+- COLLECT uses `json('[' || GROUP_CONCAT(DISTINCT json_quote(...)) || ']')` 
+  since SQLite's json_group_array doesn't support DISTINCT
 
 ### 5. MERGE with Relationships
 **Failures**: ~18 tests
@@ -93,28 +111,26 @@ MERGE (a)-[r:KNOWS]->(b) ON CREATE SET r.since = date()
 - Extend executor to handle relationship patterns in MERGE
 - Check existence of full pattern before creating
 
-### 6. Anonymous Nodes in Patterns
-**Failures**: ~9 tests
+### 6. Anonymous Nodes in Patterns - ALREADY SUPPORTED
+**Status**: Working
 
 ```cypher
-MATCH ()-[r:KNOWS]->() RETURN r
-MATCH (a)-[r]->() RETURN a, r
+MATCH ()-[r:KNOWS]->() RETURN r    -- Anonymous source and target
+MATCH (a)-[r]->() RETURN a, r      -- Anonymous target only
+MATCH ()-[r]->(b) RETURN b, r      -- Anonymous source only
 ```
 
-**Implementation**:
-- Allow empty `()` without variable in parser
-- Generate anonymous aliases in translator
+**Notes**: Parser and translator already handle empty `()` patterns correctly.
 
-### 7. Label Predicates on Anonymous Nodes
-**Failures**: ~7 tests
+### 7. Label Predicates on Anonymous Nodes - ALREADY SUPPORTED
+**Status**: Working
 
 ```cypher
 MATCH (:Person)-[r]->(:Company) RETURN r
 MATCH (a:Person)-[:WORKS_AT]->(:Company) RETURN a
 ```
 
-**Implementation**:
-- Combine anonymous node support with label filtering
+**Notes**: Anonymous nodes with labels work correctly.
 
 ---
 
@@ -163,10 +179,12 @@ RETURN n.tags + ['new'] AS allTags
 
 | Phase | Focus | Tests Passing | Compliance |
 |-------|-------|---------------|------------|
-| Current | - | 814 | 62.9% |
-| Phase 1 | Quick Wins (4, 6, 7) | ~880 | ~68% |
-| Phase 2 | Paths (1, 2, 3) | ~980 | ~76% |
-| Phase 3 | Remaining (5, 8, 9, 10) | ~1050 | ~81% |
+| Previous | - | 814 | 62.9% |
+| Phase 1 | Quick Wins (4, 6, 7) | ~840 | ~65% |
+| Phase 2 | Paths (1, 2, 3) | ~935 | ~72% |
+| Phase 3 | Remaining (5, 8, 9, 10) | ~1000 | ~77% |
+
+**Note**: Phase 1 complete. Items 6 and 7 were already working (anonymous nodes).
 
 ---
 
@@ -199,8 +217,14 @@ pnpm test -- -t "DISTINCT"
 | `Expected LPAREN, got IDENTIFIER 'p'` | Path expressions not parsed | parser.ts |
 | `Expected expression, got STAR '*'` | Variable-length paths | parser.ts |
 | `Expected DOT, got COLON ':'` | Multiple labels | parser.ts |
-| `Expected expression, got KEYWORD 'DISTINCT'` | DISTINCT in functions | parser.ts |
+| ~~`Expected expression, got KEYWORD 'DISTINCT'`~~ | ~~DISTINCT in functions~~ | ~~Fixed~~ |
 | `MERGE with relationship pattern must be executed` | MERGE relationships | executor.ts |
+
+### Known Limitations
+
+- **Implicit GROUP BY**: Queries mixing aggregates with non-aggregated columns
+  (e.g., `RETURN n.department, count(DISTINCT n.skill)`) require relationship-based
+  grouping rather than relying on implicit GROUP BY inference.
 
 ---
 

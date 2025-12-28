@@ -82,6 +82,7 @@ export interface Expression {
   name?: string;
   functionName?: string;
   args?: Expression[];
+  distinct?: boolean; // For DISTINCT in aggregate functions: count(DISTINCT x)
   // CASE expression fields
   expression?: Expression;
   whens?: CaseWhen[];
@@ -1530,13 +1531,20 @@ export class Parser {
       return this.parseCaseExpression();
     }
 
-    // Function call: COUNT(x), id(x)
+    // Function call: COUNT(x), id(x), count(DISTINCT x)
     if (token.type === "KEYWORD" || token.type === "IDENTIFIER") {
       const nextToken = this.tokens[this.pos + 1];
       if (nextToken && nextToken.type === "LPAREN") {
         const functionName = this.advance().value.toUpperCase();
         this.advance(); // LPAREN
         const args: Expression[] = [];
+        
+        // Check for DISTINCT keyword after opening paren (for aggregation functions)
+        let distinct: boolean | undefined;
+        if (this.checkKeyword("DISTINCT")) {
+          this.advance();
+          distinct = true;
+        }
 
         if (!this.check("RPAREN")) {
           do {
@@ -1548,7 +1556,7 @@ export class Parser {
         }
 
         this.expect("RPAREN");
-        return { type: "function", functionName, args };
+        return { type: "function", functionName, args, distinct };
       }
     }
 

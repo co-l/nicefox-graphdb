@@ -1102,13 +1102,19 @@ export class Parser {
         if (this.checkKeyword("CASE")) {
             return this.parseCaseExpression();
         }
-        // Function call: COUNT(x), id(x)
+        // Function call: COUNT(x), id(x), count(DISTINCT x)
         if (token.type === "KEYWORD" || token.type === "IDENTIFIER") {
             const nextToken = this.tokens[this.pos + 1];
             if (nextToken && nextToken.type === "LPAREN") {
                 const functionName = this.advance().value.toUpperCase();
                 this.advance(); // LPAREN
                 const args = [];
+                // Check for DISTINCT keyword after opening paren (for aggregation functions)
+                let distinct;
+                if (this.checkKeyword("DISTINCT")) {
+                    this.advance();
+                    distinct = true;
+                }
                 if (!this.check("RPAREN")) {
                     do {
                         if (args.length > 0) {
@@ -1118,7 +1124,7 @@ export class Parser {
                     } while (this.check("COMMA"));
                 }
                 this.expect("RPAREN");
-                return { type: "function", functionName, args };
+                return { type: "function", functionName, args, distinct };
             }
         }
         // Parameter

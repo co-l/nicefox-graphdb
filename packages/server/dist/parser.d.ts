@@ -57,6 +57,7 @@ export interface Expression {
     name?: string;
     functionName?: string;
     args?: Expression[];
+    distinct?: boolean;
     expression?: Expression;
     whens?: CaseWhen[];
     elseExpr?: Expression;
