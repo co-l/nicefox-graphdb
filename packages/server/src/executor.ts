@@ -7,8 +7,13 @@ import {
   Clause,
   MatchClause,
   CreateClause,
+  SetClause,
+  DeleteClause,
+  ReturnClause,
   NodePattern,
   RelationshipPattern,
+  SetAssignment,
+  Expression,
 } from "./parser.js";
 import { translate, TranslationResult, Translator } from "./translator.js";
 import { GraphDatabase } from "./db.js";
@@ -70,7 +75,22 @@ export class Executor {
         };
       }
 
-      // 2. Check if this is a MATCH...CREATE pattern that needs multi-phase execution
+      // 2. Check for CREATE...RETURN pattern (needs special handling)
+      const createReturnResult = this.tryCreateReturnExecution(parseResult.query, params);
+      if (createReturnResult !== null) {
+        const endTime = performance.now();
+        return {
+          success: true,
+          data: createReturnResult,
+          meta: {
+            count: createReturnResult.length,
+            time_ms: Math.round((endTime - startTime) * 100) / 100,
+          },
+        };
+      }
+
+      // 3. Check if this is a pattern that needs multi-phase execution
+      // (MATCH...CREATE, MATCH...SET, MATCH...DELETE with relationship patterns)
       const multiPhaseResult = this.tryMultiPhaseExecution(parseResult.query, params);
       if (multiPhaseResult !== null) {
         const endTime = performance.now();
@@ -127,35 +147,268 @@ export class Executor {
   }
 
   /**
-   * Detect and handle MATCH...CREATE patterns that reference matched variables.
+   * Handle CREATE...RETURN pattern by creating nodes/edges and then querying them back
+   */
+  private tryCreateReturnExecution(
+    query: Query,
+    params: Record<string, unknown>
+  ): Record<string, unknown>[] | null {
+    // Check if this is a CREATE...RETURN pattern (no MATCH)
+    const clauses = query.clauses;
+    
+    // Must have at least CREATE and RETURN
+    if (clauses.length < 2) return null;
+    
+    // Find CREATE and RETURN clauses
+    const createClauses: CreateClause[] = [];
+    let returnClause: ReturnClause | null = null;
+    
+    for (const clause of clauses) {
+      if (clause.type === "CREATE") {
+        createClauses.push(clause);
+      } else if (clause.type === "RETURN") {
+        returnClause = clause;
+      } else if (clause.type === "MATCH") {
+        // If there's a MATCH, this is not a pure CREATE...RETURN pattern
+        return null;
+      }
+    }
+    
+    if (createClauses.length === 0 || !returnClause) return null;
+    
+    // Execute CREATE and track created node IDs
+    const createdIds: Map<string, string> = new Map();
+    
+    for (const createClause of createClauses) {
+      for (const pattern of createClause.patterns) {
+        if (this.isRelationshipPattern(pattern)) {
+          // Handle relationship pattern
+          this.executeCreateRelationshipPattern(pattern, createdIds, params);
+        } else {
+          // Handle node pattern
+          const id = crypto.randomUUID();
+          const label = pattern.label || "";
+          const props = this.resolveProperties(pattern.properties || {}, params);
+          
+          this.db.execute(
+            "INSERT INTO nodes (id, label, properties) VALUES (?, ?, ?)",
+            [id, label, JSON.stringify(props)]
+          );
+          
+          if (pattern.variable) {
+            createdIds.set(pattern.variable, id);
+          }
+        }
+      }
+    }
+    
+    // Now query the created nodes/edges based on RETURN items
+    const results: Record<string, unknown>[] = [];
+    const resultRow: Record<string, unknown> = {};
+    
+    for (const item of returnClause.items) {
+      const alias = item.alias || this.getExpressionName(item.expression);
+      
+      if (item.expression.type === "variable") {
+        const variable = item.expression.variable!;
+        const id = createdIds.get(variable);
+        
+        if (id) {
+          // Query the node
+          const nodeResult = this.db.execute(
+            "SELECT id, label, properties FROM nodes WHERE id = ?",
+            [id]
+          );
+          
+          if (nodeResult.rows.length > 0) {
+            const row = nodeResult.rows[0];
+            resultRow[alias] = {
+              id: row.id,
+              label: row.label,
+              properties: typeof row.properties === "string" 
+                ? JSON.parse(row.properties) 
+                : row.properties,
+            };
+          }
+        }
+      } else if (item.expression.type === "property") {
+        const variable = item.expression.variable!;
+        const property = item.expression.property!;
+        const id = createdIds.get(variable);
+        
+        if (id) {
+          const nodeResult = this.db.execute(
+            `SELECT json_extract(properties, '$.${property}') as value FROM nodes WHERE id = ?`,
+            [id]
+          );
+          
+          if (nodeResult.rows.length > 0) {
+            resultRow[alias] = nodeResult.rows[0].value;
+          }
+        }
+      }
+    }
+    
+    if (Object.keys(resultRow).length > 0) {
+      results.push(resultRow);
+    }
+    
+    return results;
+  }
+
+  /**
+   * Execute a CREATE relationship pattern, tracking created IDs
+   */
+  private executeCreateRelationshipPattern(
+    rel: RelationshipPattern,
+    createdIds: Map<string, string>,
+    params: Record<string, unknown>
+  ): void {
+    let sourceId: string;
+    let targetId: string;
+    
+    // Determine source node ID
+    if (rel.source.variable && createdIds.has(rel.source.variable)) {
+      sourceId = createdIds.get(rel.source.variable)!;
+    } else if (rel.source.label) {
+      // Create new source node
+      sourceId = crypto.randomUUID();
+      const props = this.resolveProperties(rel.source.properties || {}, params);
+      this.db.execute(
+        "INSERT INTO nodes (id, label, properties) VALUES (?, ?, ?)",
+        [sourceId, rel.source.label, JSON.stringify(props)]
+      );
+      if (rel.source.variable) {
+        createdIds.set(rel.source.variable, sourceId);
+      }
+    } else if (rel.source.variable) {
+      throw new Error(`Cannot resolve source node: ${rel.source.variable}`);
+    } else {
+      throw new Error("Source node must have a label or reference an existing variable");
+    }
+    
+    // Determine target node ID
+    if (rel.target.variable && createdIds.has(rel.target.variable)) {
+      targetId = createdIds.get(rel.target.variable)!;
+    } else if (rel.target.label) {
+      // Create new target node
+      targetId = crypto.randomUUID();
+      const props = this.resolveProperties(rel.target.properties || {}, params);
+      this.db.execute(
+        "INSERT INTO nodes (id, label, properties) VALUES (?, ?, ?)",
+        [targetId, rel.target.label, JSON.stringify(props)]
+      );
+      if (rel.target.variable) {
+        createdIds.set(rel.target.variable, targetId);
+      }
+    } else if (rel.target.variable) {
+      throw new Error(`Cannot resolve target node: ${rel.target.variable}`);
+    } else {
+      throw new Error("Target node must have a label or reference an existing variable");
+    }
+    
+    // Swap source/target for left-directed relationships
+    const [actualSource, actualTarget] =
+      rel.edge.direction === "left" ? [targetId, sourceId] : [sourceId, targetId];
+    
+    // Create edge
+    const edgeId = crypto.randomUUID();
+    const edgeType = rel.edge.type || "";
+    const edgeProps = this.resolveProperties(rel.edge.properties || {}, params);
+    
+    this.db.execute(
+      "INSERT INTO edges (id, type, source_id, target_id, properties) VALUES (?, ?, ?, ?, ?)",
+      [edgeId, edgeType, actualSource, actualTarget, JSON.stringify(edgeProps)]
+    );
+    
+    if (rel.edge.variable) {
+      createdIds.set(rel.edge.variable, edgeId);
+    }
+  }
+
+  /**
+   * Get a name for an expression (for default aliases)
+   */
+  private getExpressionName(expr: Expression): string {
+    switch (expr.type) {
+      case "variable":
+        return expr.variable!;
+      case "property":
+        return `${expr.variable}_${expr.property}`;
+      case "function":
+        return expr.functionName!.toLowerCase();
+      default:
+        return "expr";
+    }
+  }
+
+  /**
+   * Detect and handle patterns that need multi-phase execution:
+   * - MATCH...CREATE that references matched variables
+   * - MATCH...SET that updates matched nodes/edges via relationships
+   * - MATCH...DELETE that deletes matched nodes/edges via relationships
    * Returns null if this is not a multi-phase pattern, otherwise returns the result data.
    */
   private tryMultiPhaseExecution(
     query: Query,
     params: Record<string, unknown>
   ): Record<string, unknown>[] | null {
-    // Find MATCH and CREATE clauses
+    // Categorize clauses
     const matchClauses: MatchClause[] = [];
     const createClauses: CreateClause[] = [];
-    let hasOtherClauses = false;
+    const setClauses: SetClause[] = [];
+    const deleteClauses: DeleteClause[] = [];
+    let returnClause: ReturnClause | null = null;
 
     for (const clause of query.clauses) {
-      if (clause.type === "MATCH") {
-        matchClauses.push(clause);
-      } else if (clause.type === "CREATE") {
-        createClauses.push(clause);
-      } else {
-        // For now, only handle pure MATCH...CREATE patterns
-        hasOtherClauses = true;
+      switch (clause.type) {
+        case "MATCH":
+          matchClauses.push(clause);
+          break;
+        case "CREATE":
+          createClauses.push(clause);
+          break;
+        case "SET":
+          setClauses.push(clause);
+          break;
+        case "DELETE":
+          deleteClauses.push(clause);
+          break;
+        case "RETURN":
+          returnClause = clause;
+          break;
+        default:
+          // MERGE and other clauses - use standard execution
+          return null;
       }
     }
 
-    // Only handle MATCH followed by CREATE, no other clauses
-    if (matchClauses.length === 0 || createClauses.length === 0 || hasOtherClauses) {
+    // Need at least one MATCH clause for multi-phase
+    if (matchClauses.length === 0) {
       return null;
     }
 
-    // Collect variables defined in MATCH clauses
+    // Check if any MATCH has relationship patterns (multi-hop)
+    const hasRelationshipPattern = matchClauses.some((m) =>
+      m.patterns.some((p) => this.isRelationshipPattern(p))
+    );
+
+    // Use multi-phase for:
+    // - Relationship patterns (multi-hop)
+    // - MATCH...CREATE referencing matched vars
+    // - MATCH...SET (always needs ID resolution)
+    // - MATCH...DELETE (always needs ID resolution)
+    const needsMultiPhase = 
+      hasRelationshipPattern ||
+      createClauses.length > 0 ||
+      setClauses.length > 0 ||
+      deleteClauses.length > 0;
+
+    if (!needsMultiPhase) {
+      return null;
+    }
+
+    // Collect all variables defined in MATCH clauses
     const matchedVariables = new Set<string>();
     for (const matchClause of matchClauses) {
       for (const pattern of matchClause.patterns) {
@@ -163,21 +416,65 @@ export class Executor {
       }
     }
 
-    // Check if CREATE references any matched variables
-    const referencedMatchVars = new Set<string>();
+    // Determine which variables need to be resolved for CREATE
+    const referencedInCreate = new Set<string>();
     for (const createClause of createClauses) {
       for (const pattern of createClause.patterns) {
-        this.findReferencedVariables(pattern, matchedVariables, referencedMatchVars);
+        this.findReferencedVariables(pattern, matchedVariables, referencedInCreate);
       }
     }
 
-    // If CREATE doesn't reference any matched variables, use standard execution
-    if (referencedMatchVars.size === 0) {
+    // Determine which variables need to be resolved for SET
+    const referencedInSet = new Set<string>();
+    for (const setClause of setClauses) {
+      for (const assignment of setClause.assignments) {
+        if (matchedVariables.has(assignment.variable)) {
+          referencedInSet.add(assignment.variable);
+        }
+      }
+    }
+
+    // Determine which variables need to be resolved for DELETE
+    const referencedInDelete = new Set<string>();
+    for (const deleteClause of deleteClauses) {
+      for (const variable of deleteClause.variables) {
+        if (matchedVariables.has(variable)) {
+          referencedInDelete.add(variable);
+        }
+      }
+    }
+
+    // Combine all referenced variables
+    const allReferencedVars = new Set([
+      ...referencedInCreate,
+      ...referencedInSet,
+      ...referencedInDelete,
+    ]);
+
+    // If no relationship patterns and nothing references matched vars, use standard execution
+    if (!hasRelationshipPattern && allReferencedVars.size === 0) {
       return null;
     }
 
+    // For relationship patterns with SET/DELETE, we need to resolve all matched variables
+    if (hasRelationshipPattern && (setClauses.length > 0 || deleteClauses.length > 0)) {
+      // Add all matched variables to the resolution set
+      for (const v of matchedVariables) {
+        allReferencedVars.add(v);
+      }
+    }
+
     // Multi-phase execution needed
-    return this.executeMultiPhase(matchClauses, createClauses, referencedMatchVars, params);
+    return this.executeMultiPhaseGeneral(
+      matchClauses,
+      createClauses,
+      setClauses,
+      deleteClauses,
+      returnClause,
+      allReferencedVars,
+      matchedVariables,
+      params
+    );
   }
 
   /**
@@ -217,21 +514,27 @@ export class Executor {
   }
 
   /**
-   * Execute a MATCH...CREATE pattern in multiple phases
+   * Execute a complex pattern with MATCH...CREATE/SET/DELETE in multiple phases
    */
-  private executeMultiPhase(
+  private executeMultiPhaseGeneral(
     matchClauses: MatchClause[],
     createClauses: CreateClause[],
+    setClauses: SetClause[],
+    deleteClauses: DeleteClause[],
+    returnClause: ReturnClause | null,
     referencedVars: Set<string>,
+    allMatchedVars: Set<string>,
     params: Record<string, unknown>
   ): Record<string, unknown>[] {
-    // Phase 1: Execute MATCH to get actual node IDs
+    // Phase 1: Execute MATCH to get actual node/edge IDs
+    const varsToResolve = referencedVars.size > 0 ? referencedVars : allMatchedVars;
+    
     const matchQuery: Query = {
       clauses: [
         ...matchClauses,
         {
           type: "RETURN" as const,
-          items: Array.from(referencedVars).map((v) => ({
+          items: Array.from(varsToResolve).map((v) => ({
             expression: { type: "function" as const, functionName: "ID", args: [{ type: "variable" as const, variable: v }] },
             alias: `_id_${v}`,
           })),
@@ -250,32 +553,159 @@ export class Executor {
       }
     }
 
-    // If no nodes matched, return empty - nothing to create
+    // If no nodes matched, return empty
     if (matchedRows.length === 0) {
       return [];
     }
 
-    // Phase 2: For each matched row, execute CREATE with actual node IDs
+    // Phase 2: Execute CREATE/SET/DELETE for each matched row
     this.db.transaction(() => {
       for (const row of matchedRows) {
-        // Build a map of variable -> actual node ID
+        // Build a map of variable -> actual node/edge ID
         const resolvedIds: Record<string, string> = {};
-        for (const v of referencedVars) {
+        for (const v of varsToResolve) {
           resolvedIds[v] = row[`_id_${v}`] as string;
         }
 
-        // Execute CREATE for this matched row
+        // Execute CREATE with resolved IDs
         for (const createClause of createClauses) {
           this.executeCreateWithResolvedIds(createClause, resolvedIds, params);
         }
+
+        // Execute SET with resolved IDs
+        for (const setClause of setClauses) {
+          this.executeSetWithResolvedIds(setClause, resolvedIds, params);
+        }
+
+        // Execute DELETE with resolved IDs
+        for (const deleteClause of deleteClauses) {
+          this.executeDeleteWithResolvedIds(deleteClause, resolvedIds);
+        }
       }
     });
+
+    // Phase 3: Execute RETURN if present (re-query data after modifications)
+    if (returnClause) {
+      // Re-execute the MATCH + RETURN to get updated data
+      const fullQuery: Query = {
+        clauses: [...matchClauses, returnClause],
+      };
+      const returnTranslator = new Translator(params);
+      const returnTranslation = returnTranslator.translate(fullQuery);
+
+      let rows: Record<string, unknown>[] = [];
+      for (const stmt of returnTranslation.statements) {
+        const result = this.db.execute(stmt.sql, stmt.params);
+        if (result.rows.length > 0 || stmt.sql.trim().toUpperCase().startsWith("SELECT")) {
+          rows = result.rows;
+        }
+      }
+      return this.formatResults(rows, returnTranslation.returnColumns);
+    }
 
     return [];
   }
 
   /**
+   * Execute a MATCH...CREATE pattern in multiple phases (legacy, for backwards compatibility)
+   */
+  private executeMultiPhase(
+    matchClauses: MatchClause[],
+    createClauses: CreateClause[],
+    referencedVars: Set<string>,
+    params: Record<string, unknown>
+  ): Record<string, unknown>[] {
+    return this.executeMultiPhaseGeneral(
+      matchClauses,
+      createClauses,
+      [],
+      [],
+      null,
+      referencedVars,
+      referencedVars,
+      params
+    );
+  }
+
+  /**
+   * Execute SET clause with pre-resolved node IDs
+   */
+  private executeSetWithResolvedIds(
+    setClause: SetClause,
+    resolvedIds: Record<string, string>,
+    params: Record<string, unknown>
+  ): void {
+    for (const assignment of setClause.assignments) {
+      const nodeId = resolvedIds[assignment.variable];
+      if (!nodeId) {
+        throw new Error(`Cannot resolve variable for SET: ${assignment.variable}`);
+      }
+
+      const value = this.evaluateExpression(assignment.value, params);
+
+      // Update the property using json_set
+      // We need to determine if it's a node or edge - for now assume node
+      // Try nodes first, then edges
+      const nodeResult = this.db.execute(
+        `UPDATE nodes SET properties = json_set(properties, '$.${assignment.property}', json(?)) WHERE id = ?`,
+        [JSON.stringify(value), nodeId]
+      );
+
+      if (nodeResult.changes === 0) {
+        // Try edges
+        this.db.execute(
+          `UPDATE edges SET properties = json_set(properties, '$.${assignment.property}', json(?)) WHERE id = ?`,
+          [JSON.stringify(value), nodeId]
+        );
+      }
+    }
+  }
+
+  /**
+   * Execute DELETE clause with pre-resolved node/edge IDs
+   */
+  private executeDeleteWithResolvedIds(
+    deleteClause: DeleteClause,
+    resolvedIds: Record<string, string>
+  ): void {
+    for (const variable of deleteClause.variables) {
+      const id = resolvedIds[variable];
+      if (!id) {
+        throw new Error(`Cannot resolve variable for DELETE: ${variable}`);
+      }
+
+      if (deleteClause.detach) {
+        // DETACH DELETE: First delete all edges connected to this node
+        this.db.execute("DELETE FROM edges WHERE source_id = ? OR target_id = ?", [id, id]);
+      }
+
+      // Try deleting from nodes first
+      const nodeResult = this.db.execute("DELETE FROM nodes WHERE id = ?", [id]);
+
+      if (nodeResult.changes === 0) {
+        // Try deleting from edges
+        this.db.execute("DELETE FROM edges WHERE id = ?", [id]);
+      }
+    }
+  }
+
+  /**
+   * Evaluate an expression to get its value
+   */
+  private evaluateExpression(expr: Expression, params: Record<string, unknown>): unknown {
+    switch (expr.type) {
+      case "literal":
+        return expr.value;
+      case "parameter":
+        return params[expr.name!];
+      default:
+        throw new Error(`Cannot evaluate expression of type ${expr.type}`);
+    }
+  }
+
+  /**
    * Execute a CREATE clause with pre-resolved node IDs for referenced variables
+   * The resolvedIds map is mutated to include newly created node IDs
    */
   private executeCreateWithResolvedIds(
     createClause: CreateClause,
@@ -298,7 +728,8 @@ export class Executor {
   }
 
   /**
-   * Create a relationship where some endpoints reference pre-existing nodes
+   * Create a relationship where some endpoints reference pre-existing nodes.
+   * The resolvedIds map is mutated to include newly created node IDs.
    */
   private createRelationshipWithResolvedIds(
     rel: RelationshipPattern,
@@ -319,6 +750,10 @@ export class Executor {
         "INSERT INTO nodes (id, label, properties) VALUES (?, ?, ?)",
         [sourceId, rel.source.label, JSON.stringify(props)]
       );
+      // Add to resolvedIds so subsequent patterns can reference it
+      if (rel.source.variable) {
+        resolvedIds[rel.source.variable] = sourceId;
+      }
     } else {
       throw new Error(`Cannot resolve source node: ${rel.source.variable}`);
     }
@@ -334,6 +769,10 @@ export class Executor {
         "INSERT INTO nodes (id, label, properties) VALUES (?, ?, ?)",
         [targetId, rel.target.label, JSON.stringify(props)]
       );
+      // Add to resolvedIds so subsequent patterns can reference it
+      if (rel.target.variable) {
+        resolvedIds[rel.target.variable] = targetId;
+      }
     } else {
       throw new Error(`Cannot resolve target node: ${rel.target.variable}`);
     }
@@ -351,6 +790,11 @@ export class Executor {
       "INSERT INTO edges (id, type, source_id, target_id, properties) VALUES (?, ?, ?, ?, ?)",
       [edgeId, edgeType, actualSource, actualTarget, JSON.stringify(edgeProps)]
     );
+
+    // Add edge to resolvedIds if it has a variable
+    if (rel.edge.variable) {
+      resolvedIds[rel.edge.variable] = edgeId;
+    }
   }
 
   /**
