@@ -3,6 +3,7 @@ set -euo pipefail
 
 # NiceFox GraphDB Backup Script
 # This script performs hot backups of all production databases
+# Called by cron job installed by deploy/setup.sh
 
 # Configuration (override via environment variables)
 DATA_PATH="${DATA_PATH:-/var/data/nicefox-graphdb}"
@@ -10,7 +11,7 @@ BACKUP_PATH="${BACKUP_PATH:-/var/backups/nicefox-graphdb}"
 KEEP_COUNT="${KEEP_COUNT:-10}"
 KEEP_DAYS="${KEEP_DAYS:-30}"
 LOG_FILE="${LOG_FILE:-/var/log/nicefox-graphdb/backup.log}"
-APP_PATH="${APP_PATH:-/opt/nicefox-graphdb}"
+APP_PATH="${APP_PATH:-/opt/apps/nicefox-graphdb}"
 
 # Ensure log directory exists
 mkdir -p "$(dirname "$LOG_FILE")"
