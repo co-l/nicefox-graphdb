@@ -1727,4 +1727,85 @@ describe("CypherQueries.json Patterns", () => {
       });
     });
   });
+
+  describe("List Concatenation", () => {
+    it("concatenates two literal lists with + operator", () => {
+      // Pattern: RETURN [1, 2] + [3, 4] AS combined
+      const result = exec("RETURN [1, 2] + [3, 4] AS combined");
+
+      expect(result.data).toHaveLength(1);
+      expect(result.data[0].combined).toEqual([1, 2, 3, 4]);
+    });
+
+    it("concatenates list with single element", () => {
+      // Pattern: RETURN [1, 2, 3] + [4] AS extended
+      const result = exec("RETURN [1, 2, 3] + [4] AS extended");
+
+      expect(result.data).toHaveLength(1);
+      expect(result.data[0].extended).toEqual([1, 2, 3, 4]);
+    });
+
+    it("concatenates empty lists", () => {
+      // Pattern: RETURN [] + [] AS empty
+      const result = exec("RETURN [] + [] AS empty");
+
+      expect(result.data).toHaveLength(1);
+      expect(result.data[0].empty).toEqual([]);
+    });
+
+    it("concatenates list with empty list", () => {
+      // Pattern: RETURN [1, 2] + [] AS unchanged
+      const result = exec("RETURN [1, 2] + [] AS unchanged");
+
+      expect(result.data).toHaveLength(1);
+      expect(result.data[0].unchanged).toEqual([1, 2]);
+    });
+
+    it("concatenates property list with literal list", () => {
+      // Pattern: RETURN n.tags + ['new'] AS allTags
+      exec("CREATE (n:Item {name: 'Test', tags: ['a', 'b']})");
+
+      const result = exec(`
+        MATCH (n:Item {name: 'Test'})
+        RETURN n.tags + ['new'] AS allTags
+      `);
+
+      expect(result.data).toHaveLength(1);
+      expect(result.data[0].allTags).toEqual(["a", "b", "new"]);
+    });
+
+    it("concatenates two property lists", () => {
+      exec("CREATE (n:Item {list1: [1, 2], list2: [3, 4]})");
+
+      const result = exec(`
+        MATCH (n:Item)
+        RETURN n.list1 + n.list2 AS combined
+      `);
+
+      expect(result.data).toHaveLength(1);
+      expect(result.data[0].combined).toEqual([1, 2, 3, 4]);
+    });
+
+    it("concatenates string lists", () => {
+      const result = exec("RETURN ['a', 'b'] + ['c', 'd'] AS letters");
+
+      expect(result.data).toHaveLength(1);
+      expect(result.data[0].letters).toEqual(["a", "b", "c", "d"]);
+    });
+
+    it("concatenates mixed type lists", () => {
+      const result = exec("RETURN [1, 'two'] + [3, 'four'] AS mixed");
+
+      expect(result.data).toHaveLength(1);
+      expect(result.data[0].mixed).toEqual([1, "two", 3, "four"]);
+    });
+
+    it("chains multiple list concatenations", () => {
+      // Pattern: RETURN [1] + [2] + [3] AS chain
+      const result = exec("RETURN [1] + [2] + [3] AS chain");
+
+      expect(result.data).toHaveLength(1);
+      expect(result.data[0].chain).toEqual([1, 2, 3]);
+    });
+  });
 });

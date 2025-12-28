@@ -1513,6 +1513,11 @@ export class Parser {
   private parsePrimaryExpression(): Expression {
     const token = this.peek();
 
+    // List literal [1, 2, 3]
+    if (token.type === "LBRACKET") {
+      return this.parseListLiteralExpression();
+    }
+
     // Object literal { key: value, ... }
     if (token.type === "LBRACE") {
       return this.parseObjectLiteral();
@@ -1688,6 +1693,23 @@ export class Parser {
 
     this.expect("RBRACE");
     return { type: "object", properties };
+  }
+
+  private parseListLiteralExpression(): Expression {
+    this.expect("LBRACKET");
+    const values: PropertyValue[] = [];
+
+    if (!this.check("RBRACKET")) {
+      do {
+        if (values.length > 0) {
+          this.expect("COMMA");
+        }
+        values.push(this.parsePropertyValue());
+      } while (this.check("COMMA"));
+    }
+
+    this.expect("RBRACKET");
+    return { type: "literal", value: values };
   }
 
   // Token helpers

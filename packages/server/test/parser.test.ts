@@ -1624,4 +1624,77 @@ describe("Parser", () => {
       expect(unwindClause.expression.property).toBe("tags");
     });
   });
+
+  describe("List literal expressions", () => {
+    it("parses list literal in RETURN", () => {
+      const query = expectSuccess("RETURN [1, 2, 3]");
+      const returnClause = query.clauses[0] as ReturnClause;
+
+      expect(returnClause.items).toHaveLength(1);
+      expect(returnClause.items[0].expression.type).toBe("literal");
+      expect(returnClause.items[0].expression.value).toEqual([1, 2, 3]);
+    });
+
+    it("parses empty list in RETURN", () => {
+      const query = expectSuccess("RETURN []");
+      const returnClause = query.clauses[0] as ReturnClause;
+
+      expect(returnClause.items[0].expression.type).toBe("literal");
+      expect(returnClause.items[0].expression.value).toEqual([]);
+    });
+
+    it("parses list literal with alias", () => {
+      const query = expectSuccess("RETURN [1, 2] AS numbers");
+      const returnClause = query.clauses[0] as ReturnClause;
+
+      expect(returnClause.items[0].expression.value).toEqual([1, 2]);
+      expect(returnClause.items[0].alias).toBe("numbers");
+    });
+
+    it("parses list concatenation with + operator", () => {
+      const query = expectSuccess("RETURN [1, 2] + [3, 4] AS combined");
+      const returnClause = query.clauses[0] as ReturnClause;
+
+      expect(returnClause.items[0].expression.type).toBe("binary");
+      expect(returnClause.items[0].expression.operator).toBe("+");
+      expect(returnClause.items[0].expression.left!.type).toBe("literal");
+      expect(returnClause.items[0].expression.left!.value).toEqual([1, 2]);
+      expect(returnClause.items[0].expression.right!.type).toBe("literal");
+      expect(returnClause.items[0].expression.right!.value).toEqual([3, 4]);
+    });
+
+    it("parses chained list concatenation", () => {
+      const query = expectSuccess("RETURN [1] + [2] + [3]");
+      const returnClause = query.clauses[0] as ReturnClause;
+
+      // Should be left-associative: ([1] + [2]) + [3]
+      expect(returnClause.items[0].expression.type).toBe("binary");
+      expect(returnClause.items[0].expression.operator).toBe("+");
+      expect(returnClause.items[0].expression.left!.type).toBe("binary");
+    });
+
+    it("parses property + list concatenation", () => {
+      const query = expectSuccess("MATCH (n:Item) RETURN n.tags + ['new'] AS allTags");
+      const returnClause = query.clauses[1] as ReturnClause;
+
+      expect(returnClause.items[0].expression.type).toBe("binary");
+      expect(returnClause.items[0].expression.operator).toBe("+");
+      expect(returnClause.items[0].expression.left!.type).toBe("property");
+      expect(returnClause.items[0].expression.right!.type).toBe("literal");
+    });
+
+    it("parses string list in RETURN", () => {
+      const query = expectSuccess("RETURN ['a', 'b', 'c']");
+      const returnClause = query.clauses[0] as ReturnClause;
+
+      expect(returnClause.items[0].expression.value).toEqual(["a", "b", "c"]);
+    });
+
+    it("parses mixed type list in RETURN", () => {
+      const query = expectSuccess("RETURN [1, 'two', true, null]");
+      const returnClause = query.clauses[0] as ReturnClause;
+
+      expect(returnClause.items[0].expression.value).toEqual([1, "two", true, null]);
+    });
+  });
 });

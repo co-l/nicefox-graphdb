@@ -209,6 +209,7 @@ export declare class Parser {
     private parsePrimaryExpression;
     private parseCaseExpression;
     private parseObjectLiteral;
+    private parseListLiteralExpression;
     private peek;
     private advance;
     private isAtEnd;

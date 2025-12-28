@@ -42,10 +42,13 @@ export declare class Translator {
     private translateExpression;
     private translateCaseExpression;
     private translateBinaryExpression;
+    private isListExpression;
+    private wrapForArray;
     private wrapForArithmetic;
     private translateComparisonExpression;
     private wrapForComparison;
     private translateObjectLiteral;
+    private translateArrayLiteral;
     private translateWhere;
     private translateExistsCondition;
     private translateInCondition;

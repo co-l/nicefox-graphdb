@@ -8,6 +8,13 @@
 
 ## Recently Completed
 
+### List Concatenation (December 2024)
+- `[1, 2] + [3, 4]` - Implemented with json_group_array + UNION ALL
+- `n.tags + ['new']` - Property + literal list concatenation
+- Parser: Added list literal expression parsing in `parsePrimaryExpression()`
+- Translator: Detects list concatenation in `translateBinaryExpression()` 
+- Uses subquery pattern: `(SELECT json_group_array(value) FROM (SELECT value FROM json_each(...) UNION ALL ...))`
+
 ### DISTINCT in Aggregations (December 2024)
 - `count(DISTINCT n.property)` - Implemented
 - `sum(DISTINCT n.property)` - Implemented  
@@ -161,17 +168,20 @@ RETURN percentileCont(0.5, n.value)
 - `percentileDisc`: discrete percentile
 - `percentileCont`: continuous (interpolated) percentile
 
-### 10. List Concatenation
-**Failures**: ~5 tests
+### 10. List Concatenation - COMPLETED
+**Status**: Implemented
 
 ```cypher
-RETURN [1, 2] + [3, 4] AS combined
-RETURN n.tags + ['new'] AS allTags
+RETURN [1, 2] + [3, 4] AS combined     -- Uses json_group_array with UNION ALL
+RETURN n.tags + ['new'] AS allTags     -- Property + literal concatenation
+RETURN [1] + [2] + [3] AS chain        -- Chained concatenation works
 ```
 
-**Implementation**:
-- Handle `+` operator for arrays in translator
-- Use `json_array` concatenation in SQL
+**Implementation Notes**:
+- Parser: Added `parseListLiteralExpression()` for list literals in expressions
+- Translator: `translateBinaryExpression()` detects list concatenation via `isListExpression()`
+- Uses SQL pattern: `(SELECT json_group_array(value) FROM (SELECT value FROM json_each(left) UNION ALL SELECT value FROM json_each(right)))`
+- `translateArrayLiteral()` generates `json_array(...)` for list literals
 
 ---
 
@@ -181,10 +191,11 @@ RETURN n.tags + ['new'] AS allTags
 |-------|-------|---------------|------------|
 | Previous | - | 814 | 62.9% |
 | Phase 1 | Quick Wins (4, 6, 7) | ~840 | ~65% |
-| Phase 2 | Paths (1, 2, 3) | ~935 | ~72% |
-| Phase 3 | Remaining (5, 8, 9, 10) | ~1000 | ~77% |
+| Phase 1.5 | List Concatenation (10) | ~845 | ~65.5% |
+| Phase 2 | Paths (1, 2, 3) | ~940 | ~72.5% |
+| Phase 3 | Remaining (5, 8, 9) | ~1000 | ~77% |
 
-**Note**: Phase 1 complete. Items 6 and 7 were already working (anonymous nodes).
+**Note**: Phase 1 complete. Items 6 and 7 were already working (anonymous nodes). Item 10 (List Concatenation) now complete.
 
 ---
 
@@ -218,6 +229,7 @@ pnpm test -- -t "DISTINCT"
 | `Expected expression, got STAR '*'` | Variable-length paths | parser.ts |
 | `Expected DOT, got COLON ':'` | Multiple labels | parser.ts |
 | ~~`Expected expression, got KEYWORD 'DISTINCT'`~~ | ~~DISTINCT in functions~~ | ~~Fixed~~ |
+| ~~`Expected expression, got LBRACKET '['`~~ | ~~List literals in RETURN~~ | ~~Fixed~~ |
 | `MERGE with relationship pattern must be executed` | MERGE relationships | executor.ts |
 
 ### Known Limitations

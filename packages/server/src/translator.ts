@@ -2144,6 +2144,10 @@ export class Translator {
       }
 
       case "literal": {
+        // Handle array literals specially - use json_array()
+        if (Array.isArray(expr.value)) {
+          return this.translateArrayLiteral(expr.value);
+        }
         // Convert booleans to 1/0 for SQLite
         const value = expr.value === true ? 1 : expr.value === false ? 0 : expr.value;
         params.push(value);
@@ -2219,6 +2223,20 @@ export class Translator {
     tables.push(...leftResult.tables, ...rightResult.tables);
     params.push(...leftResult.params, ...rightResult.params);
 
+    // Check if this is list concatenation (+ operator with arrays)
+    if (expr.operator === "+" && this.isListExpression(expr.left!) && this.isListExpression(expr.right!)) {
+      // Use JSON function to concatenate arrays
+      // Pattern: (SELECT json_group_array(value) FROM (SELECT value FROM json_each(left) UNION ALL SELECT value FROM json_each(right)))
+      const leftArraySql = this.wrapForArray(expr.left!, leftResult.sql);
+      const rightArraySql = this.wrapForArray(expr.right!, rightResult.sql);
+      
+      return {
+        sql: `(SELECT json_group_array(value) FROM (SELECT value FROM json_each(${leftArraySql}) UNION ALL SELECT value FROM json_each(${rightArraySql})))`,
+        tables,
+        params,
+      };
+    }
+
     // For property access in arithmetic, we need to use json_extract to get the numeric value
     const leftSql = this.wrapForArithmetic(expr.left!, leftResult.sql);
     const rightSql = this.wrapForArithmetic(expr.right!, rightResult.sql);
@@ -2228,6 +2246,39 @@ export class Translator {
       tables,
       params,
     };
+  }
+
+  private isListExpression(expr: Expression): boolean {
+    // Check if expression is likely a list/array type
+    if (expr.type === "literal" && Array.isArray(expr.value)) {
+      return true;
+    }
+    if (expr.type === "property") {
+      // Properties that access array fields - we assume it could be a list
+      // In a full implementation, you'd track types, but for now assume + with property could be list concat
+      return true;
+    }
+    if (expr.type === "binary" && expr.operator === "+") {
+      // Nested binary + could be chained list concatenation
+      return this.isListExpression(expr.left!) || this.isListExpression(expr.right!);
+    }
+    if (expr.type === "function") {
+      // List-returning functions like collect(), range(), etc.
+      const listFunctions = ["COLLECT", "RANGE", "KEYS", "LABELS", "SPLIT", "TAIL"];
+      return listFunctions.includes(expr.functionName || "");
+    }
+    return false;
+  }
+
+  private wrapForArray(expr: Expression, sql: string): string {
+    // For property access, use json_extract to get the JSON array
+    if (expr.type === "property") {
+      const varInfo = this.ctx.variables.get(expr.variable!);
+      if (varInfo) {
+        return `json_extract(${varInfo.alias}.properties, '$.${expr.property}')`;
+      }
+    }
+    return sql;
   }
 
   private wrapForArithmetic(expr: Expression, sql: string): string {
@@ -2297,6 +2348,47 @@ export class Translator {
     
     return {
       sql: `json_object(${keyValuePairs.join(", ")})`,
+      tables,
+      params,
+    };
+  }
+
+  private translateArrayLiteral(values: PropertyValue[]): { sql: string; tables: string[]; params: unknown[] } {
+    const tables: string[] = [];
+    const params: unknown[] = [];
+    
+    if (values.length === 0) {
+      return { sql: "json_array()", tables, params };
+    }
+    
+    const valueParts: string[] = [];
+    for (const value of values) {
+      if (typeof value === "string" || typeof value === "number") {
+        params.push(value);
+        valueParts.push("?");
+      } else if (typeof value === "boolean") {
+        params.push(value ? 1 : 0);
+        valueParts.push("?");
+      } else if (value === null) {
+        valueParts.push("NULL");
+      } else if (Array.isArray(value)) {
+        // Nested array
+        const nested = this.translateArrayLiteral(value);
+        tables.push(...nested.tables);
+        params.push(...nested.params);
+        valueParts.push(nested.sql);
+      } else if (this.isParameterRef(value)) {
+        params.push(this.ctx.paramValues[value.name]);
+        valueParts.push("?");
+      } else {
+        // For other objects, serialize as JSON
+        params.push(JSON.stringify(value));
+        valueParts.push("?");
+      }
+    }
+    
+    return {
+      sql: `json_array(${valueParts.join(", ")})`,
       tables,
       params,
     };

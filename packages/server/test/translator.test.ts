@@ -1882,4 +1882,55 @@ describe("Translator", () => {
       expect(result.returnColumns).toContain("today");
     });
   });
+
+  describe("List concatenation", () => {
+    it("translates list literal in RETURN", () => {
+      const result = translateCypher("RETURN [1, 2, 3] AS nums");
+
+      expect(result.statements).toHaveLength(1);
+      const sql = result.statements[0].sql;
+      // Should generate JSON array
+      expect(sql).toMatch(/json_array|json\(/i);
+      expect(result.returnColumns).toEqual(["nums"]);
+    });
+
+    it("translates empty list in RETURN", () => {
+      const result = translateCypher("RETURN [] AS empty");
+
+      expect(result.statements).toHaveLength(1);
+      const sql = result.statements[0].sql;
+      expect(sql).toMatch(/json_array|json\(/i);
+      expect(result.returnColumns).toEqual(["empty"]);
+    });
+
+    it("translates list concatenation with + operator", () => {
+      const result = translateCypher("RETURN [1, 2] + [3, 4] AS combined");
+
+      expect(result.statements).toHaveLength(1);
+      const sql = result.statements[0].sql;
+      // Should use json() to concatenate arrays
+      expect(sql).toMatch(/json|json_array/i);
+      expect(result.returnColumns).toEqual(["combined"]);
+    });
+
+    it("translates chained list concatenation", () => {
+      const result = translateCypher("RETURN [1] + [2] + [3] AS chain");
+
+      expect(result.statements).toHaveLength(1);
+      const sql = result.statements[0].sql;
+      expect(sql).toMatch(/json/i);
+      expect(result.returnColumns).toEqual(["chain"]);
+    });
+
+    it("translates property + list concatenation", () => {
+      const result = translateCypher(
+        "MATCH (n:Item) RETURN n.tags + ['new'] AS allTags"
+      );
+
+      expect(result.statements).toHaveLength(1);
+      const sql = result.statements[0].sql;
+      expect(sql).toMatch(/json/i);
+      expect(result.returnColumns).toEqual(["allTags"]);
+    });
+  });
 });
