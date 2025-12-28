@@ -1679,6 +1679,29 @@ describe("Translator", () => {
       expect(result.returnColumns).toEqual(["today"]);
     });
 
+    it("handles timestamp() in CREATE and SET", () => {
+      // CREATE a node and then SET a timestamp property
+      const parseResult = parse(`
+        CREATE (n:Event {name: 'Test'})
+        SET n.createdAt = timestamp()
+      `);
+      if (!parseResult.success) throw new Error(`Parse failed: ${parseResult.error.message}`);
+
+      const translator = new Translator();
+      const result = translator.translate(parseResult.query);
+
+      // Should have INSERT for CREATE and UPDATE for SET
+      expect(result.statements.length).toBeGreaterThanOrEqual(2);
+      
+      // The SET statement should contain timestamp function translation
+      const setStmt = result.statements.find((s) => s.sql.includes("UPDATE"));
+      expect(setStmt).toBeDefined();
+      expect(setStmt!.sql).toContain("json_set");
+      expect(setStmt!.sql).toContain("$.createdAt");
+      // Should use strftime for timestamp
+      expect(setStmt!.sql).toMatch(/strftime|UNIXEPOCH/i);
+    });
+
     it("generates datetime() for current datetime", () => {
       const result = translateCypher("RETURN datetime() AS now");
 
