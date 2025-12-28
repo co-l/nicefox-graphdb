@@ -263,6 +263,16 @@ export class Executor {
             resultRow[alias] = nodeResult.rows[0].value;
           }
         }
+      } else if (item.expression.type === "function" && item.expression.functionName === "ID") {
+        // Handle id(n) function
+        const args = item.expression.args;
+        if (args && args.length > 0 && args[0].type === "variable") {
+          const variable = args[0].variable!;
+          const id = createdIds.get(variable);
+          if (id) {
+            resultRow[alias] = id;
+          }
+        }
       }
     }
     

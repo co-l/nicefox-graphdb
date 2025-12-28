@@ -1,7 +1,7 @@
 // NiceFox GraphDB Client Tests
 
 import { describe, it, expect, beforeEach, afterEach, beforeAll, afterAll } from "vitest";
-import { NiceFoxGraphDB, GraphDBError } from "../src/index";
+import { NiceFoxGraphDB, GraphDBError, createTestClient, TestClient } from "../src/index";
 
 // Mock fetch for testing
 const originalFetch = globalThis.fetch;
@@ -387,5 +387,135 @@ describe("NiceFoxGraphDB Client", () => {
 
       expect(health.status).toBe("ok");
     });
+  });
+});
+
+describe("createTestClient()", () => {
+  let client: TestClient;
+
+  afterEach(() => {
+    if (client) {
+      client.close();
+    }
+  });
+
+  it("should create an in-memory test client", async () => {
+    client = await createTestClient();
+    expect(client).toBeDefined();
+  });
+
+  it("should return health status", async () => {
+    client = await createTestClient();
+    const health = await client.health();
+    
+    expect(health.status).toBe("ok");
+    expect(health.timestamp).toBeDefined();
+  });
+
+  it("should execute simple CREATE query", async () => {
+    client = await createTestClient();
+
+    // Simple CREATE without RETURN
+    await client.execute("CREATE (n:Test {value: 1})");
+
+    // Query it back
+    const results = await client.query<{ value: number }>(
+      "MATCH (n:Test) RETURN n.value as value"
+    );
+
+    expect(results).toHaveLength(1);
+    expect(results[0].value).toBe(1);
+  });
+
+  it("should execute CREATE with RETURN", async () => {
+    client = await createTestClient();
+
+    // CREATE with RETURN
+    const results = await client.query<{ n: { label: string } }>(
+      "CREATE (n:Person {name: 'Alice'}) RETURN n"
+    );
+
+    expect(results).toHaveLength(1);
+    expect(results[0].n.label).toBe("Person");
+  });
+
+  it("should create and query nodes", async () => {
+    client = await createTestClient();
+
+    // Create a node using createNode helper
+    const id = await client.createNode("Person", { name: "Alice", age: 30 });
+    expect(id).toBeDefined();
+
+    // Query it back
+    const results = await client.query<{ name: string; age: number }>(
+      "MATCH (p:Person) RETURN p.name as name, p.age as age"
+    );
+
+    expect(results).toHaveLength(1);
+    expect(results[0].name).toBe("Alice");
+    expect(results[0].age).toBe(30);
+  });
+
+  it("should support Cypher queries with parameters", async () => {
+    client = await createTestClient();
+
+    await client.execute("CREATE (p:Person {name: $name})", { name: "Bob" });
+
+    const results = await client.query<{ name: string }>(
+      "MATCH (p:Person {name: $name}) RETURN p.name as name",
+      { name: "Bob" }
+    );
+
+    expect(results).toHaveLength(1);
+    expect(results[0].name).toBe("Bob");
+  });
+
+  it("should support creating relationships", async () => {
+    client = await createTestClient();
+
+    // Create nodes and relationship using raw Cypher
+    await client.execute(`
+      CREATE (a:Person {name: 'Alice'})
+      CREATE (b:Person {name: 'Bob'})
+      CREATE (a)-[:KNOWS]->(b)
+    `);
+
+    const results = await client.query<{ a: string; b: string }>(
+      "MATCH (a:Person)-[:KNOWS]->(b:Person) RETURN a.name as a, b.name as b"
+    );
+
+    expect(results).toHaveLength(1);
+    expect(results[0].a).toBe("Alice");
+    expect(results[0].b).toBe("Bob");
+  });
+
+  it("should isolate data between test clients", async () => {
+    const client1 = await createTestClient({ project: "project1" });
+    const client2 = await createTestClient({ project: "project2" });
+
+    await client1.createNode("Person", { name: "Alice" });
+    await client2.createNode("Person", { name: "Bob" });
+
+    const results1 = await client1.query<{ name: string }>(
+      "MATCH (p:Person) RETURN p.name as name"
+    );
+    const results2 = await client2.query<{ name: string }>(
+      "MATCH (p:Person) RETURN p.name as name"
+    );
+
+    expect(results1).toHaveLength(1);
+    expect(results1[0].name).toBe("Alice");
+
+    expect(results2).toHaveLength(1);
+    expect(results2[0].name).toBe("Bob");
+
+    client1.close();
+    client2.close();
+  });
+
+  it("should throw GraphDBError on invalid queries", async () => {
+    client = await createTestClient();
+
+    await expect(client.query("INVALID CYPHER QUERY")).rejects.toThrow(GraphDBError);
   });
 });
