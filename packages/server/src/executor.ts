@@ -720,6 +720,9 @@ export class Executor {
     }
 
     // Phase 2: Execute CREATE/SET/DELETE for each matched row
+    // Keep track of all resolved IDs (including newly created nodes) for RETURN
+    const allResolvedIds: Record<string, string>[] = [];
+    
     this.db.transaction(() => {
       for (const row of matchedRows) {
         // Build a map of variable -> actual node/edge ID
@@ -728,7 +731,7 @@ export class Executor {
           resolvedIds[v] = row[`_id_${v}`] as string;
         }
 
-        // Execute CREATE with resolved IDs
+        // Execute CREATE with resolved IDs (this mutates resolvedIds to include new node IDs)
         for (const createClause of createClauses) {
           this.executeCreateWithResolvedIds(createClause, resolvedIds, params);
         }
@@ -742,29 +745,170 @@ export class Executor {
         for (const deleteClause of deleteClauses) {
           this.executeDeleteWithResolvedIds(deleteClause, resolvedIds);
         }
+        
+        // Save the resolved IDs for this row (including newly created nodes)
+        allResolvedIds.push({ ...resolvedIds });
       }
     });
 
-    // Phase 3: Execute RETURN if present (re-query data after modifications)
+    // Phase 3: Execute RETURN if present
     if (returnClause) {
-      // Re-execute the MATCH + RETURN to get updated data
-      const fullQuery: Query = {
-        clauses: [...matchClauses, returnClause],
-      };
-      const returnTranslator = new Translator(params);
-      const returnTranslation = returnTranslator.translate(fullQuery);
+      // Check if RETURN references any newly created variables (not in matched vars)
+      const returnVars = this.collectReturnVariables(returnClause);
+      const referencesCreatedVars = returnVars.some(v => !allMatchedVars.has(v));
+      
+      if (referencesCreatedVars) {
+        // RETURN references created nodes - use buildReturnResults with resolved IDs
+        return this.buildReturnResults(returnClause, allResolvedIds);
+      } else {
+        // RETURN only references matched nodes - use translator-based approach
+        const fullQuery: Query = {
+          clauses: [...matchClauses, returnClause],
+        };
+        const returnTranslator = new Translator(params);
+        const returnTranslation = returnTranslator.translate(fullQuery);
 
-      let rows: Record<string, unknown>[] = [];
-      for (const stmt of returnTranslation.statements) {
-        const result = this.db.execute(stmt.sql, stmt.params);
-        if (result.rows.length > 0 || stmt.sql.trim().toUpperCase().startsWith("SELECT")) {
-          rows = result.rows;
+        let rows: Record<string, unknown>[] = [];
+        for (const stmt of returnTranslation.statements) {
+          const result = this.db.execute(stmt.sql, stmt.params);
+          if (result.rows.length > 0 || stmt.sql.trim().toUpperCase().startsWith("SELECT")) {
+            rows = result.rows;
+          }
         }
+        return this.formatResults(rows, returnTranslation.returnColumns);
       }
-      return this.formatResults(rows, returnTranslation.returnColumns);
     }
 
     return [];
+  }
+  
+  /**
+   * Collect variable names referenced in a RETURN clause
+   */
+  private collectReturnVariables(returnClause: ReturnClause): string[] {
+    const vars: string[] = [];
+    
+    for (const item of returnClause.items) {
+      this.collectExpressionVariables(item.expression, vars);
+    }
+    
+    return vars;
+  }
+  
+  /**
+   * Collect variable names from an expression
+   */
+  private collectExpressionVariables(expr: Expression, vars: string[]): void {
+    if (expr.type === "variable" && expr.variable) {
+      vars.push(expr.variable);
+    } else if (expr.type === "property" && expr.variable) {
+      vars.push(expr.variable);
+    } else if (expr.type === "function" && expr.args) {
+      for (const arg of expr.args) {
+        this.collectExpressionVariables(arg, vars);
+      }
+    }
+  }
+  
+  /**
+   * Build RETURN results from resolved node/edge IDs
+   */
+  private buildReturnResults(
+    returnClause: ReturnClause,
+    allResolvedIds: Record<string, string>[]
+  ): Record<string, unknown>[] {
+    const results: Record<string, unknown>[] = [];
+    
+    for (const resolvedIds of allResolvedIds) {
+      const resultRow: Record<string, unknown> = {};
+      
+      for (const item of returnClause.items) {
+        const alias = item.alias || this.getExpressionName(item.expression);
+        
+        if (item.expression.type === "variable") {
+          const variable = item.expression.variable!;
+          const nodeId = resolvedIds[variable];
+          
+          if (nodeId) {
+            // Query the node/edge by ID
+            const nodeResult = this.db.execute(
+              "SELECT id, label, properties FROM nodes WHERE id = ?",
+              [nodeId]
+            );
+            
+            if (nodeResult.rows.length > 0) {
+              const row = nodeResult.rows[0];
+              resultRow[alias] = {
+                id: row.id,
+                label: row.label,
+                properties: typeof row.properties === "string"
+                  ? JSON.parse(row.properties)
+                  : row.properties,
+              };
+            } else {
+              // Try edges
+              const edgeResult = this.db.execute(
+                "SELECT id, type, source_id, target_id, properties FROM edges WHERE id = ?",
+                [nodeId]
+              );
+              if (edgeResult.rows.length > 0) {
+                const row = edgeResult.rows[0];
+                resultRow[alias] = {
+                  id: row.id,
+                  type: row.type,
+                  source_id: row.source_id,
+                  target_id: row.target_id,
+                  properties: typeof row.properties === "string"
+                    ? JSON.parse(row.properties)
+                    : row.properties,
+                };
+              }
+            }
+          }
+        } else if (item.expression.type === "property") {
+          const variable = item.expression.variable!;
+          const property = item.expression.property!;
+          const nodeId = resolvedIds[variable];
+          
+          if (nodeId) {
+            // Try nodes first
+            const nodeResult = this.db.execute(
+              `SELECT json_extract(properties, '$.${property}') as value FROM nodes WHERE id = ?`,
+              [nodeId]
+            );
+            
+            if (nodeResult.rows.length > 0) {
+              resultRow[alias] = nodeResult.rows[0].value;
+            } else {
+              // Try edges
+              const edgeResult = this.db.execute(
+                `SELECT json_extract(properties, '$.${property}') as value FROM edges WHERE id = ?`,
+                [nodeId]
+              );
+              if (edgeResult.rows.length > 0) {
+                resultRow[alias] = edgeResult.rows[0].value;
+              }
+            }
+          }
+        } else if (item.expression.type === "function" && item.expression.functionName === "ID") {
+          // Handle id(n) function
+          const args = item.expression.args;
+          if (args && args.length > 0 && args[0].type === "variable") {
+            const variable = args[0].variable!;
+            const nodeId = resolvedIds[variable];
+            if (nodeId) {
+              resultRow[alias] = nodeId;
+            }
+          }
+        }
+      }
+      
+      if (Object.keys(resultRow).length > 0) {
+        results.push(resultRow);
+      }
+    }
+    
+    return results;
   }
 
   /**

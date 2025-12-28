@@ -721,6 +721,85 @@ describe("Integration Tests", () => {
       );
       expect(reportResult.data).toHaveLength(0);
     });
+
+    it("returns newly created node in MATCH...CREATE...RETURN", () => {
+      // First create a user
+      executor.execute("CREATE (u:CC_User {id: 'user-789', name: 'Charlie'})");
+
+      // Match the user and create a business, returning the new business
+      const result = executor.execute(
+        `MATCH (u:CC_User {id: $userId})
+         CREATE (u)-[:OWNS]->(b:CC_Business {
+           id: $businessId,
+           name: $name,
+           address: $address,
+           country: $country,
+           vatNumber: $vatNumber,
+           accountantEmail: $accountantEmail,
+           paymentTermDays: $paymentTermDays,
+           iban: $iban,
+           bic: $bic,
+           bankAccountName: $bankAccountName
+         })
+         RETURN b`,
+        {
+          userId: "user-789",
+          businessId: "biz-123",
+          name: "Test Business",
+          address: "123 Main St",
+          country: "US",
+          vatNumber: "VAT123",
+          accountantEmail: "accountant@test.com",
+          paymentTermDays: 30,
+          iban: "DE89370400440532013000",
+          bic: "COBADEFFXXX",
+          bankAccountName: "Business Account"
+        }
+      );
+
+      expect(result.success).toBe(true);
+      if (result.success) {
+        expect(result.data).toHaveLength(1);
+        expect(result.data[0].b).toMatchObject({
+          label: "CC_Business",
+          properties: {
+            id: "biz-123",
+            name: "Test Business",
+            paymentTermDays: 30
+          }
+        });
+      }
+    });
+
+    it("returns both matched and created nodes in MATCH...CREATE...RETURN", () => {
+      // First create a user
+      executor.execute("CREATE (u:CC_User {id: 'user-abc', name: 'Dave'})");
+
+      // Match the user and create a project, returning both
+      const result = executor.execute(
+        `MATCH (u:CC_User {id: $userId})
+         CREATE (u)-[:MANAGES]->(p:Project {id: $projectId, name: $projectName})
+         RETURN u, p`,
+        {
+          userId: "user-abc",
+          projectId: "proj-1",
+          projectName: "My Project"
+        }
+      );
+
+      expect(result.success).toBe(true);
+      if (result.success) {
+        expect(result.data).toHaveLength(1);
+        expect(result.data[0].u).toMatchObject({
+          label: "CC_User",
+          properties: { id: "user-abc", name: "Dave" }
+        });
+        expect(result.data[0].p).toMatchObject({
+          label: "Project",
+          properties: { id: "proj-1", name: "My Project" }
+        });
+      }
+    });
   });
 
   describe("Multi-hop relationship patterns", () => {
