@@ -50,7 +50,7 @@ export interface ObjectProperty {
     value: Expression;
 }
 export interface Expression {
-    type: "property" | "literal" | "parameter" | "variable" | "function" | "case" | "binary" | "object";
+    type: "property" | "literal" | "parameter" | "variable" | "function" | "case" | "binary" | "object" | "comparison";
     variable?: string;
     property?: string;
     value?: PropertyValue;
@@ -63,6 +63,7 @@ export interface Expression {
     operator?: "+" | "-" | "*" | "/" | "%";
     left?: Expression;
     right?: Expression;
+    comparisonOperator?: "=" | "<>" | "<" | ">" | "<=" | ">=";
     properties?: ObjectProperty[];
 }
 export interface ReturnItem {
@@ -201,6 +202,7 @@ export declare class Parser {
     private parseComparisonCondition;
     private parseInListExpression;
     private parseExpression;
+    private parseReturnExpression;
     private parseAdditiveExpression;
     private parseMultiplicativeExpression;
     private parsePrimaryExpression;

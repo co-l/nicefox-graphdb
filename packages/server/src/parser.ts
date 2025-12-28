@@ -75,7 +75,7 @@ export interface ObjectProperty {
 }
 
 export interface Expression {
-  type: "property" | "literal" | "parameter" | "variable" | "function" | "case" | "binary" | "object";
+  type: "property" | "literal" | "parameter" | "variable" | "function" | "case" | "binary" | "object" | "comparison";
   variable?: string;
   property?: string;
   value?: PropertyValue;
@@ -86,10 +86,12 @@ export interface Expression {
   expression?: Expression;
   whens?: CaseWhen[];
   elseExpr?: Expression;
-  // Binary operation fields
+  // Binary operation fields (arithmetic)
   operator?: "+" | "-" | "*" | "/" | "%";
   left?: Expression;
   right?: Expression;
+  // Comparison expression fields
+  comparisonOperator?: "=" | "<>" | "<" | ">" | "<=" | ">=";
   // Object literal fields
   properties?: ObjectProperty[];
 }
@@ -772,7 +774,8 @@ export class Parser {
         this.expect("COMMA");
       }
 
-      const expression = this.parseExpression();
+      // Use parseReturnExpression to allow comparisons in RETURN items
+      const expression = this.parseReturnExpression();
       let alias: string | undefined;
 
       if (this.checkKeyword("AS")) {
@@ -1448,6 +1451,30 @@ export class Parser {
 
   private parseExpression(): Expression {
     return this.parseAdditiveExpression();
+  }
+
+  // Parse expression that may include comparison (for RETURN items)
+  private parseReturnExpression(): Expression {
+    let left = this.parseAdditiveExpression();
+
+    // Check for comparison operators
+    const opToken = this.peek();
+    let comparisonOperator: "=" | "<>" | "<" | ">" | "<=" | ">=" | undefined;
+
+    if (opToken.type === "EQUALS") comparisonOperator = "=";
+    else if (opToken.type === "NOT_EQUALS") comparisonOperator = "<>";
+    else if (opToken.type === "LT") comparisonOperator = "<";
+    else if (opToken.type === "GT") comparisonOperator = ">";
+    else if (opToken.type === "LTE") comparisonOperator = "<=";
+    else if (opToken.type === "GTE") comparisonOperator = ">=";
+
+    if (comparisonOperator) {
+      this.advance();
+      const right = this.parseAdditiveExpression();
+      return { type: "comparison", comparisonOperator, left, right };
+    }
+
+    return left;
   }
 
   // Handle + and - (lower precedence)

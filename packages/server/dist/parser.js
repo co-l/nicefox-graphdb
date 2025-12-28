@@ -463,7 +463,8 @@ export class Parser {
             if (items.length > 0) {
                 this.expect("COMMA");
             }
-            const expression = this.parseExpression();
+            // Use parseReturnExpression to allow comparisons in RETURN items
+            const expression = this.parseReturnExpression();
             let alias;
             if (this.checkKeyword("AS")) {
                 this.advance();
@@ -1029,6 +1030,31 @@ export class Parser {
     }
     parseExpression() {
         return this.parseAdditiveExpression();
+    }
+    // Parse expression that may include comparison (for RETURN items)
+    parseReturnExpression() {
+        let left = this.parseAdditiveExpression();
+        // Check for comparison operators
+        const opToken = this.peek();
+        let comparisonOperator;
+        if (opToken.type === "EQUALS")
+            comparisonOperator = "=";
+        else if (opToken.type === "NOT_EQUALS")
+            comparisonOperator = "<>";
+        else if (opToken.type === "LT")
+            comparisonOperator = "<";
+        else if (opToken.type === "GT")
+            comparisonOperator = ">";
+        else if (opToken.type === "LTE")
+            comparisonOperator = "<=";
+        else if (opToken.type === "GTE")
+            comparisonOperator = ">=";
+        if (comparisonOperator) {
+            this.advance();
+            const right = this.parseAdditiveExpression();
+            return { type: "comparison", comparisonOperator, left, right };
+        }
+        return left;
     }
     // Handle + and - (lower precedence)
     parseAdditiveExpression() {

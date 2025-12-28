@@ -795,6 +795,36 @@ export class Executor {
                     resultRow[alias] = node.properties[item.expression.property];
                 }
             }
+            else if (item.expression.type === "comparison") {
+                // Handle comparison expressions like: l.created_at = $createdAt
+                const left = this.evaluateReturnExpression(item.expression.left, matchedNodes, params);
+                const right = this.evaluateReturnExpression(item.expression.right, matchedNodes, params);
+                const op = item.expression.comparisonOperator;
+                let result;
+                switch (op) {
+                    case "=":
+                        result = left === right;
+                        break;
+                    case "<>":
+                        result = left !== right;
+                        break;
+                    case "<":
+                        result = left < right;
+                        break;
+                    case ">":
+                        result = left > right;
+                        break;
+                    case "<=":
+                        result = left <= right;
+                        break;
+                    case ">=":
+                        result = left >= right;
+                        break;
+                    default:
+                        result = false;
+                }
+                resultRow[alias] = result;
+            }
         }
         results.push(resultRow);
         return results;

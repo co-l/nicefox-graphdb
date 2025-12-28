@@ -1806,6 +1806,9 @@ export class Translator {
             case "object": {
                 return this.translateObjectLiteral(expr);
             }
+            case "comparison": {
+                return this.translateComparisonExpression(expr);
+            }
             default:
                 throw new Error(`Unknown expression type: ${expr.type}`);
         }
@@ -1855,6 +1858,32 @@ export class Translator {
         // For property access, the -> operator returns JSON, we need to extract as a number
         if (expr.type === "property") {
             // Replace -> with json_extract for numeric operations
+            const varInfo = this.ctx.variables.get(expr.variable);
+            if (varInfo) {
+                return `json_extract(${varInfo.alias}.properties, '$.${expr.property}')`;
+            }
+        }
+        return sql;
+    }
+    translateComparisonExpression(expr) {
+        const tables = [];
+        const params = [];
+        const leftResult = this.translateExpression(expr.left);
+        const rightResult = this.translateExpression(expr.right);
+        tables.push(...leftResult.tables, ...rightResult.tables);
+        params.push(...leftResult.params, ...rightResult.params);
+        // For property access in comparisons, use json_extract for proper comparison
+        const leftSql = this.wrapForComparison(expr.left, leftResult.sql);
+        const rightSql = this.wrapForComparison(expr.right, rightResult.sql);
+        return {
+            sql: `(${leftSql} ${expr.comparisonOperator} ${rightSql})`,
+            tables,
+            params,
+        };
+    }
+    wrapForComparison(expr, sql) {
+        // For property access, use json_extract to get proper value for comparison
+        if (expr.type === "property") {
             const varInfo = this.ctx.variables.get(expr.variable);
             if (varInfo) {
                 return `json_extract(${varInfo.alias}.properties, '$.${expr.property}')`;

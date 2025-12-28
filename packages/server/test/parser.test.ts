@@ -426,6 +426,36 @@ describe("Parser", () => {
       expect(clause.onCreateSet).toHaveLength(1);
       expect(clause.onMatchSet).toHaveLength(1);
     });
+
+    it("parses MERGE with ON CREATE SET multiple properties followed by RETURN with comparison", () => {
+      // This query fails because the parser gets confused by the = in the RETURN clause
+      // after parsing ON CREATE SET assignments with commas.
+      // The issue is that parseSetAssignments() uses a do-while loop that continues
+      // while it sees a COMMA, but it doesn't properly stop when encountering RETURN.
+      const query = expectSuccess(`
+        MATCH (u:BF_User {id: $userId})
+        MERGE (u)-[:BF_LEARNS]->(l:BF_Language {language: $language})
+        ON CREATE SET l.proficiency = $proficiency,
+                      l.created_at = $createdAt
+        RETURN l.created_at = $createdAt as created
+      `);
+
+      expect(query.clauses).toHaveLength(3);
+      expect(query.clauses[0].type).toBe("MATCH");
+      expect(query.clauses[1].type).toBe("MERGE");
+      expect(query.clauses[2].type).toBe("RETURN");
+
+      const mergeClause = query.clauses[1] as MergeClause;
+      expect(mergeClause.onCreateSet).toHaveLength(2);
+      expect(mergeClause.onCreateSet![0].property).toBe("proficiency");
+      expect(mergeClause.onCreateSet![1].property).toBe("created_at");
+
+      const returnClause = query.clauses[2] as ReturnClause;
+      expect(returnClause.items).toHaveLength(1);
+      expect(returnClause.items[0].alias).toBe("created");
+      // The expression should be a comparison (l.created_at = $createdAt)
+      expect(returnClause.items[0].expression.type).toBe("comparison");
+    });
   });
 
   describe("SET", () => {

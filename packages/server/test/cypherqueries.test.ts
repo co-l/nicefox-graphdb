@@ -1354,5 +1354,54 @@ describe("CypherQueries.json Patterns", () => {
         expect(names).toContain("Charlie");
       });
     });
+
+    describe("MERGE with ON CREATE SET and RETURN comparison", () => {
+      it("handles MERGE with ON CREATE SET followed by RETURN with equality comparison", () => {
+        // This pattern is used to check if a node was created or matched
+        // Pattern from user: MATCH (u:BF_User {id: $userId})
+        //                    MERGE (u)-[:BF_LEARNS]->(l:BF_Language {language: $language})
+        //                    ON CREATE SET l.proficiency = $proficiency, l.created_at = $createdAt
+        //                    RETURN l.created_at = $createdAt as created
+        exec("CREATE (u:BF_User {id: 'user-1'})");
+
+        const createdAt = "2024-01-15T10:00:00Z";
+        
+        // First call should create the language node
+        const result1 = exec(`
+          MATCH (u:BF_User {id: $userId})
+          MERGE (u)-[:BF_LEARNS]->(l:BF_Language {language: $language})
+          ON CREATE SET l.proficiency = $proficiency,
+                        l.created_at = $createdAt
+          RETURN l.created_at = $createdAt as created
+        `, {
+          userId: "user-1",
+          language: "Spanish",
+          proficiency: "beginner",
+          createdAt: createdAt,
+        });
+
+        expect(result1.data).toHaveLength(1);
+        expect(result1.data[0].created).toBe(true); // Was created, timestamps match
+
+        // Second call should match existing node (ON CREATE SET won't run)
+        const result2 = exec(`
+          MATCH (u:BF_User {id: $userId})
+          MERGE (u)-[:BF_LEARNS]->(l:BF_Language {language: $language})
+          ON CREATE SET l.proficiency = $proficiency,
+                        l.created_at = $createdAt
+          RETURN l.created_at = $createdAt as created
+        `, {
+          userId: "user-1",
+          language: "Spanish",
+          proficiency: "intermediate",
+          createdAt: "2024-01-20T10:00:00Z", // Different timestamp
+        });
+
+        expect(result2.data).toHaveLength(1);
+        // Should be false because the node was matched, not created
+        // so created_at still has the original value
+        expect(result2.data[0].created).toBe(false);
+      });
+    });
   });
 });

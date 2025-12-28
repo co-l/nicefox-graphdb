@@ -43,6 +43,8 @@ export declare class Translator {
     private translateCaseExpression;
     private translateBinaryExpression;
     private wrapForArithmetic;
+    private translateComparisonExpression;
+    private wrapForComparison;
     private translateObjectLiteral;
     private translateWhere;
     private translateExistsCondition;
