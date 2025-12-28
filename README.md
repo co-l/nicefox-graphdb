@@ -23,7 +23,7 @@
 | `ORDER BY` | Supported |
 | `SKIP` | Supported |
 | `DISTINCT` | Supported |
-| `OPTIONAL MATCH` | Not supported |
+| `OPTIONAL MATCH` | Supported |
 | `WITH` | Not supported |
 | `UNION` | Not supported |
 | `UNWIND` | Not supported |

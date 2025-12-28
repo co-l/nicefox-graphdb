@@ -776,6 +776,75 @@ describe("Parser", () => {
     });
   });
 
+  describe("OPTIONAL MATCH", () => {
+    it("parses simple OPTIONAL MATCH", () => {
+      const query = expectSuccess("MATCH (n:Person) OPTIONAL MATCH (n)-[:KNOWS]->(m:Person) RETURN n, m");
+      
+      expect(query.clauses).toHaveLength(3);
+      expect(query.clauses[0].type).toBe("MATCH");
+      expect(query.clauses[1].type).toBe("OPTIONAL_MATCH");
+      expect(query.clauses[2].type).toBe("RETURN");
+      
+      const optionalMatch = query.clauses[1] as MatchClause;
+      expect(optionalMatch.patterns).toHaveLength(1);
+    });
+
+    it("parses OPTIONAL MATCH with node pattern only", () => {
+      const query = expectSuccess("OPTIONAL MATCH (n:Person) RETURN n");
+      
+      expect(query.clauses).toHaveLength(2);
+      expect(query.clauses[0].type).toBe("OPTIONAL_MATCH");
+      
+      const optionalMatch = query.clauses[0] as MatchClause;
+      const node = optionalMatch.patterns[0] as NodePattern;
+      expect(node.label).toBe("Person");
+    });
+
+    it("parses OPTIONAL MATCH with WHERE clause", () => {
+      const query = expectSuccess(
+        "MATCH (n:Person) OPTIONAL MATCH (n)-[:KNOWS]->(m:Person) WHERE m.age > 25 RETURN n, m"
+      );
+      
+      expect(query.clauses).toHaveLength(3);
+      const optionalMatch = query.clauses[1] as MatchClause;
+      expect(optionalMatch.type).toBe("OPTIONAL_MATCH");
+      expect(optionalMatch.where).toBeDefined();
+      expect(optionalMatch.where!.type).toBe("comparison");
+    });
+
+    it("parses multiple OPTIONAL MATCH clauses", () => {
+      const query = expectSuccess(`
+        MATCH (n:Person)
+        OPTIONAL MATCH (n)-[:KNOWS]->(friend:Person)
+        OPTIONAL MATCH (n)-[:WORKS_AT]->(company:Company)
+        RETURN n, friend, company
+      `);
+      
+      expect(query.clauses).toHaveLength(4);
+      expect(query.clauses[0].type).toBe("MATCH");
+      expect(query.clauses[1].type).toBe("OPTIONAL_MATCH");
+      expect(query.clauses[2].type).toBe("OPTIONAL_MATCH");
+      expect(query.clauses[3].type).toBe("RETURN");
+    });
+
+    it("parses OPTIONAL MATCH with properties on relationship", () => {
+      const query = expectSuccess(
+        "MATCH (n:Person) OPTIONAL MATCH (n)-[r:KNOWS {since: 2020}]->(m) RETURN n, r, m"
+      );
+      
+      const optionalMatch = query.clauses[1] as MatchClause;
+      const rel = optionalMatch.patterns[0] as RelationshipPattern;
+      expect(rel.edge.type).toBe("KNOWS");
+      expect(rel.edge.properties).toEqual({ since: 2020 });
+    });
+
+    it("parses lowercase optional match", () => {
+      const query = expectSuccess("match (n:Person) optional match (n)-[:KNOWS]->(m) return n, m");
+      
+      expect(query.clauses[1].type).toBe("OPTIONAL_MATCH");
+    });
+  });
+
   describe("Complex queries", () => {
     it("parses multi-clause query", () => {
       const query = expectSuccess(`

@@ -73,7 +73,7 @@ export interface CreateClause {
 }
 
 export interface MatchClause {
-  type: "MATCH";
+  type: "MATCH" | "OPTIONAL_MATCH";
   patterns: (NodePattern | RelationshipPattern)[];
   where?: WhereCondition;
 }
@@ -197,6 +197,7 @@ const KEYWORDS = new Set([
   "AS",
   "IS",
   "DISTINCT",
+  "OPTIONAL",
 ]);
 
 class Tokenizer {
@@ -497,7 +498,9 @@ export class Parser {
       case "CREATE":
         return this.parseCreate();
       case "MATCH":
-        return this.parseMatch();
+        return this.parseMatch(false);
+      case "OPTIONAL":
+        return this.parseOptionalMatch();
       case "MERGE":
         return this.parseMerge();
       case "SET":
@@ -526,7 +529,7 @@ export class Parser {
     return { type: "CREATE", patterns };
   }
 
-  private parseMatch(): MatchClause {
+  private parseMatch(optional: boolean = false): MatchClause {
     this.expect("KEYWORD", "MATCH");
     const patterns: (NodePattern | RelationshipPattern)[] = [];
 
@@ -543,7 +546,12 @@ export class Parser {
       where = this.parseWhereCondition();
     }
 
-    return { type: "MATCH", patterns, where };
+    return { type: optional ? "OPTIONAL_MATCH" : "MATCH", patterns, where };
+  }
+
+  private parseOptionalMatch(): MatchClause {
+    this.expect("KEYWORD", "OPTIONAL");
+    return this.parseMatch(true);
   }
 
   private parseMerge(): MergeClause {

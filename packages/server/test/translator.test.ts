@@ -628,6 +628,80 @@ describe("Translator", () => {
     });
   });
 
+  describe("OPTIONAL MATCH", () => {
+    it("generates LEFT JOIN for OPTIONAL MATCH with relationship", () => {
+      const result = translateCypher(
+        "MATCH (n:Person) OPTIONAL MATCH (n)-[:KNOWS]->(m:Person) RETURN n, m"
+      );
+
+      expect(result.statements).toHaveLength(1);
+      const sql = result.statements[0].sql;
+      
+      // Should use LEFT JOIN for the optional relationship
+      expect(sql).toContain("LEFT JOIN edges");
+      expect(sql).toContain("LEFT JOIN nodes");
+    });
+
+    it("generates LEFT JOIN for simple OPTIONAL MATCH node", () => {
+      const result = translateCypher(
+        "MATCH (n:Person {id: $id}) OPTIONAL MATCH (m:Company {parentId: $id}) RETURN n, m",
+        { id: "123" }
+      );
+
+      expect(result.statements).toHaveLength(1);
+      const sql = result.statements[0].sql;
+      
+      // Should use LEFT JOIN for optional node
+      expect(sql).toContain("LEFT JOIN");
+    });
+
+    it("handles OPTIONAL MATCH with WHERE clause", () => {
+      const result = translateCypher(
+        "MATCH (n:Person) OPTIONAL MATCH (n)-[:KNOWS]->(m:Person) WHERE m.age > 25 RETURN n, m"
+      );
+
+      expect(result.statements).toHaveLength(1);
+      const sql = result.statements[0].sql;
+      
+      // Should have LEFT JOIN
+      expect(sql).toContain("LEFT JOIN");
+      // WHERE condition should apply to the optional part
+      expect(sql).toContain("json_extract");
+    });
+
+    it("handles multiple OPTIONAL MATCH clauses", () => {
+      const result = translateCypher(`
+        MATCH (n:Person)
+        OPTIONAL MATCH (n)-[:KNOWS]->(friend:Person)
+        OPTIONAL MATCH (n)-[:WORKS_AT]->(company:Company)
+        RETURN n, friend, company
+      `);
+
+      expect(result.statements).toHaveLength(1);
+      const sql = result.statements[0].sql;
+      
+      // Should have multiple LEFT JOINs
+      const leftJoinCount = (sql.match(/LEFT JOIN/g) || []).length;
+      expect(leftJoinCount).toBeGreaterThanOrEqual(4); // 2 edges + 2 nodes
+    });
+
+    it("combines regular MATCH with OPTIONAL MATCH correctly", () => {
+      const result = translateCypher(
+        "MATCH (n:Person)-[:WORKS_AT]->(c:Company) OPTIONAL MATCH (n)-[:KNOWS]->(m:Person) RETURN n, c, m"
+      );
+
+      expect(result.statements).toHaveLength(1);
+      const sql = result.statements[0].sql;
+      
+      // Should have regular JOINs for required pattern
+      expect(sql).toContain("JOIN edges");
+      expect(sql).toContain("JOIN nodes");
+      // And LEFT JOINs for optional pattern
+      expect(sql).toContain("LEFT JOIN edges");
+      expect(sql).toContain("LEFT JOIN nodes");
+    });
+  });
+
   describe("Standalone RETURN", () => {
     it("handles RETURN with literal number", () => {
       const result = translateCypher("RETURN 1");

@@ -1429,6 +1429,148 @@ describe("Integration Tests", () => {
     });
   });
 
+  describe("OPTIONAL MATCH", () => {
+    it("returns main node even when optional match has no results", () => {
+      // Create a person without any friends
+      executor.execute("CREATE (n:Person {name: 'Alice'})");
+
+      const result = expectSuccess(
+        executor.execute(
+          "MATCH (n:Person {name: 'Alice'}) OPTIONAL MATCH (n)-[:KNOWS]->(m:Person) RETURN n.name, m.name"
+        )
+      );
+
+      expect(result.data).toHaveLength(1);
+      expect(result.data[0].n_name).toBe("Alice");
+      expect(result.data[0].m_name).toBeNull();
+    });
+
+    it("returns matched nodes when optional pattern exists", () => {
+      // Create a person with a friend
+      executor.execute("CREATE (n:Person {name: 'Alice'})");
+      executor.execute("CREATE (m:Person {name: 'Bob'})");
+      
+      const alice = db.getNodesByLabel("Person").find(n => n.properties.name === "Alice")!;
+      const bob = db.getNodesByLabel("Person").find(n => n.properties.name === "Bob")!;
+      db.insertEdge("e1", "KNOWS", alice.id, bob.id);
+
+      const result = expectSuccess(
+        executor.execute(
+          "MATCH (n:Person {name: 'Alice'}) OPTIONAL MATCH (n)-[:KNOWS]->(m:Person) RETURN n.name, m.name"
+        )
+      );
+
+      expect(result.data).toHaveLength(1);
+      expect(result.data[0].n_name).toBe("Alice");
+      expect(result.data[0].m_name).toBe("Bob");
+    });
+
+    it("returns multiple rows when optional match has multiple results", () => {
+      // Create a person with multiple friends
+      executor.execute("CREATE (n:Person {name: 'Alice'})");
+      executor.execute("CREATE (m1:Person {name: 'Bob'})");
+      executor.execute("CREATE (m2:Person {name: 'Charlie'})");
+      
+      const alice = db.getNodesByLabel("Person").find(n => n.properties.name === "Alice")!;
+      const bob = db.getNodesByLabel("Person").find(n => n.properties.name === "Bob")!;
+      const charlie = db.getNodesByLabel("Person").find(n => n.properties.name === "Charlie")!;
+      db.insertEdge("e1", "KNOWS", alice.id, bob.id);
+      db.insertEdge("e2", "KNOWS", alice.id, charlie.id);
+
+      const result = expectSuccess(
+        executor.execute(
+          "MATCH (n:Person {name: 'Alice'}) OPTIONAL MATCH (n)-[:KNOWS]->(m:Person) RETURN n.name, m.name"
+        )
+      );
+
+      expect(result.data).toHaveLength(2);
+      const names = result.data.map((r: Record<string, unknown>) => r.m_name);
+      expect(names).toContain("Bob");
+      expect(names).toContain("Charlie");
+    });
+
+    it("handles multiple OPTIONAL MATCH clauses", () => {
+      // Create a person with a friend but no employer
+      executor.execute("CREATE (n:Person {name: 'Alice'})");
+      executor.execute("CREATE (m:Person {name: 'Bob'})");
+      
+      const alice = db.getNodesByLabel("Person").find(n => n.properties.name === "Alice")!;
+      const bob = db.getNodesByLabel("Person").find(n => n.properties.name === "Bob")!;
+      db.insertEdge("e1", "KNOWS", alice.id, bob.id);
+
+      const result = expectSuccess(
+        executor.execute(`
+          MATCH (n:Person {name: 'Alice'})
+          OPTIONAL MATCH (n)-[:KNOWS]->(friend:Person)
+          OPTIONAL MATCH (n)-[:WORKS_AT]->(company:Company)
+          RETURN n.name, friend.name, company.name
+        `)
+      );
+
+      expect(result.data).toHaveLength(1);
+      expect(result.data[0].n_name).toBe("Alice");
+      expect(result.data[0].friend_name).toBe("Bob");
+      expect(result.data[0].company_name).toBeNull();
+    });
+
+    it("handles OPTIONAL MATCH with WHERE clause", () => {
+      // Create a person with friends of different ages
+      executor.execute("CREATE (n:Person {name: 'Alice'})");
+      executor.execute("CREATE (m1:Person {name: 'Bob', age: 30})");
+      executor.execute("CREATE (m2:Person {name: 'Charlie', age: 20})");
+      
+      const alice = db.getNodesByLabel("Person").find(n => n.properties.name === "Alice")!;
+      const bob = db.getNodesByLabel("Person").find(n => n.properties.name === "Bob")!;
+      const charlie = db.getNodesByLabel("Person").find(n => n.properties.name === "Charlie")!;
+      db.insertEdge("e1", "KNOWS", alice.id, bob.id);
+      db.insertEdge("e2", "KNOWS", alice.id, charlie.id);
+
+      const result = expectSuccess(
+        executor.execute(
+          "MATCH (n:Person {name: 'Alice'}) OPTIONAL MATCH (n)-[:KNOWS]->(m:Person) WHERE m.age > 25 RETURN n.name, m.name"
+        )
+      );
+
+      expect(result.data).toHaveLength(1);
+      expect(result.data[0].n_name).toBe("Alice");
+      expect(result.data[0].m_name).toBe("Bob");
+    });
+
+    it("combines required MATCH with OPTIONAL MATCH", () => {
+      // Create: Person -> Works at Company, Person may or may not have friends
+      executor.execute("CREATE (n:Person {name: 'Alice'})");
+      executor.execute("CREATE (c:Company {name: 'Acme'})");
+      
+      const alice = db.getNodesByLabel("Person").find(n => n.properties.name === "Alice")!;
+      const acme = db.getNodesByLabel("Company").find(c => c.properties.name === "Acme")!;
+      db.insertEdge("e1", "WORKS_AT", alice.id, acme.id);
+
+      const result = expectSuccess(
+        executor.execute(`
+          MATCH (n:Person {name: 'Alice'})-[:WORKS_AT]->(c:Company)
+          OPTIONAL MATCH (n)-[:KNOWS]->(m:Person)
+          RETURN n.name, c.name, m.name
+        `)
+      );
+
+      expect(result.data).toHaveLength(1);
+      expect(result.data[0].n_name).toBe("Alice");
+      expect(result.data[0].c_name).toBe("Acme");
+      expect(result.data[0].m_name).toBeNull();
+    });
+
+    it("returns empty when required MATCH fails", () => {
+      // No matching person at all
+      const result = expectSuccess(
+        executor.execute(
+          "MATCH (n:Person {name: 'NonExistent'}) OPTIONAL MATCH (n)-[:KNOWS]->(m:Person) RETURN n.name, m.name"
+        )
+      );
+
+      expect(result.data).toHaveLength(0);
+    });
+  });
+
   describe("RETURN DISTINCT", () => {
     it("returns distinct values for a property", () => {
       executor.execute("CREATE (n:Person {name: 'Alice', city: 'NYC'})");

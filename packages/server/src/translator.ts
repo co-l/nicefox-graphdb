@@ -80,7 +80,9 @@ export class Translator {
       case "CREATE":
         return { statements: this.translateCreate(clause) };
       case "MATCH":
-        return { statements: this.translateMatch(clause) };
+        return { statements: this.translateMatch(clause, false) };
+      case "OPTIONAL_MATCH":
+        return { statements: this.translateMatch(clause, true) };
       case "MERGE":
         return { statements: this.translateMerge(clause) };
       case "SET":
@@ -187,51 +189,66 @@ export class Translator {
   // MATCH
   // ============================================================================
 
-  private translateMatch(clause: MatchClause): SqlStatement[] {
+  private translateMatch(clause: MatchClause, optional: boolean = false): SqlStatement[] {
     // MATCH doesn't produce standalone statements - it sets up context for RETURN/SET/DELETE
     // The actual SELECT is generated when we encounter RETURN
 
     for (const pattern of clause.patterns) {
       if (this.isRelationshipPattern(pattern)) {
-        this.registerRelationshipPattern(pattern);
+        this.registerRelationshipPattern(pattern, optional);
       } else {
-        this.registerNodePattern(pattern);
+        this.registerNodePattern(pattern, optional);
       }
     }
 
     // Store the where clause in context for later use
+    // For OPTIONAL MATCH, we need to associate the where with the optional patterns
     if (clause.where) {
-      (this.ctx as any).whereClause = clause.where;
+      if (optional) {
+        // Store optional where clauses separately to apply them correctly
+        if (!(this.ctx as any).optionalWhereClauses) {
+          (this.ctx as any).optionalWhereClauses = [];
+        }
+        (this.ctx as any).optionalWhereClauses.push(clause.where);
+      } else {
+        (this.ctx as any).whereClause = clause.where;
+      }
     }
 
     return [];
   }
 
-  private registerNodePattern(node: NodePattern): string {
+  private registerNodePattern(node: NodePattern, optional: boolean = false): string {
     const alias = `n${this.ctx.aliasCounter++}`;
     if (node.variable) {
       this.ctx.variables.set(node.variable, { type: "node", alias });
     }
     // Store pattern info for later
     (this.ctx as any)[`pattern_${alias}`] = node;
+    // Track if this node pattern is optional
+    (this.ctx as any)[`optional_${alias}`] = optional;
     return alias;
   }
 
-  private registerRelationshipPattern(rel: RelationshipPattern): void {
+  private registerRelationshipPattern(rel: RelationshipPattern, optional: boolean = false): void {
     // Check if source node is already registered (for chained patterns or multi-MATCH)
     let sourceAlias: string;
+    let sourceIsNew = false;
     if (rel.source.variable && this.ctx.variables.has(rel.source.variable)) {
       sourceAlias = this.ctx.variables.get(rel.source.variable)!.alias;
     } else {
-      sourceAlias = this.registerNodePattern(rel.source);
+      sourceAlias = this.registerNodePattern(rel.source, optional);
+      sourceIsNew = true;
     }
 
     // Check if target node is already registered (for multi-MATCH shared variables)
     let targetAlias: string;
+    let targetIsNew = false;
     if (rel.target.variable && this.ctx.variables.has(rel.target.variable)) {
       targetAlias = this.ctx.variables.get(rel.target.variable)!.alias;
     } else {
-      targetAlias = this.registerNodePattern(rel.target);
+      targetAlias = this.registerNodePattern(rel.target, optional);
+      targetIsNew = true;
     }
 
     const edgeAlias = `e${this.ctx.aliasCounter++}`;
@@ -241,15 +258,24 @@ export class Translator {
     }
 
     (this.ctx as any)[`pattern_${edgeAlias}`] = rel.edge;
+    (this.ctx as any)[`optional_${edgeAlias}`] = optional;
 
     // Store relationship patterns as an array to support multi-hop
     if (!(this.ctx as any).relationshipPatterns) {
       (this.ctx as any).relationshipPatterns = [];
     }
-    (this.ctx as any).relationshipPatterns.push({ sourceAlias, targetAlias, edgeAlias, edge: rel.edge });
+    (this.ctx as any).relationshipPatterns.push({ 
+      sourceAlias, 
+      targetAlias, 
+      edgeAlias, 
+      edge: rel.edge, 
+      optional,
+      sourceIsNew,
+      targetIsNew
+    });
 
     // Keep backwards compatibility with single pattern
-    (this.ctx as any).relationshipPattern = { sourceAlias, targetAlias, edgeAlias, edge: rel.edge };
+    (this.ctx as any).relationshipPattern = { sourceAlias, targetAlias, edgeAlias, edge: rel.edge, optional };
   }
 
   // ============================================================================
@@ -365,8 +391,9 @@ export class Translator {
     const returnColumns: string[] = [];
     const fromParts: string[] = [];
     const joinParts: string[] = [];
+    const joinParams: unknown[] = []; // Parameters for JOIN ON clauses
     const whereParts: string[] = [];
-    const params: unknown[] = [];
+    const whereParams: unknown[] = []; // Parameters for WHERE clause
 
     // Track which tables we need
     const neededTables = new Set<string>();
@@ -389,6 +416,9 @@ export class Translator {
       targetAlias: string;
       edgeAlias: string;
       edge: { type?: string; properties?: Record<string, PropertyValue> };
+      optional?: boolean;
+      sourceIsNew?: boolean;
+      targetIsNew?: boolean;
     }> | undefined;
 
     if (relPatterns && relPatterns.length > 0) {
@@ -400,86 +430,140 @@ export class Translator {
       // Relationship query - handle multi-hop patterns
       for (let i = 0; i < relPatterns.length; i++) {
         const relPattern = relPatterns[i];
+        const isOptional = relPattern.optional === true;
+        const joinType = isOptional ? "LEFT JOIN" : "JOIN";
 
-        if (i === 0) {
-          // First relationship: add source node to FROM
+        if (i === 0 && !isOptional) {
+          // First non-optional relationship: add source node to FROM
           fromParts.push(`nodes ${relPattern.sourceAlias}`);
           addedNodeAliases.add(relPattern.sourceAlias);
         } else if (!addedNodeAliases.has(relPattern.sourceAlias)) {
           // For subsequent patterns, if source is not already added, we need to JOIN it
-          // This handles cases like: MATCH (a)-[]->(b) MATCH (c)-[]->(b) where c is new
-          joinParts.push(`JOIN nodes ${relPattern.sourceAlias} ON 1=1`);
+          // For optional patterns, use LEFT JOIN
+          if (isOptional && relPattern.sourceIsNew) {
+            // This shouldn't happen often - optional patterns usually reference existing nodes
+            joinParts.push(`${joinType} nodes ${relPattern.sourceAlias} ON 1=1`);
+          } else if (i === 0) {
+            // First pattern is optional but source is new - add to FROM
+            fromParts.push(`nodes ${relPattern.sourceAlias}`);
+          } else {
+            joinParts.push(`JOIN nodes ${relPattern.sourceAlias} ON 1=1`);
+          }
           addedNodeAliases.add(relPattern.sourceAlias);
         }
 
+        // Build ON conditions for the edge join
+        let edgeOnConditions: string[] = [];
+        let edgeOnParams: unknown[] = [];
+        
         // Add edge join - need to determine direction based on whether source/target already exist
         if (addedNodeAliases.has(relPattern.targetAlias) && !addedNodeAliases.has(relPattern.sourceAlias)) {
-          // Target exists, source is new - this shouldn't happen after the check above
-          // but handle it anyway
-          joinParts.push(
-            `JOIN edges ${relPattern.edgeAlias} ON ${relPattern.edgeAlias}.target_id = ${relPattern.targetAlias}.id`
-          );
+          edgeOnConditions.push(`${relPattern.edgeAlias}.target_id = ${relPattern.targetAlias}.id`);
         } else {
-          // Normal case: source exists (or was just added), join edge by source
-          joinParts.push(
-            `JOIN edges ${relPattern.edgeAlias} ON ${relPattern.edgeAlias}.source_id = ${relPattern.sourceAlias}.id`
-          );
+          edgeOnConditions.push(`${relPattern.edgeAlias}.source_id = ${relPattern.sourceAlias}.id`);
         }
+
+        // For optional patterns, add type filter to ON clause instead of WHERE
+        if (relPattern.edge.type) {
+          if (isOptional) {
+            edgeOnConditions.push(`${relPattern.edgeAlias}.type = ?`);
+            edgeOnParams.push(relPattern.edge.type);
+          } else {
+            whereParts.push(`${relPattern.edgeAlias}.type = ?`);
+            whereParams.push(relPattern.edge.type);
+          }
+        }
+
+        joinParts.push(`${joinType} edges ${relPattern.edgeAlias} ON ${edgeOnConditions.join(" AND ")}`);
+        joinParams.push(...edgeOnParams);
+
+        // Build ON conditions for the target node join
+        let targetOnConditions: string[] = [];
+        let targetOnParams: unknown[] = [];
 
         // Add target node join if not already added
         if (!addedNodeAliases.has(relPattern.targetAlias)) {
-          joinParts.push(
-            `JOIN nodes ${relPattern.targetAlias} ON ${relPattern.edgeAlias}.target_id = ${relPattern.targetAlias}.id`
-          );
+          targetOnConditions.push(`${relPattern.edgeAlias}.target_id = ${relPattern.targetAlias}.id`);
+          
+          // For optional patterns, add label and property filters to ON clause
+          const targetPattern = (this.ctx as any)[`pattern_${relPattern.targetAlias}`];
+          if (isOptional && targetPattern?.label) {
+            targetOnConditions.push(`${relPattern.targetAlias}.label = ?`);
+            targetOnParams.push(targetPattern.label);
+            filteredNodeAliases.add(relPattern.targetAlias);
+          }
+          if (isOptional && targetPattern?.properties) {
+            for (const [key, value] of Object.entries(targetPattern.properties)) {
+              if (this.isParameterRef(value as PropertyValue)) {
+                targetOnConditions.push(`json_extract(${relPattern.targetAlias}.properties, '$.${key}') = ?`);
+                targetOnParams.push(this.ctx.paramValues[(value as ParameterRef).name]);
+              } else {
+                targetOnConditions.push(`json_extract(${relPattern.targetAlias}.properties, '$.${key}') = ?`);
+                targetOnParams.push(value);
+              }
+            }
+          }
+
+          joinParts.push(`${joinType} nodes ${relPattern.targetAlias} ON ${targetOnConditions.join(" AND ")}`);
+          joinParams.push(...targetOnParams);
           addedNodeAliases.add(relPattern.targetAlias);
         } else {
           // Target was already added, but we need to ensure edge connects to it
           // Add WHERE condition to connect edge's target to the existing node
-          whereParts.push(`${relPattern.edgeAlias}.target_id = ${relPattern.targetAlias}.id`);
+          if (isOptional) {
+            // For optional, we need to handle this in ON clause of edge
+            // This is already handled above by adding to edgeOnConditions
+            whereParts.push(`(${relPattern.edgeAlias}.id IS NULL OR ${relPattern.edgeAlias}.target_id = ${relPattern.targetAlias}.id)`);
+          } else {
+            whereParts.push(`${relPattern.edgeAlias}.target_id = ${relPattern.targetAlias}.id`);
+          }
         }
 
-        // Add edge type filter if specified
-        if (relPattern.edge.type) {
-          whereParts.push(`${relPattern.edgeAlias}.type = ?`);
-          params.push(relPattern.edge.type);
-        }
-
-        // Add source node filters (label and properties) if not already done
+        // Add source node filters (label and properties) if not already done and not optional
         if (!filteredNodeAliases.has(relPattern.sourceAlias)) {
           const sourcePattern = (this.ctx as any)[`pattern_${relPattern.sourceAlias}`];
+          const sourceIsOptional = (this.ctx as any)[`optional_${relPattern.sourceAlias}`] === true;
+          
           if (sourcePattern?.label) {
-            whereParts.push(`${relPattern.sourceAlias}.label = ?`);
-            params.push(sourcePattern.label);
+            if (sourceIsOptional) {
+              // For optional source nodes, this shouldn't happen often
+              // as optional patterns usually reference required nodes
+            } else {
+              whereParts.push(`${relPattern.sourceAlias}.label = ?`);
+              whereParams.push(sourcePattern.label);
+            }
           }
-          if (sourcePattern?.properties) {
+          if (sourcePattern?.properties && !sourceIsOptional) {
             for (const [key, value] of Object.entries(sourcePattern.properties)) {
               if (this.isParameterRef(value as PropertyValue)) {
                 whereParts.push(`json_extract(${relPattern.sourceAlias}.properties, '$.${key}') = ?`);
-                params.push(this.ctx.paramValues[(value as ParameterRef).name]);
+                whereParams.push(this.ctx.paramValues[(value as ParameterRef).name]);
               } else {
                 whereParts.push(`json_extract(${relPattern.sourceAlias}.properties, '$.${key}') = ?`);
-                params.push(value);
+                whereParams.push(value);
               }
             }
           }
           filteredNodeAliases.add(relPattern.sourceAlias);
         }
 
-        // Add target node filters (label and properties) if not already done
+        // Add target node filters (label and properties) if not already done and not optional
         if (!filteredNodeAliases.has(relPattern.targetAlias)) {
           const targetPattern = (this.ctx as any)[`pattern_${relPattern.targetAlias}`];
-          if (targetPattern?.label) {
-            whereParts.push(`${relPattern.targetAlias}.label = ?`);
-            params.push(targetPattern.label);
-          }
-          if (targetPattern?.properties) {
-            for (const [key, value] of Object.entries(targetPattern.properties)) {
-              if (this.isParameterRef(value as PropertyValue)) {
-                whereParts.push(`json_extract(${relPattern.targetAlias}.properties, '$.${key}') = ?`);
-                params.push(this.ctx.paramValues[(value as ParameterRef).name]);
-              } else {
-                whereParts.push(`json_extract(${relPattern.targetAlias}.properties, '$.${key}') = ?`);
-                params.push(value);
+          if (!isOptional) {
+            if (targetPattern?.label) {
+              whereParts.push(`${relPattern.targetAlias}.label = ?`);
+              whereParams.push(targetPattern.label);
+            }
+            if (targetPattern?.properties) {
+              for (const [key, value] of Object.entries(targetPattern.properties)) {
+                if (this.isParameterRef(value as PropertyValue)) {
+                  whereParts.push(`json_extract(${relPattern.targetAlias}.properties, '$.${key}') = ?`);
+                  whereParams.push(this.ctx.paramValues[(value as ParameterRef).name]);
+                } else {
+                  whereParts.push(`json_extract(${relPattern.targetAlias}.properties, '$.${key}') = ?`);
+                  whereParams.push(value);
+                }
               }
             }
           }
@@ -487,25 +571,77 @@ export class Translator {
         }
       }
     } else {
-      // Simple node query
+      // Simple node query (no relationships)
+      let hasFromClause = false;
+      
       for (const [variable, info] of this.ctx.variables) {
         const pattern = (this.ctx as any)[`pattern_${info.alias}`];
+        const isOptional = (this.ctx as any)[`optional_${info.alias}`] === true;
+        
         if (pattern && info.type === "node") {
-          fromParts.push(`nodes ${info.alias}`);
+          if (!hasFromClause && !isOptional) {
+            // First non-optional node goes in FROM
+            fromParts.push(`nodes ${info.alias}`);
+            hasFromClause = true;
 
-          if (pattern.label) {
-            whereParts.push(`${info.alias}.label = ?`);
-            params.push(pattern.label);
-          }
+            if (pattern.label) {
+              whereParts.push(`${info.alias}.label = ?`);
+              whereParams.push(pattern.label);
+            }
 
-          if (pattern.properties) {
-            for (const [key, value] of Object.entries(pattern.properties)) {
-              if (this.isParameterRef(value as PropertyValue)) {
-                whereParts.push(`json_extract(${info.alias}.properties, '$.${key}') = ?`);
-                params.push(this.ctx.paramValues[(value as ParameterRef).name]);
-              } else {
-                whereParts.push(`json_extract(${info.alias}.properties, '$.${key}') = ?`);
-                params.push(value);
+            if (pattern.properties) {
+              for (const [key, value] of Object.entries(pattern.properties)) {
+                if (this.isParameterRef(value as PropertyValue)) {
+                  whereParts.push(`json_extract(${info.alias}.properties, '$.${key}') = ?`);
+                  whereParams.push(this.ctx.paramValues[(value as ParameterRef).name]);
+                } else {
+                  whereParts.push(`json_extract(${info.alias}.properties, '$.${key}') = ?`);
+                  whereParams.push(value);
+                }
+              }
+            }
+          } else if (isOptional) {
+            // Optional node - use LEFT JOIN
+            const onConditions: string[] = ["1=1"];
+            const onParams: unknown[] = [];
+            
+            if (pattern.label) {
+              onConditions.push(`${info.alias}.label = ?`);
+              onParams.push(pattern.label);
+            }
+            
+            if (pattern.properties) {
+              for (const [key, value] of Object.entries(pattern.properties)) {
+                if (this.isParameterRef(value as PropertyValue)) {
+                  onConditions.push(`json_extract(${info.alias}.properties, '$.${key}') = ?`);
+                  onParams.push(this.ctx.paramValues[(value as ParameterRef).name]);
+                } else {
+                  onConditions.push(`json_extract(${info.alias}.properties, '$.${key}') = ?`);
+                  onParams.push(value);
+                }
+              }
+            }
+            
+            joinParts.push(`LEFT JOIN nodes ${info.alias} ON ${onConditions.join(" AND ")}`);
+            joinParams.push(...onParams);
+          } else {
+            // Non-optional node that's not the first - use regular JOIN
+            fromParts.push(`nodes ${info.alias}`);
+
+            if (pattern.label) {
+              whereParts.push(`${info.alias}.label = ?`);
+              whereParams.push(pattern.label);
+            }
+
+            if (pattern.properties) {
+              for (const [key, value] of Object.entries(pattern.properties)) {
+                if (this.isParameterRef(value as PropertyValue)) {
+                  whereParts.push(`json_extract(${info.alias}.properties, '$.${key}') = ?`);
+                  whereParams.push(this.ctx.paramValues[(value as ParameterRef).name]);
+                } else {
+                  whereParts.push(`json_extract(${info.alias}.properties, '$.${key}') = ?`);
+                  whereParams.push(value);
+                }
               }
             }
           }
@@ -514,11 +650,36 @@ export class Translator {
     }
 
     // Add WHERE conditions from MATCH
-    const whereClause = (this.ctx as any).whereClause;
-    if (whereClause) {
-      const { sql: whereSql, params: whereParams } = this.translateWhere(whereClause);
+    const matchWhereClause = (this.ctx as any).whereClause;
+    if (matchWhereClause) {
+      const { sql: whereSql, params: conditionParams } = this.translateWhere(matchWhereClause);
       whereParts.push(whereSql);
-      params.push(...whereParams);
+      whereParams.push(...conditionParams);
+    }
+
+    // Add WHERE conditions from OPTIONAL MATCH
+    // These should be applied as: (optional_var IS NULL OR condition)
+    // This ensures the main row is still returned even if the optional match fails the WHERE
+    const optionalWhereClauses = (this.ctx as any).optionalWhereClauses as WhereCondition[] | undefined;
+    if (optionalWhereClauses && optionalWhereClauses.length > 0) {
+      for (const optionalWhere of optionalWhereClauses) {
+        const { sql: whereSql, params: conditionParams } = this.translateWhere(optionalWhere);
+        // Find the main variable in the condition to check for NULL
+        const optionalVars = this.findVariablesInCondition(optionalWhere);
+        if (optionalVars.length > 0) {
+          // Get the first optional variable's alias to check for NULL
+          const firstVar = optionalVars[0];
+          const varInfo = this.ctx.variables.get(firstVar);
+          if (varInfo) {
+            whereParts.push(`(${varInfo.alias}.id IS NULL OR ${whereSql})`);
+            whereParams.push(...conditionParams);
+          }
+        } else {
+          // No variables found, just add the condition
+          whereParts.push(whereSql);
+          whereParams.push(...conditionParams);
+        }
+      }
     }
 
     // Build final SQL
@@ -551,7 +712,7 @@ export class Translator {
     if (clause.limit !== undefined || clause.skip !== undefined) {
       if (clause.limit !== undefined) {
         sql += ` LIMIT ?`;
-        params.push(clause.limit);
+        whereParams.push(clause.limit);
       } else if (clause.skip !== undefined) {
         // SKIP without LIMIT - need a large limit for SQLite
         sql += ` LIMIT -1`;
@@ -559,12 +720,12 @@ export class Translator {
 
       if (clause.skip !== undefined) {
         sql += ` OFFSET ?`;
-        params.push(clause.skip);
+        whereParams.push(clause.skip);
       }
     }
 
-    // Combine expression params with other params (expression params come first for SELECT)
-    const allParams = [...exprParams, ...params];
+    // Combine params in the order they appear in SQL: SELECT -> JOINs -> WHERE
+    const allParams = [...exprParams, ...joinParams, ...whereParams];
 
     return {
       statements: [{ sql, params: allParams }],
@@ -812,6 +973,35 @@ export class Translator {
 
   private isRelationshipPattern(pattern: NodePattern | RelationshipPattern): pattern is RelationshipPattern {
     return "source" in pattern && "edge" in pattern && "target" in pattern;
+  }
+
+  private findVariablesInCondition(condition: WhereCondition): string[] {
+    const vars: string[] = [];
+    
+    const collectFromExpression = (expr: Expression | undefined) => {
+      if (!expr) return;
+      if (expr.type === "property" && expr.variable) {
+        vars.push(expr.variable);
+      } else if (expr.type === "variable" && expr.variable) {
+        vars.push(expr.variable);
+      }
+    };
+    
+    const collectFromCondition = (cond: WhereCondition) => {
+      collectFromExpression(cond.left);
+      collectFromExpression(cond.right);
+      if (cond.conditions) {
+        for (const c of cond.conditions) {
+          collectFromCondition(c);
+        }
+      }
+      if (cond.condition) {
+        collectFromCondition(cond.condition);
+      }
+    };
+    
+    collectFromCondition(condition);
+    return [...new Set(vars)];
   }
 
   private isParameterRef(value: PropertyValue): value is ParameterRef {
