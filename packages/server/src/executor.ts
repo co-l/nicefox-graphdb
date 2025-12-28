@@ -7,6 +7,7 @@ import {
   Clause,
   MatchClause,
   CreateClause,
+  MergeClause,
   SetClause,
   DeleteClause,
   ReturnClause,
@@ -14,6 +15,8 @@ import {
   RelationshipPattern,
   SetAssignment,
   Expression,
+  PropertyValue,
+  ParameterRef,
 } from "./parser.js";
 import { translate, TranslationResult, Translator } from "./translator.js";
 import { GraphDatabase } from "./db.js";
@@ -84,6 +87,20 @@ export class Executor {
           data: createReturnResult,
           meta: {
             count: createReturnResult.length,
+            time_ms: Math.round((endTime - startTime) * 100) / 100,
+          },
+        };
+      }
+
+      // 2.5. Check for MERGE with ON CREATE SET / ON MATCH SET (needs special handling)
+      const mergeResult = this.tryMergeExecution(parseResult.query, params);
+      if (mergeResult !== null) {
+        const endTime = performance.now();
+        return {
+          success: true,
+          data: mergeResult,
+          meta: {
+            count: mergeResult.length,
             time_ms: Math.round((endTime - startTime) * 100) / 100,
           },
         };
@@ -254,6 +271,150 @@ export class Executor {
     }
     
     return results;
+  }
+
+  /**
+   * Handle MERGE with ON CREATE SET / ON MATCH SET
+   * Returns null if this is not a MERGE pattern that needs special handling
+   */
+  private tryMergeExecution(
+    query: Query,
+    params: Record<string, unknown>
+  ): Record<string, unknown>[] | null {
+    // Look for MERGE clause with ON CREATE SET or ON MATCH SET
+    const clauses = query.clauses;
+    
+    let mergeClause: MergeClause | null = null;
+    let returnClause: ReturnClause | null = null;
+    
+    for (const clause of clauses) {
+      if (clause.type === "MERGE") {
+        // Only handle if it has ON CREATE SET or ON MATCH SET
+        if (clause.onCreateSet || clause.onMatchSet) {
+          mergeClause = clause;
+        } else {
+          // Simple MERGE without ON CREATE SET / ON MATCH SET - use standard execution
+          return null;
+        }
+      } else if (clause.type === "RETURN") {
+        returnClause = clause;
+      } else {
+        // Other clause types present - don't handle
+        return null;
+      }
+    }
+    
+    if (!mergeClause) {
+      return null;
+    }
+    
+    // Execute MERGE with ON CREATE SET / ON MATCH SET
+    return this.executeMergeWithSetClauses(mergeClause, returnClause, params);
+  }
+
+  /**
+   * Execute a MERGE clause with ON CREATE SET and/or ON MATCH SET
+   */
+  private executeMergeWithSetClauses(
+    mergeClause: MergeClause,
+    returnClause: ReturnClause | null,
+    params: Record<string, unknown>
+  ): Record<string, unknown>[] {
+    const pattern = mergeClause.pattern;
+    const label = pattern.label || "";
+    const matchProps = this.resolveProperties(pattern.properties || {}, params);
+    
+    // Build WHERE conditions to find existing node
+    const conditions: string[] = ["label = ?"];
+    const conditionParams: unknown[] = [label];
+    
+    for (const [key, value] of Object.entries(matchProps)) {
+      conditions.push(`json_extract(properties, '$.${key}') = ?`);
+      conditionParams.push(value);
+    }
+    
+    // Try to find existing node
+    const findSql = `SELECT id, label, properties FROM nodes WHERE ${conditions.join(" AND ")}`;
+    const findResult = this.db.execute(findSql, conditionParams);
+    
+    let nodeId: string;
+    let wasCreated = false;
+    
+    if (findResult.rows.length === 0) {
+      // Node doesn't exist - create it
+      nodeId = crypto.randomUUID();
+      wasCreated = true;
+      
+      // Start with match properties
+      const nodeProps = { ...matchProps };
+      
+      // Apply ON CREATE SET properties
+      if (mergeClause.onCreateSet) {
+        for (const assignment of mergeClause.onCreateSet) {
+          const value = this.evaluateExpression(assignment.value, params);
+          nodeProps[assignment.property] = value;
+        }
+      }
+      
+      this.db.execute(
+        "INSERT INTO nodes (id, label, properties) VALUES (?, ?, ?)",
+        [nodeId, label, JSON.stringify(nodeProps)]
+      );
+    } else {
+      // Node exists - apply ON MATCH SET
+      nodeId = findResult.rows[0].id as string;
+      
+      if (mergeClause.onMatchSet) {
+        for (const assignment of mergeClause.onMatchSet) {
+          const value = this.evaluateExpression(assignment.value, params);
+          this.db.execute(
+            `UPDATE nodes SET properties = json_set(properties, '$.${assignment.property}', json(?)) WHERE id = ?`,
+            [JSON.stringify(value), nodeId]
+          );
+        }
+      }
+    }
+    
+    // If there's a RETURN clause, fetch and return the node
+    if (returnClause) {
+      const results: Record<string, unknown>[] = [];
+      
+      // Query the node
+      const nodeResult = this.db.execute(
+        "SELECT id, label, properties FROM nodes WHERE id = ?",
+        [nodeId]
+      );
+      
+      if (nodeResult.rows.length > 0) {
+        const row = nodeResult.rows[0];
+        const resultRow: Record<string, unknown> = {};
+        
+        for (const item of returnClause.items) {
+          const alias = item.alias || this.getExpressionName(item.expression);
+          
+          if (item.expression.type === "variable") {
+            resultRow[alias] = {
+              id: row.id,
+              label: row.label,
+              properties: typeof row.properties === "string"
+                ? JSON.parse(row.properties)
+                : row.properties,
+            };
+          } else if (item.expression.type === "property") {
+            const props = typeof row.properties === "string"
+              ? JSON.parse(row.properties)
+              : row.properties;
+            resultRow[alias] = props[item.expression.property!];
+          }
+        }
+        
+        results.push(resultRow);
+      }
+      
+      return results;
+    }
+    
+    return [];
   }
 
   /**

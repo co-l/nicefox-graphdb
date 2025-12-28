@@ -437,6 +437,115 @@ describe("Integration Tests", () => {
       );
       expect(result.data).toHaveLength(1);
     });
+
+    it("applies ON CREATE SET when node does not exist", () => {
+      const result = executor.execute(
+        `MERGE (u:CC_User {id: $id})
+         ON CREATE SET u.email = $email, u.passwordHash = '', u.createdAt = $createdAt
+         ON MATCH SET u.email = $email
+         RETURN u`,
+        {
+          id: "user-123",
+          email: "test@example.com",
+          createdAt: "2025-01-01T00:00:00.000Z"
+        }
+      );
+
+      expect(result.success).toBe(true);
+      if (result.success) {
+        expect(result.data).toHaveLength(1);
+        expect(result.data[0].u).toMatchObject({
+          properties: {
+            id: "user-123",
+            email: "test@example.com",
+            passwordHash: "",
+            createdAt: "2025-01-01T00:00:00.000Z"
+          }
+        });
+      }
+    });
+
+    it("applies ON MATCH SET when node already exists", () => {
+      // First create the user
+      executor.execute(
+        "CREATE (u:CC_User {id: 'user-456', email: 'old@example.com', createdAt: '2024-01-01'})"
+      );
+
+      // Now MERGE with ON MATCH SET should update the email
+      const result = executor.execute(
+        `MERGE (u:CC_User {id: $id})
+         ON CREATE SET u.email = $email, u.createdAt = $createdAt
+         ON MATCH SET u.email = $email
+         RETURN u`,
+        {
+          id: "user-456",
+          email: "new@example.com",
+          createdAt: "2025-01-01T00:00:00.000Z"
+        }
+      );
+
+      expect(result.success).toBe(true);
+      if (result.success) {
+        expect(result.data).toHaveLength(1);
+        expect(result.data[0].u).toMatchObject({
+          properties: {
+            id: "user-456",
+            email: "new@example.com",
+            createdAt: "2024-01-01" // Original createdAt should be preserved
+          }
+        });
+      }
+    });
+
+    it("applies only ON CREATE SET when node is new", () => {
+      const result = executor.execute(
+        `MERGE (n:Product {sku: $sku})
+         ON CREATE SET n.name = $name, n.price = $price
+         ON MATCH SET n.price = $price`,
+        {
+          sku: "SKU-001",
+          name: "Widget",
+          price: 9.99
+        }
+      );
+
+      expect(result.success).toBe(true);
+
+      const queryResult = expectSuccess(
+        executor.execute("MATCH (n:Product {sku: 'SKU-001'}) RETURN n.name, n.price")
+      );
+
+      expect(queryResult.data).toHaveLength(1);
+      expect(queryResult.data[0].n_name).toBe("Widget");
+      expect(queryResult.data[0].n_price).toBe(9.99);
+    });
+
+    it("applies only ON MATCH SET when node exists", () => {
+      // Create existing product
+      executor.execute("CREATE (n:Product {sku: 'SKU-002', name: 'Original Widget', price: 5.00})");
+
+      // MERGE should only update price, not name
+      const result = executor.execute(
+        `MERGE (n:Product {sku: $sku})
+         ON CREATE SET n.name = $name, n.price = $price
+         ON MATCH SET n.price = $price`,
+        {
+          sku: "SKU-002",
+          name: "New Widget",
+          price: 12.99
+        }
+      );
+
+      expect(result.success).toBe(true);
+
+      const queryResult = expectSuccess(
+        executor.execute("MATCH (n:Product {sku: 'SKU-002'}) RETURN n.name, n.price")
+      );
+
+      expect(queryResult.data).toHaveLength(1);
+      expect(queryResult.data[0].n_name).toBe("Original Widget"); // Name unchanged
+      expect(queryResult.data[0].n_price).toBe(12.99); // Price updated
+    });
   });
 
   describe("id() function", () => {
