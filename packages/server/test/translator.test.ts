@@ -1702,6 +1702,80 @@ describe("Translator", () => {
       expect(setStmt!.sql).toMatch(/strftime|UNIXEPOCH/i);
     });
 
+    it("handles date() and datetime() in SET", () => {
+      const parseResult = parse(`
+        CREATE (n:Event {name: 'Test'})
+        SET n.eventDate = date(), n.eventTime = datetime()
+      `);
+      if (!parseResult.success) throw new Error(`Parse failed: ${parseResult.error.message}`);
+
+      const translator = new Translator();
+      const result = translator.translate(parseResult.query);
+
+      const setStmts = result.statements.filter((s) => s.sql.includes("UPDATE"));
+      expect(setStmts).toHaveLength(2);
+      
+      // Check date() translation
+      const dateStmt = setStmts.find((s) => s.sql.includes("$.eventDate"));
+      expect(dateStmt).toBeDefined();
+      expect(dateStmt!.sql).toMatch(/DATE\('now'\)/i);
+      
+      // Check datetime() translation
+      const datetimeStmt = setStmts.find((s) => s.sql.includes("$.eventTime"));
+      expect(datetimeStmt).toBeDefined();
+      expect(datetimeStmt!.sql).toMatch(/DATETIME\('now'\)/i);
+    });
+
+    it("handles string functions in SET (toUpper, toLower, trim)", () => {
+      const parseResult = parse(`
+        CREATE (n:Person {name: ' Alice '})
+        SET n.upperName = toUpper(n.name), n.lowerName = toLower(n.name), n.trimmedName = trim(n.name)
+      `);
+      if (!parseResult.success) throw new Error(`Parse failed: ${parseResult.error.message}`);
+
+      const translator = new Translator();
+      const result = translator.translate(parseResult.query);
+
+      const setStmts = result.statements.filter((s) => s.sql.includes("UPDATE"));
+      expect(setStmts).toHaveLength(3);
+      
+      expect(setStmts.find((s) => s.sql.includes("UPPER("))).toBeDefined();
+      expect(setStmts.find((s) => s.sql.includes("LOWER("))).toBeDefined();
+      expect(setStmts.find((s) => s.sql.includes("TRIM("))).toBeDefined();
+    });
+
+    it("handles math functions in SET (abs, round)", () => {
+      const parseResult = parse(`
+        CREATE (n:Account {balance: -50.7})
+        SET n.absBalance = abs(n.balance), n.roundedBalance = round(n.balance)
+      `);
+      if (!parseResult.success) throw new Error(`Parse failed: ${parseResult.error.message}`);
+
+      const translator = new Translator();
+      const result = translator.translate(parseResult.query);
+
+      const setStmts = result.statements.filter((s) => s.sql.includes("UPDATE"));
+      expect(setStmts).toHaveLength(2);
+      
+      expect(setStmts.find((s) => s.sql.includes("ABS("))).toBeDefined();
+      expect(setStmts.find((s) => s.sql.includes("ROUND("))).toBeDefined();
+    });
+
+    it("handles rand() in SET", () => {
+      const parseResult = parse(`
+        CREATE (n:Game {name: 'Test'})
+        SET n.randomValue = rand()
+      `);
+      if (!parseResult.success) throw new Error(`Parse failed: ${parseResult.error.message}`);
+
+      const translator = new Translator();
+      const result = translator.translate(parseResult.query);
+
+      const setStmt = result.statements.find((s) => s.sql.includes("UPDATE"));
+      expect(setStmt).toBeDefined();
+      expect(setStmt!.sql).toMatch(/RANDOM/i);
+    });
+
     it("generates datetime() for current datetime", () => {
       const result = translateCypher("RETURN datetime() AS now");
 

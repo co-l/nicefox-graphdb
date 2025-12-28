@@ -286,13 +286,13 @@ export class Translator {
                 throw new Error(`Unknown variable: ${assignment.variable}`);
             }
             const table = varInfo.type === "node" ? "nodes" : "edges";
-            // Check if the value is a function expression that needs SQL translation
-            if (assignment.value.type === "function") {
-                const { sql: funcSql, params: funcParams } = this.translateSetFunctionExpression(assignment.value);
+            // Check if the value is a dynamic expression (function, binary op, etc.) that needs SQL translation
+            if (assignment.value.type === "function" || assignment.value.type === "binary") {
+                const { sql: exprSql, params: exprParams } = this.translateExpression(assignment.value);
                 // Use json_set with the SQL expression directly
                 statements.push({
-                    sql: `UPDATE ${table} SET properties = json_set(properties, '$.${assignment.property}', ${funcSql}) WHERE id = ?`,
-                    params: [...funcParams, varInfo.alias],
+                    sql: `UPDATE ${table} SET properties = json_set(properties, '$.${assignment.property}', ${exprSql}) WHERE id = ?`,
+                    params: [...exprParams, varInfo.alias],
                 });
             }
             else {
@@ -305,34 +305,6 @@ export class Translator {
             }
         }
         return statements;
-    }
-    /**
-     * Translate a function expression for use in SET clause.
-     * Returns SQL that can be embedded directly in the UPDATE statement.
-     */
-    translateSetFunctionExpression(expr) {
-        const params = [];
-        switch (expr.functionName) {
-            case "TIMESTAMP":
-                // Cypher returns milliseconds since epoch
-                return { sql: `(CAST(strftime('%s', 'now') AS INTEGER) * 1000)`, params };
-            case "DATE":
-                if (expr.args && expr.args.length > 0) {
-                    const argResult = this.translateFunctionArg(expr.args[0]);
-                    params.push(...argResult.params);
-                    return { sql: `DATE(${argResult.sql})`, params };
-                }
-                return { sql: `DATE('now')`, params };
-            case "DATETIME":
-                if (expr.args && expr.args.length > 0) {
-                    const argResult = this.translateFunctionArg(expr.args[0]);
-                    params.push(...argResult.params);
-                    return { sql: `DATETIME(${argResult.sql})`, params };
-                }
-                return { sql: `DATETIME('now')`, params };
-            default:
-                throw new Error(`Function ${expr.functionName} is not supported in SET clause`);
-        }
     }
     // ============================================================================
     // DELETE

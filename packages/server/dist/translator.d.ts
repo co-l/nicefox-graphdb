@@ -29,11 +29,6 @@ export declare class Translator {
     private registerRelationshipPattern;
     private translateMerge;
     private translateSet;
-    /**
-     * Translate a function expression for use in SET clause.
-     * Returns SQL that can be embedded directly in the UPDATE statement.
-     */
-    private translateSetFunctionExpression;
     private translateDelete;
     private translateReturn;
     private translateWith;
