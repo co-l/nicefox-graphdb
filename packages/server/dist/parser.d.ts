@@ -1,6 +1,6 @@
 export interface NodePattern {
     variable?: string;
-    label?: string;
+    label?: string | string[];
     properties?: Record<string, PropertyValue>;
 }
 export interface EdgePattern {

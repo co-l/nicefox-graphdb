@@ -1808,4 +1808,125 @@ describe("CypherQueries.json Patterns", () => {
       expect(result.data[0].chain).toEqual([1, 2, 3]);
     });
   });
+
+  describe("Multiple Labels", () => {
+    it("creates node with multiple labels", () => {
+      // Pattern: CREATE (n:A:B:C {name: 'test'})
+      const result = exec(`
+        CREATE (n:Person:Employee:Manager {name: 'Alice', level: 5})
+        RETURN n
+      `);
+
+      expect(result.success).toBe(true);
+      expect(result.data).toHaveLength(1);
+      
+      const node = result.data[0].n as Record<string, unknown>;
+      expect(node.label).toEqual(["Person", "Employee", "Manager"]);
+      expect((node.properties as Record<string, unknown>).name).toBe("Alice");
+    });
+
+    it("matches node by single label when node has multiple labels", () => {
+      // Create a node with multiple labels
+      exec("CREATE (n:A:B:C {id: 'test-1'})");
+
+      // Should match by any single label
+      const resultA = exec("MATCH (n:A) RETURN n");
+      expect(resultA.data).toHaveLength(1);
+
+      const resultB = exec("MATCH (n:B) RETURN n");
+      expect(resultB.data).toHaveLength(1);
+
+      const resultC = exec("MATCH (n:C) RETURN n");
+      expect(resultC.data).toHaveLength(1);
+    });
+
+    it("matches node by multiple labels", () => {
+      // Create nodes with different label combinations
+      exec("CREATE (n:A:B {id: 'ab'})");
+      exec("CREATE (n:A:B:C {id: 'abc'})");
+      exec("CREATE (n:A {id: 'a'})");
+      exec("CREATE (n:B:C {id: 'bc'})");
+
+      // Match by two labels - should get nodes that have both
+      const result = exec("MATCH (n:A:B) RETURN n.id as id ORDER BY id");
+      
+      expect(result.data).toHaveLength(2);
+      expect(result.data[0].id).toBe("ab");
+      expect(result.data[1].id).toBe("abc");
+    });
+
+    it("matches node by all three labels", () => {
+      exec("CREATE (n:A:B:C {id: 'abc'})");
+      exec("CREATE (n:A:B {id: 'ab'})");
+      exec("CREATE (n:B:C {id: 'bc'})");
+
+      // Match by all three labels - should only get the one with all three
+      const result = exec("MATCH (n:A:B:C) RETURN n.id as id");
+      
+      expect(result.data).toHaveLength(1);
+      expect(result.data[0].id).toBe("abc");
+    });
+
+    it("creates relationship pattern with multiple labels on nodes", () => {
+      exec("CREATE (a:Person:Employee {name: 'Alice'})");
+      exec("CREATE (b:Person:Manager {name: 'Bob'})");
+      
+      // Link them
+      exec(`
+        MATCH (a:Person:Employee {name: 'Alice'})
+        MATCH (b:Person:Manager {name: 'Bob'})
+        CREATE (a)-[:REPORTS_TO]->(b)
+      `);
+
+      // Query the relationship
+      const result = exec(`
+        MATCH (a:Employee)-[:REPORTS_TO]->(b:Manager)
+        RETURN a.name as employee, b.name as manager
+      `);
+
+      expect(result.data).toHaveLength(1);
+      expect(result.data[0].employee).toBe("Alice");
+      expect(result.data[0].manager).toBe("Bob");
+    });
+
+    it("updates properties on node with multiple labels", () => {
+      exec("CREATE (n:A:B:C {id: 'test-1', value: 10})");
+
+      exec("MATCH (n:A:B:C {id: 'test-1'}) SET n.value = 20");
+
+      const result = exec("MATCH (n:A:B:C {id: 'test-1'}) RETURN n.value as value");
+      expect(result.data).toHaveLength(1);
+      expect(result.data[0].value).toBe(20);
+    });
+
+    it("deletes node with multiple labels", () => {
+      exec("CREATE (n:A:B:C {id: 'test-1'})");
+
+      exec("MATCH (n:A:B:C {id: 'test-1'}) DELETE n");
+
+      // Should not match by any label
+      expect(exec("MATCH (n:A) RETURN n").data).toHaveLength(0);
+      expect(exec("MATCH (n:B) RETURN n").data).toHaveLength(0);
+      expect(exec("MATCH (n:C) RETURN n").data).toHaveLength(0);
+    });
+
+    it("counts nodes by label combinations", () => {
+      exec("CREATE (n:A:B:C {id: '1'})");
+      exec("CREATE (n:A:B {id: '2'})");
+      exec("CREATE (n:A:B {id: '3'})");
+      exec("CREATE (n:A {id: '4'})");
+
+      // Count all A nodes
+      const resultA = exec("MATCH (n:A) RETURN count(n) as total");
+      expect(resultA.data[0].total).toBe(4);
+
+      // Count all A:B nodes
+      const resultAB = exec("MATCH (n:A:B) RETURN count(n) as total");
+      expect(resultAB.data[0].total).toBe(3);
+
+      // Count all A:B:C nodes
+      const resultABC = exec("MATCH (n:A:B:C) RETURN count(n) as total");
+      expect(resultABC.data[0].total).toBe(1);
+    });
+  });
 });

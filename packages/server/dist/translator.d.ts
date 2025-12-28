@@ -60,6 +60,12 @@ export declare class Translator {
      */
     private translateFunctionArg;
     private isRelationshipPattern;
+    /**
+     * Generate SQL condition to match labels stored as JSON array.
+     * For a single label "Person", checks if label array contains "Person"
+     * For multiple labels ["A", "B"], checks if label array contains all of them
+     */
+    private generateLabelMatchCondition;
     private findVariablesInCondition;
     private isParameterRef;
     private serializeProperties;

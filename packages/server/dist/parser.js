@@ -701,10 +701,15 @@ export class Parser {
         if (this.check("IDENTIFIER")) {
             pattern.variable = this.advance().value;
         }
-        // Label (can be identifier or keyword like "Order", "Set", etc.)
+        // Labels (can be multiple: :A:B:C)
         if (this.check("COLON")) {
-            this.advance();
-            pattern.label = this.expectLabelOrType();
+            const labels = [];
+            while (this.check("COLON")) {
+                this.advance(); // consume ":"
+                labels.push(this.expectLabelOrType());
+            }
+            // Store as array if multiple labels, string if single (for backward compatibility)
+            pattern.label = labels.length === 1 ? labels[0] : labels;
         }
         // Properties
         if (this.check("LBRACE")) {

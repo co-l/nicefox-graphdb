@@ -8,6 +8,13 @@
 
 ## Recently Completed
 
+### Multiple Labels - PARTIAL (December 2024)
+- Core implementation complete: parser, schema, translator, executor
+- Labels now stored as JSON arrays in database
+- Syntax `:A:B:C` fully parsed
+- Label matching uses `json_each` with EXISTS subqueries
+- **Status**: Needs result formatting fixes and test updates before completion
+
 ### List Concatenation (December 2024)
 - `[1, 2] + [3, 4]` - Implemented with json_group_array + UNION ALL
 - `n.tags + ['new']` - Property + literal list concatenation
@@ -72,19 +79,45 @@ MATCH (a)-[:KNOWS*2..5]->(b) RETURN b
 - Translator: generate recursive CTE in SQL
 - Handle direction (outgoing, incoming, both)
 
-### 3. Multiple Labels `:A:B:C`
+### 3. Multiple Labels `:A:B:C` - IN PROGRESS
 **Failures**: ~19 tests
+**Status**: Parser and storage implemented, needs result formatting fixes
 
 ```cypher
 CREATE (n:A:B:C {name: 'test'})
 MATCH (n:A:B) RETURN n
 ```
 
-**Implementation**:
-- Change `label` column from string to JSON array
-- Parser: collect multiple labels
-- Translator: use `json_each` for label matching
-- Migration for existing data
+**Implementation** (December 2024):
+- **Parser**: Updated `parseNodePattern()` to parse multiple labels with `:A:B:C` syntax
+  - `NodePattern.label` now supports `string | string[]`
+  - Parses labels in a loop while `COLON` tokens are present
+  - Stores as array if multiple, string if single (backward compat)
+- **Schema**: Changed `label` column from TEXT to JSON
+  - Labels stored as JSON array: `["Person", "Employee"]`
+  - Removed `idx_nodes_label` index (incompatible with JSON)
+- **Database**: Updated `insertNode()` to normalize labels to JSON array
+  - `getNode()` and `getNodesByLabel()` parse JSON label
+  - `Node` interface updated to `label: string | string[]`
+- **Translator**: Added `generateLabelMatchCondition()` helper
+  - Single label: `EXISTS (SELECT 1 FROM json_each(label) WHERE value = ?)`
+  - Multiple labels: Multiple EXISTS conditions joined with AND
+  - Updated all MATCH translations to use new condition generator
+- **Executor**: Added `normalizeLabelToJson()` and `generateLabelCondition()` helpers
+  - Updated all CREATE INSERT statements to use normalized JSON labels
+  - Updated MERGE label matching to use new condition logic
+
+**Known Issues** (needs fixing):
+- Result formatting: Labels returned as JSON string `'["Person"]'` instead of parsed array
+  - Need to update result parser to handle label field specially
+- Existing tests expect string labels, need migration plan
+- Consider adding index on JSON array elements for performance
+
+**Next Steps**:
+- Fix result formatting to properly parse label JSON
+- Update existing tests to expect label arrays
+- Add migration utility for existing databases
+- Performance testing with JSON label queries
 
 ---
 

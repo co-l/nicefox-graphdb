@@ -162,6 +162,16 @@ export declare class Executor {
      * Recursively parse JSON strings in a value
      */
     private deepParseJson;
+    /**
+     * Normalize label to JSON string for storage
+     * Handles both single labels and multiple labels
+     */
+    private normalizeLabelToJson;
+    /**
+     * Generate SQL condition for label matching
+     * Supports both single and multiple labels
+     */
+    private generateLabelCondition;
 }
 export declare function executeQuery(db: GraphDatabase, cypher: string, params?: Record<string, unknown>): QueryResponse;
 //# sourceMappingURL=executor.d.ts.map

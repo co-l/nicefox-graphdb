@@ -13,7 +13,7 @@ export interface EdgeRow {
 }
 export interface Node {
     id: string;
-    label: string;
+    label: string | string[];
     properties: Record<string, unknown>;
 }
 export interface Edge {
@@ -47,7 +47,7 @@ export declare class GraphDatabase {
     /**
      * Insert a node
      */
-    insertNode(id: string, label: string, properties?: Record<string, unknown>): void;
+    insertNode(id: string, label: string | string[], properties?: Record<string, unknown>): void;
     /**
      * Insert an edge
      */

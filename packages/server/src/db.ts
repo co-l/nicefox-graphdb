@@ -22,7 +22,7 @@ export interface EdgeRow {
 
 export interface Node {
   id: string;
-  label: string;
+  label: string | string[]; // Support both single and multiple labels
   properties: Record<string, unknown>;
 }
 
@@ -47,7 +47,7 @@ export interface QueryResult {
 const SCHEMA = `
 CREATE TABLE IF NOT EXISTS nodes (
     id TEXT PRIMARY KEY,
-    label TEXT NOT NULL,
+    label JSON NOT NULL,
     properties JSON DEFAULT '{}'
 );
 
@@ -61,7 +61,6 @@ CREATE TABLE IF NOT EXISTS edges (
     FOREIGN KEY (target_id) REFERENCES nodes(id) ON DELETE CASCADE
 );
 
-CREATE INDEX IF NOT EXISTS idx_nodes_label ON nodes(label);
 CREATE INDEX IF NOT EXISTS idx_edges_type ON edges(type);
 CREATE INDEX IF NOT EXISTS idx_edges_source ON edges(source_id);
 CREATE INDEX IF NOT EXISTS idx_edges_target ON edges(target_id);
@@ -126,10 +125,12 @@ export class GraphDatabase {
   /**
    * Insert a node
    */
-  insertNode(id: string, label: string, properties: Record<string, unknown> = {}): void {
+  insertNode(id: string, label: string | string[], properties: Record<string, unknown> = {}): void {
+    // Normalize label to array format for storage
+    const labelArray = Array.isArray(label) ? label : [label];
     this.execute(
       "INSERT INTO nodes (id, label, properties) VALUES (?, ?, ?)",
-      [id, label, JSON.stringify(properties)]
+      [id, JSON.stringify(labelArray), JSON.stringify(properties)]
     );
   }
 
@@ -157,9 +158,10 @@ export class GraphDatabase {
     if (result.rows.length === 0) return null;
 
     const row = result.rows[0] as unknown as NodeRow;
+    const labelArray = JSON.parse(row.label);
     return {
       id: row.id,
-      label: row.label,
+      label: labelArray,
       properties: JSON.parse(row.properties),
     };
   }
@@ -185,12 +187,16 @@ export class GraphDatabase {
    * Get all nodes with a given label
    */
   getNodesByLabel(label: string): Node[] {
-    const result = this.execute("SELECT * FROM nodes WHERE label = ?", [label]);
+    const result = this.execute(
+      "SELECT * FROM nodes WHERE EXISTS (SELECT 1 FROM json_each(label) WHERE value = ?)",
+      [label]
+    );
     return result.rows.map((row) => {
       const r = row as unknown as NodeRow;
+      const labelArray = JSON.parse(r.label);
       return {
         id: r.id,
-        label: r.label,
+        label: labelArray,
         properties: JSON.parse(r.properties),
       };
     });

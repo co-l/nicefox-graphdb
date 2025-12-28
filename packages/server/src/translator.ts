@@ -161,7 +161,11 @@ export class Translator {
 
   private translateCreateNode(node: NodePattern): SqlStatement {
     const id = this.generateId();
-    const label = node.label || "";
+    // Normalize label to JSON array format
+    const labelArray = node.label 
+      ? (Array.isArray(node.label) ? node.label : [node.label])
+      : [];
+    const labelJson = JSON.stringify(labelArray);
     const properties = this.serializeProperties(node.properties || {});
 
     if (node.variable) {
@@ -170,7 +174,7 @@ export class Translator {
 
     return {
       sql: "INSERT INTO nodes (id, label, properties) VALUES (?, ?, ?)",
-      params: [id, label, properties.json],
+      params: [id, labelJson, properties.json],
     };
   }
 
@@ -714,8 +718,9 @@ export class Translator {
             hasFromClause = true;
 
             if (pattern.label) {
-              whereParts.push(`${info.alias}.label = ?`);
-              whereParams.push(pattern.label);
+              const labelMatch = this.generateLabelMatchCondition(info.alias, pattern.label);
+              whereParts.push(labelMatch.sql);
+              whereParams.push(...labelMatch.params);
             }
 
             if (pattern.properties) {
@@ -735,8 +740,9 @@ export class Translator {
             const onParams: unknown[] = [];
             
             if (pattern.label) {
-              onConditions.push(`${info.alias}.label = ?`);
-              onParams.push(pattern.label);
+              const labelMatch = this.generateLabelMatchCondition(info.alias, pattern.label);
+              onConditions.push(labelMatch.sql);
+              onParams.push(...labelMatch.params);
             }
             
             if (pattern.properties) {
@@ -758,8 +764,9 @@ export class Translator {
             fromParts.push(`nodes ${info.alias}`);
 
             if (pattern.label) {
-              whereParts.push(`${info.alias}.label = ?`);
-              whereParams.push(pattern.label);
+              const labelMatch = this.generateLabelMatchCondition(info.alias, pattern.label);
+              whereParts.push(labelMatch.sql);
+              whereParams.push(...labelMatch.params);
             }
 
             if (pattern.properties) {
@@ -2801,6 +2808,32 @@ export class Translator {
 
   private isRelationshipPattern(pattern: NodePattern | RelationshipPattern): pattern is RelationshipPattern {
     return "source" in pattern && "edge" in pattern && "target" in pattern;
+  }
+
+  /**
+   * Generate SQL condition to match labels stored as JSON array.
+   * For a single label "Person", checks if label array contains "Person"
+   * For multiple labels ["A", "B"], checks if label array contains all of them
+   */
+  private generateLabelMatchCondition(alias: string, label: string | string[]): { sql: string; params: unknown[] } {
+    const labels = Array.isArray(label) ? label : [label];
+    
+    if (labels.length === 1) {
+      // Single label: check if it exists in the JSON array
+      return {
+        sql: `EXISTS (SELECT 1 FROM json_each(${alias}.label) WHERE value = ?)`,
+        params: [labels[0]]
+      };
+    } else {
+      // Multiple labels: check if all exist in the JSON array
+      const conditions = labels.map(() => 
+        `EXISTS (SELECT 1 FROM json_each(${alias}.label) WHERE value = ?)`
+      );
+      return {
+        sql: conditions.join(" AND "),
+        params: labels
+      };
+    }
   }
 
   private findVariablesInCondition(condition: WhereCondition): string[] {

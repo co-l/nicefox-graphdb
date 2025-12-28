@@ -6,7 +6,7 @@
 
 export interface NodePattern {
   variable?: string;
-  label?: string;
+  label?: string | string[]; // Support both single label (backward compat) and multiple labels
   properties?: Record<string, PropertyValue>;
 }
 
@@ -1064,10 +1064,15 @@ export class Parser {
       pattern.variable = this.advance().value;
     }
 
-    // Label (can be identifier or keyword like "Order", "Set", etc.)
+    // Labels (can be multiple: :A:B:C)
     if (this.check("COLON")) {
-      this.advance();
-      pattern.label = this.expectLabelOrType();
+      const labels: string[] = [];
+      while (this.check("COLON")) {
+        this.advance(); // consume ":"
+        labels.push(this.expectLabelOrType());
+      }
+      // Store as array if multiple labels, string if single (for backward compatibility)
+      pattern.label = labels.length === 1 ? labels[0] : labels;
     }
 
     // Properties

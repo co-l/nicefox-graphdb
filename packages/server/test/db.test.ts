@@ -56,7 +56,7 @@ describe("GraphDatabase", () => {
       const node = db.getNode("node1");
       expect(node).not.toBeNull();
       expect(node!.id).toBe("node1");
-      expect(node!.label).toBe("Person");
+      expect(node!.label).toEqual(["Person"]);
       expect(node!.properties).toEqual({ name: "Alice", age: 30 });
     });
 

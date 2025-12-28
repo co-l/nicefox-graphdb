@@ -252,12 +252,12 @@ export class Executor {
               this.executeCreateRelationshipPatternWithUnwind(pattern, createdIds, params, unwindContext);
             } else {
               const id = crypto.randomUUID();
-              const label = pattern.label || "";
+              const labelJson = this.normalizeLabelToJson(pattern.label);
               const props = this.resolvePropertiesWithUnwind(pattern.properties || {}, params, unwindContext);
               
               this.db.execute(
                 "INSERT INTO nodes (id, label, properties) VALUES (?, ?, ?)",
-                [id, label, JSON.stringify(props)]
+                [id, labelJson, JSON.stringify(props)]
               );
               
               if (pattern.variable) {
@@ -522,7 +522,7 @@ export class Executor {
       const props = this.resolvePropertiesWithUnwind(rel.source.properties || {}, params, unwindContext);
       this.db.execute(
         "INSERT INTO nodes (id, label, properties) VALUES (?, ?, ?)",
-        [sourceId, rel.source.label, JSON.stringify(props)]
+        [sourceId, this.normalizeLabelToJson(rel.source.label), JSON.stringify(props)]
       );
       if (rel.source.variable) {
         createdIds.set(rel.source.variable, sourceId);
@@ -539,7 +539,7 @@ export class Executor {
       const props = this.resolvePropertiesWithUnwind(rel.target.properties || {}, params, unwindContext);
       this.db.execute(
         "INSERT INTO nodes (id, label, properties) VALUES (?, ?, ?)",
-        [targetId, rel.target.label, JSON.stringify(props)]
+        [targetId, this.normalizeLabelToJson(rel.target.label), JSON.stringify(props)]
       );
       if (rel.target.variable) {
         createdIds.set(rel.target.variable, targetId);
@@ -608,12 +608,12 @@ export class Executor {
         } else {
           // Handle node pattern
           const id = crypto.randomUUID();
-          const label = pattern.label || "";
+          const labelJson = this.normalizeLabelToJson(pattern.label);
           const props = this.resolveProperties(pattern.properties || {}, params);
           
           this.db.execute(
             "INSERT INTO nodes (id, label, properties) VALUES (?, ?, ?)",
-            [id, label, JSON.stringify(props)]
+            [id, labelJson, JSON.stringify(props)]
           );
           
           if (pattern.variable) {
@@ -750,16 +750,16 @@ export class Executor {
         }
         
         const nodePattern = pattern as NodePattern;
-        const label = nodePattern.label || "";
         const matchProps = this.resolveProperties(nodePattern.properties || {}, params);
         
         // Build WHERE conditions
         const conditions: string[] = [];
         const conditionParams: unknown[] = [];
         
-        if (label) {
-          conditions.push("label = ?");
-          conditionParams.push(label);
+        if (nodePattern.label) {
+          const labelCondition = this.generateLabelCondition(nodePattern.label);
+          conditions.push(labelCondition.sql);
+          conditionParams.push(...labelCondition.params);
         }
         
         for (const [key, value] of Object.entries(matchProps)) {
@@ -772,9 +772,10 @@ export class Executor {
         
         if (findResult.rows.length > 0 && nodePattern.variable) {
           const row = findResult.rows[0];
+          const labelValue = typeof row.label === "string" ? JSON.parse(row.label) : row.label;
           matchedNodes.set(nodePattern.variable, {
             id: row.id as string,
-            label: row.label as string,
+            label: labelValue,
             properties: typeof row.properties === "string" ? JSON.parse(row.properties) : row.properties,
           });
         }
@@ -806,12 +807,17 @@ export class Executor {
     params: Record<string, unknown>,
     matchedNodes: Map<string, { id: string; label: string; properties: Record<string, unknown> }>
   ): Record<string, unknown>[] {
-    const label = pattern.label || "";
     const matchProps = this.resolveProperties(pattern.properties || {}, params);
     
     // Build WHERE conditions to find existing node
-    const conditions: string[] = ["label = ?"];
-    const conditionParams: unknown[] = [label];
+    const conditions: string[] = [];
+    const conditionParams: unknown[] = [];
+    
+    if (pattern.label) {
+      const labelCondition = this.generateLabelCondition(pattern.label);
+      conditions.push(labelCondition.sql);
+      conditionParams.push(...labelCondition.params);
+    }
     
     for (const [key, value] of Object.entries(matchProps)) {
       conditions.push(`json_extract(properties, '$.${key}') = ?`);
@@ -841,9 +847,10 @@ export class Executor {
         }
       }
       
+      const labelJson = this.normalizeLabelToJson(pattern.label);
       this.db.execute(
         "INSERT INTO nodes (id, label, properties) VALUES (?, ?, ?)",
-        [nodeId, label, JSON.stringify(nodeProps)]
+        [nodeId, labelJson, JSON.stringify(nodeProps)]
       );
     } else {
       // Node exists - apply ON MATCH SET
@@ -892,7 +899,6 @@ export class Executor {
     matchedNodes: Map<string, { id: string; label: string; properties: Record<string, unknown> }>
   ): Record<string, unknown>[] {
     const sourceVar = pattern.source.variable;
-    const targetLabel = pattern.target.label || "";
     const targetProps = this.resolveProperties(pattern.target.properties || {}, params);
     const edgeType = pattern.edge.type || "";
     
@@ -906,9 +912,10 @@ export class Executor {
     const findTargetConditions: string[] = [];
     const findTargetParams: unknown[] = [];
     
-    if (targetLabel) {
-      findTargetConditions.push("n.label = ?");
-      findTargetParams.push(targetLabel);
+    if (pattern.target.label) {
+      const labelCondition = this.generateLabelCondition(pattern.target.label);
+      findTargetConditions.push(labelCondition.sql.replace(/label/g, 'n.label'));
+      findTargetParams.push(...labelCondition.params);
     }
     
     for (const [key, value] of Object.entries(targetProps)) {
@@ -951,9 +958,10 @@ export class Executor {
       }
       
       // Create target node
+      const labelJson = this.normalizeLabelToJson(pattern.target.label);
       this.db.execute(
         "INSERT INTO nodes (id, label, properties) VALUES (?, ?, ?)",
-        [targetNodeId, targetLabel, JSON.stringify(nodeProps)]
+        [targetNodeId, labelJson, JSON.stringify(nodeProps)]
       );
       
       // Create edge
@@ -1103,9 +1111,10 @@ export class Executor {
       // Create new source node
       sourceId = crypto.randomUUID();
       const props = this.resolveProperties(rel.source.properties || {}, params);
+      const labelJson = this.normalizeLabelToJson(rel.source.label);
       this.db.execute(
         "INSERT INTO nodes (id, label, properties) VALUES (?, ?, ?)",
-        [sourceId, rel.source.label, JSON.stringify(props)]
+        [sourceId, labelJson, JSON.stringify(props)]
       );
       if (rel.source.variable) {
         createdIds.set(rel.source.variable, sourceId);
@@ -1123,9 +1132,10 @@ export class Executor {
       // Create new target node
       targetId = crypto.randomUUID();
       const props = this.resolveProperties(rel.target.properties || {}, params);
+      const labelJson = this.normalizeLabelToJson(rel.target.label);
       this.db.execute(
         "INSERT INTO nodes (id, label, properties) VALUES (?, ?, ?)",
-        [targetId, rel.target.label, JSON.stringify(props)]
+        [targetId, labelJson, JSON.stringify(props)]
       );
       if (rel.target.variable) {
         createdIds.set(rel.target.variable, targetId);
@@ -1719,9 +1729,10 @@ export class Executor {
       // Create new source node
       sourceId = crypto.randomUUID();
       const props = this.resolveProperties(rel.source.properties || {}, params);
+      const labelJson = this.normalizeLabelToJson(rel.source.label);
       this.db.execute(
         "INSERT INTO nodes (id, label, properties) VALUES (?, ?, ?)",
-        [sourceId, rel.source.label, JSON.stringify(props)]
+        [sourceId, labelJson, JSON.stringify(props)]
       );
       // Add to resolvedIds so subsequent patterns can reference it
       if (rel.source.variable) {
@@ -1738,9 +1749,10 @@ export class Executor {
       // Create new target node
       targetId = crypto.randomUUID();
       const props = this.resolveProperties(rel.target.properties || {}, params);
+      const labelJson = this.normalizeLabelToJson(rel.target.label);
       this.db.execute(
         "INSERT INTO nodes (id, label, properties) VALUES (?, ?, ?)",
-        [targetId, rel.target.label, JSON.stringify(props)]
+        [targetId, labelJson, JSON.stringify(props)]
       );
       // Add to resolvedIds so subsequent patterns can reference it
       if (rel.target.variable) {
@@ -1850,6 +1862,40 @@ export class Executor {
     }
 
     return value;
+  }
+
+  /**
+   * Normalize label to JSON string for storage
+   * Handles both single labels and multiple labels
+   */
+  private normalizeLabelToJson(label: string | string[] | undefined): string {
+    if (!label) {
+      return JSON.stringify([]);
+    }
+    const labelArray = Array.isArray(label) ? label : [label];
+    return JSON.stringify(labelArray);
+  }
+
+  /**
+   * Generate SQL condition for label matching
+   * Supports both single and multiple labels
+   */
+  private generateLabelCondition(label: string | string[]): { sql: string; params: unknown[] } {
+    const labels = Array.isArray(label) ? label : [label];
+    
+    if (labels.length === 1) {
+      return {
+        sql: `EXISTS (SELECT 1 FROM json_each(label) WHERE value = ?)`,
+        params: [labels[0]]
+      };
+    } else {
+      // Multiple labels: all must exist
+      const conditions = labels.map(() => `EXISTS (SELECT 1 FROM json_each(label) WHERE value = ?)`);
+      return {
+        sql: conditions.join(" AND "),
+        params: labels
+      };
+    }
   }
 }
 
