@@ -361,6 +361,10 @@ export class Translator {
     let sourceIsNew = false;
     if (rel.source.variable && this.ctx.variables.has(rel.source.variable)) {
       sourceAlias = this.ctx.variables.get(rel.source.variable)!.alias;
+    } else if (!rel.source.variable && !rel.source.label && (this.ctx as any).lastAnonymousTargetAlias) {
+      // Anonymous source node in a chain - reuse the last anonymous target
+      sourceAlias = (this.ctx as any).lastAnonymousTargetAlias;
+      sourceIsNew = false;
     } else {
       sourceAlias = this.registerNodePattern(rel.source, optional);
       sourceIsNew = true;
@@ -405,6 +409,15 @@ export class Translator {
       minHops: rel.edge.minHops,
       maxHops: rel.edge.maxHops,
     });
+
+    // Track the last anonymous target for chained patterns
+    // This allows (a)-[:R]->()-[:S]->(b) to share the anonymous node
+    if (!rel.target.variable && !rel.target.label) {
+      (this.ctx as any).lastAnonymousTargetAlias = targetAlias;
+    } else {
+      // Clear the tracker if target is not anonymous
+      (this.ctx as any).lastAnonymousTargetAlias = undefined;
+    }
 
     // Keep backwards compatibility with single pattern
     (this.ctx as any).relationshipPattern = { sourceAlias, targetAlias, edgeAlias, edge: rel.edge, optional };
@@ -1326,18 +1339,25 @@ export class Translator {
     // )
     // SELECT ... FROM nodes n0, path, nodes n1 WHERE n0.id = path.start_id AND n1.id = path.end_id ...
 
-    const varLengthPattern = relPatterns.find(p => p.isVariableLength);
-    if (!varLengthPattern) {
+    // Find the index of the variable-length pattern
+    const varLengthIndex = relPatterns.findIndex(p => p.isVariableLength);
+    if (varLengthIndex === -1) {
       throw new Error("No variable-length pattern found");
     }
+    
+    const varLengthPattern = relPatterns[varLengthIndex];
+    
+    // Separate patterns into: fixed-length before, variable-length, fixed-length after
+    const fixedPatternsBefore = relPatterns.slice(0, varLengthIndex);
+    const fixedPatternsAfter = relPatterns.slice(varLengthIndex + 1);
 
     const minHops = varLengthPattern.minHops ?? 1;
     // For unbounded paths (*), use a reasonable default max
     // For fixed length (*2), maxHops equals minHops
     const maxHops = varLengthPattern.maxHops ?? 10;
     const edgeType = varLengthPattern.edge.type;
-    const sourceAlias = varLengthPattern.sourceAlias;
-    const targetAlias = varLengthPattern.targetAlias;
+    const varLengthSourceAlias = varLengthPattern.sourceAlias;
+    const varLengthTargetAlias = varLengthPattern.targetAlias;
 
     const allParams: unknown[] = [...exprParams];
 
@@ -1385,55 +1405,121 @@ export class Translator {
       allParams.push(edgeType);
     }
 
-    // Build WHERE conditions
+    // Build FROM and JOIN clauses for fixed-length patterns before the variable-length
+    const fromParts: string[] = [];
+    const joinParts: string[] = [];
+    const joinParams: unknown[] = [];
     const whereParts: string[] = [];
+    const addedNodeAliases = new Set<string>();
+    const filteredNodeAliases = new Set<string>();
+
+    // Process fixed-length patterns before the variable-length pattern
+    for (let i = 0; i < fixedPatternsBefore.length; i++) {
+      const pattern = fixedPatternsBefore[i];
+      
+      if (i === 0) {
+        // First pattern: add source to FROM
+        fromParts.push(`nodes ${pattern.sourceAlias}`);
+        addedNodeAliases.add(pattern.sourceAlias);
+        
+        // Add source label/property filters
+        const sourcePattern = (this.ctx as any)[`pattern_${pattern.sourceAlias}`];
+        if (sourcePattern?.label) {
+          const labelMatch = this.generateLabelMatchCondition(pattern.sourceAlias, sourcePattern.label);
+          whereParts.push(labelMatch.sql);
+          allParams.push(...labelMatch.params);
+        }
+        filteredNodeAliases.add(pattern.sourceAlias);
+      }
+      
+      // Add edge JOIN
+      joinParts.push(`JOIN edges ${pattern.edgeAlias} ON ${pattern.edgeAlias}.source_id = ${pattern.sourceAlias}.id`);
+      
+      // Add edge type filter
+      if (pattern.edge.type) {
+        whereParts.push(`${pattern.edgeAlias}.type = ?`);
+        allParams.push(pattern.edge.type);
+      }
+      
+      // Add target node JOIN
+      if (!addedNodeAliases.has(pattern.targetAlias)) {
+        joinParts.push(`JOIN nodes ${pattern.targetAlias} ON ${pattern.edgeAlias}.target_id = ${pattern.targetAlias}.id`);
+        addedNodeAliases.add(pattern.targetAlias);
+      }
+    }
+
+    // Now add the variable-length path
+    // The source of the variable-length pattern should connect to the path start
+    if (!addedNodeAliases.has(varLengthSourceAlias)) {
+      if (fromParts.length === 0) {
+        fromParts.push(`nodes ${varLengthSourceAlias}`);
+      } else {
+        joinParts.push(`JOIN nodes ${varLengthSourceAlias} ON 1=1`);
+      }
+      addedNodeAliases.add(varLengthSourceAlias);
+      
+      // Add label/property filters for the source
+      const sourcePattern = (this.ctx as any)[`pattern_${varLengthSourceAlias}`];
+      if (sourcePattern?.label && !filteredNodeAliases.has(varLengthSourceAlias)) {
+        const labelMatch = this.generateLabelMatchCondition(varLengthSourceAlias, sourcePattern.label);
+        whereParts.push(labelMatch.sql);
+        allParams.push(...labelMatch.params);
+        filteredNodeAliases.add(varLengthSourceAlias);
+      }
+      // Add source property filters
+      if (sourcePattern?.properties) {
+        for (const [key, value] of Object.entries(sourcePattern.properties)) {
+          if (this.isParameterRef(value as PropertyValue)) {
+            whereParts.push(`json_extract(${varLengthSourceAlias}.properties, '$.${key}') = ?`);
+            allParams.push(this.ctx.paramValues[(value as ParameterRef).name]);
+          } else {
+            whereParts.push(`json_extract(${varLengthSourceAlias}.properties, '$.${key}') = ?`);
+            allParams.push(value);
+          }
+        }
+      }
+    }
+    
+    // Add the CTE to FROM (it acts like a table)
+    fromParts.push(pathCteName);
+    
+    // Add the target node of the variable-length path
+    if (!addedNodeAliases.has(varLengthTargetAlias)) {
+      fromParts.push(`nodes ${varLengthTargetAlias}`);
+      addedNodeAliases.add(varLengthTargetAlias);
+    }
     
     // Connect source node to path start
-    whereParts.push(`${sourceAlias}.id = ${pathCteName}.start_id`);
+    whereParts.push(`${varLengthSourceAlias}.id = ${pathCteName}.start_id`);
     // Connect target node to path end
-    whereParts.push(`${targetAlias}.id = ${pathCteName}.end_id`);
+    whereParts.push(`${varLengthTargetAlias}.id = ${pathCteName}.end_id`);
     // Apply min depth constraint
     if (minHops > 1) {
       whereParts.push(`${pathCteName}.depth >= ?`);
       allParams.push(minHops);
     }
 
-    // Add source/target label filters
-    const sourcePattern = (this.ctx as any)[`pattern_${sourceAlias}`];
-    if (sourcePattern?.label) {
-      const labelMatch = this.generateLabelMatchCondition(sourceAlias, sourcePattern.label);
+    // Add target label/property filters for the variable-length pattern
+    const targetPattern = (this.ctx as any)[`pattern_${varLengthTargetAlias}`];
+    if (targetPattern?.label && !filteredNodeAliases.has(varLengthTargetAlias)) {
+      const labelMatch = this.generateLabelMatchCondition(varLengthTargetAlias, targetPattern.label);
       whereParts.push(labelMatch.sql);
       allParams.push(...labelMatch.params);
+      filteredNodeAliases.add(varLengthTargetAlias);
     }
-    if (sourcePattern?.properties) {
-      for (const [key, value] of Object.entries(sourcePattern.properties)) {
+    if (targetPattern?.properties) {
+      for (const [key, value] of Object.entries(targetPattern.properties)) {
         if (this.isParameterRef(value as PropertyValue)) {
-          whereParts.push(`json_extract(${sourceAlias}.properties, '$.${key}') = ?`);
+          whereParts.push(`json_extract(${varLengthTargetAlias}.properties, '$.${key}') = ?`);
           allParams.push(this.ctx.paramValues[(value as ParameterRef).name]);
         } else {
-          whereParts.push(`json_extract(${sourceAlias}.properties, '$.${key}') = ?`);
+          whereParts.push(`json_extract(${varLengthTargetAlias}.properties, '$.${key}') = ?`);
           allParams.push(value);
         }
       }
     }
 
-    const targetPattern = (this.ctx as any)[`pattern_${targetAlias}`];
-    if (targetPattern?.label) {
-      const labelMatch = this.generateLabelMatchCondition(targetAlias, targetPattern.label);
-      whereParts.push(labelMatch.sql);
-      allParams.push(...labelMatch.params);
-    }
-    if (targetPattern?.properties) {
-      for (const [key, value] of Object.entries(targetPattern.properties)) {
-        if (this.isParameterRef(value as PropertyValue)) {
-          whereParts.push(`json_extract(${targetAlias}.properties, '$.${key}') = ?`);
-          allParams.push(this.ctx.paramValues[(value as ParameterRef).name]);
-        } else {
-          whereParts.push(`json_extract(${targetAlias}.properties, '$.${key}') = ?`);
-          allParams.push(value);
-        }
-      }
-    }
+    // TODO: Handle fixed-length patterns AFTER the variable-length pattern if needed
 
     // Add WHERE clause from MATCH if present
     const matchWhereClause = (this.ctx as any).whereClause;
@@ -1446,7 +1532,10 @@ export class Translator {
     // Build final SQL
     const distinctKeyword = clause.distinct ? "DISTINCT " : "";
     let sql = `${cte}\nSELECT ${distinctKeyword}${selectParts.join(", ")}`;
-    sql += ` FROM nodes ${sourceAlias}, ${pathCteName}, nodes ${targetAlias}`;
+    sql += ` FROM ${fromParts.join(", ")}`;
+    if (joinParts.length > 0) {
+      sql += ` ${joinParts.join(" ")}`;
+    }
     
     if (whereParts.length > 0) {
       sql += ` WHERE ${whereParts.join(" AND ")}`;
