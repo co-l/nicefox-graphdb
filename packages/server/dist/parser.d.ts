@@ -6,6 +6,7 @@ export interface NodePattern {
 export interface EdgePattern {
     variable?: string;
     type?: string;
+    types?: string[];
     properties?: Record<string, PropertyValue>;
     direction: "left" | "right" | "none";
     minHops?: number;
@@ -79,7 +80,7 @@ export interface Expression {
     left?: Expression;
     right?: Expression;
     operand?: Expression;
-    comparisonOperator?: "=" | "<>" | "<" | ">" | "<=" | ">=";
+    comparisonOperator?: "=" | "<>" | "<" | ">" | "<=" | ">=" | "IS NULL" | "IS NOT NULL";
     properties?: ObjectProperty[];
     listExpr?: Expression;
     filterCondition?: WhereCondition;

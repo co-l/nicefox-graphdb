@@ -13,6 +13,7 @@ export interface NodePattern {
 export interface EdgePattern {
   variable?: string;
   type?: string;
+  types?: string[]; // For multiple relationship types: [:TYPE1|TYPE2]
   properties?: Record<string, PropertyValue>;
   direction: "left" | "right" | "none";
   minHops?: number;
@@ -112,7 +113,7 @@ export interface Expression {
   // Unary operation fields
   operand?: Expression;
   // Comparison expression fields
-  comparisonOperator?: "=" | "<>" | "<" | ">" | "<=" | ">=";
+  comparisonOperator?: "=" | "<>" | "<" | ">" | "<=" | ">=" | "IS NULL" | "IS NOT NULL";
   // Object literal fields
   properties?: ObjectProperty[];
   // List comprehension fields: [var IN listExpr WHERE filterCondition | mapExpr]
@@ -1241,10 +1242,22 @@ export class Parser {
         edge.variable = this.advance().value;
       }
 
-      // Type (can be identifier or keyword)
+      // Type (can be identifier or keyword, or multiple types separated by |)
       if (this.check("COLON")) {
         this.advance();
-        edge.type = this.expectLabelOrType();
+        const firstType = this.expectLabelOrType();
+        
+        // Check for multiple types: [:TYPE1|TYPE2|TYPE3]
+        if (this.check("PIPE")) {
+          const types = [firstType];
+          while (this.check("PIPE")) {
+            this.advance();
+            types.push(this.expectLabelOrType());
+          }
+          edge.types = types;
+        } else {
+          edge.type = firstType;
+        }
       }
 
       // Variable-length pattern: *[min]..[max] or *n or *
@@ -1690,6 +1703,19 @@ export class Parser {
   // Handle comparison operators
   private parseComparisonExpression(): Expression {
     let left = this.parseAdditiveExpression();
+
+    // Check for IS NULL / IS NOT NULL
+    if (this.checkKeyword("IS")) {
+      this.advance();
+      if (this.checkKeyword("NOT")) {
+        this.advance();
+        this.expect("KEYWORD", "NULL");
+        return { type: "comparison", comparisonOperator: "IS NOT NULL", left };
+      } else {
+        this.expect("KEYWORD", "NULL");
+        return { type: "comparison", comparisonOperator: "IS NULL", left };
+      }
+    }
 
     // Check for comparison operators
     const opToken = this.peek();

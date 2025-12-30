@@ -2630,6 +2630,79 @@ describe("CypherQueries.json Patterns", () => {
     });
   });
 
+  describe("Multiple Relationship Types", () => {
+    it("matches any of multiple relationship types with pipe syntax", () => {
+      exec("CREATE (a:Person {name: 'Alice'})-[:KNOWS]->(b:Person {name: 'Bob'})");
+      exec("CREATE (b:Person {name: 'Bob'})-[:WORKS_WITH]->(c:Person {name: 'Charlie'})");
+      exec("CREATE (a:Person {name: 'Alice'})-[:LIKES]->(d:Person {name: 'David'})");
+
+      // Match KNOWS or WORKS_WITH but not LIKES
+      const result = exec(`
+        MATCH (p:Person)-[:KNOWS|WORKS_WITH]->(other:Person)
+        RETURN p.name AS person, other.name AS other
+        ORDER BY person, other
+      `);
+
+      expect(result.data).toHaveLength(2);
+      expect(result.data[0]).toEqual({ person: "Alice", other: "Bob" });
+      expect(result.data[1]).toEqual({ person: "Bob", other: "Charlie" });
+    });
+
+    it("matches three relationship types", () => {
+      exec("CREATE (a:Node {name: 'A'})-[:R1]->(b:Node {name: 'B'})");
+      exec("CREATE (a:Node {name: 'A'})-[:R2]->(c:Node {name: 'C'})");
+      exec("CREATE (a:Node {name: 'A'})-[:R3]->(d:Node {name: 'D'})");
+      exec("CREATE (a:Node {name: 'A'})-[:R4]->(e:Node {name: 'E'})");
+
+      const result = exec(`
+        MATCH (a:Node {name: 'A'})-[:R1|R2|R3]->(target:Node)
+        RETURN target.name AS name
+        ORDER BY name
+      `);
+
+      expect(result.data).toHaveLength(3);
+      expect(result.data.map((r: any) => r.name)).toEqual(["B", "C", "D"]);
+    });
+  });
+
+  describe("IS NULL / IS NOT NULL", () => {
+    it("returns IS NULL in expressions", () => {
+      exec("CREATE (a:Node {name: 'A'})");
+      exec("CREATE (b:Node)"); // No name property
+      
+      const result = exec(`
+        MATCH (n:Node)
+        RETURN n.name AS name, n.name IS NULL AS isNull, n.name IS NOT NULL AS isNotNull
+        ORDER BY name
+      `);
+      
+      expect(result.data).toHaveLength(2);
+      // Node without name comes first (null sorts first)
+      expect(result.data[0].isNull).toBe(1); // SQLite returns 1 for true
+      expect(result.data[0].isNotNull).toBe(0);
+      expect(result.data[1].name).toBe("A");
+      expect(result.data[1].isNull).toBe(0);
+      expect(result.data[1].isNotNull).toBe(1);
+    });
+
+    it("uses IS NOT NULL on variable in expression", () => {
+      exec("CREATE (a:Node {name: 'A', value: 10})");
+      exec("CREATE (b:Node {name: 'B'})"); // No value property
+      
+      const result = exec(`
+        MATCH (n:Node)
+        RETURN n.name AS name, n.value IS NOT NULL AS hasValue
+        ORDER BY name
+      `);
+      
+      expect(result.data).toHaveLength(2);
+      expect(result.data[0].name).toBe("A");
+      expect(result.data[0].hasValue).toBe(1);
+      expect(result.data[1].name).toBe("B");
+      expect(result.data[1].hasValue).toBe(0);
+    });
+  });
+
   describe("SET with Expressions", () => {
     it("sets a property to an arithmetic expression", () => {
       // TCK pattern: SET n.num = n.num + 1

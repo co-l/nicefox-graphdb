@@ -840,10 +840,22 @@ export class Parser {
             if (this.check("IDENTIFIER")) {
                 edge.variable = this.advance().value;
             }
-            // Type (can be identifier or keyword)
+            // Type (can be identifier or keyword, or multiple types separated by |)
             if (this.check("COLON")) {
                 this.advance();
-                edge.type = this.expectLabelOrType();
+                const firstType = this.expectLabelOrType();
+                // Check for multiple types: [:TYPE1|TYPE2|TYPE3]
+                if (this.check("PIPE")) {
+                    const types = [firstType];
+                    while (this.check("PIPE")) {
+                        this.advance();
+                        types.push(this.expectLabelOrType());
+                    }
+                    edge.types = types;
+                }
+                else {
+                    edge.type = firstType;
+                }
             }
             // Variable-length pattern: *[min]..[max] or *n or *
             if (this.check("STAR")) {
@@ -1219,6 +1231,19 @@ export class Parser {
     // Handle comparison operators
     parseComparisonExpression() {
         let left = this.parseAdditiveExpression();
+        // Check for IS NULL / IS NOT NULL
+        if (this.checkKeyword("IS")) {
+            this.advance();
+            if (this.checkKeyword("NOT")) {
+                this.advance();
+                this.expect("KEYWORD", "NULL");
+                return { type: "comparison", comparisonOperator: "IS NOT NULL", left };
+            }
+            else {
+                this.expect("KEYWORD", "NULL");
+                return { type: "comparison", comparisonOperator: "IS NULL", left };
+            }
+        }
         // Check for comparison operators
         const opToken = this.peek();
         let comparisonOperator;

@@ -743,7 +743,7 @@ export class Translator {
       sourceAlias: string;
       targetAlias: string;
       edgeAlias: string;
-      edge: { type?: string; properties?: Record<string, PropertyValue>; minHops?: number; maxHops?: number; direction?: "left" | "right" | "none" };
+      edge: { type?: string; types?: string[]; properties?: Record<string, PropertyValue>; minHops?: number; maxHops?: number; direction?: "left" | "right" | "none" };
       optional?: boolean;
       sourceIsNew?: boolean;
       targetIsNew?: boolean;
@@ -819,6 +819,16 @@ export class Translator {
           } else {
             whereParts.push(`${relPattern.edgeAlias}.type = ?`);
             whereParams.push(relPattern.edge.type);
+          }
+        } else if (relPattern.edge.types && relPattern.edge.types.length > 0) {
+          // Multiple relationship types: [:TYPE1|TYPE2]
+          const placeholders = relPattern.edge.types.map(() => "?").join(", ");
+          if (isOptional) {
+            edgeOnConditions.push(`${relPattern.edgeAlias}.type IN (${placeholders})`);
+            edgeOnParams.push(...relPattern.edge.types);
+          } else {
+            whereParts.push(`${relPattern.edgeAlias}.type IN (${placeholders})`);
+            whereParams.push(...relPattern.edge.types);
           }
         }
 
@@ -3148,6 +3158,20 @@ END FROM (SELECT json_group_array(${valueExpr}) as sv))`,
   private translateComparisonExpression(expr: Expression): { sql: string; tables: string[]; params: unknown[] } {
     const tables: string[] = [];
     const params: unknown[] = [];
+
+    // Handle IS NULL / IS NOT NULL (no right side)
+    if (expr.comparisonOperator === "IS NULL" || expr.comparisonOperator === "IS NOT NULL") {
+      const leftResult = this.translateExpression(expr.left!);
+      tables.push(...leftResult.tables);
+      params.push(...leftResult.params);
+      
+      const leftSql = this.wrapForComparison(expr.left!, leftResult.sql);
+      return {
+        sql: `(${leftSql} ${expr.comparisonOperator})`,
+        tables,
+        params,
+      };
+    }
 
     const leftResult = this.translateExpression(expr.left!);
     const rightResult = this.translateExpression(expr.right!);
