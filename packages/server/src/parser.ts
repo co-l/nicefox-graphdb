@@ -126,6 +126,8 @@ export interface SetAssignment {
   property?: string;  // For property assignments: SET n.prop = value
   value?: Expression;
   labels?: string[];  // For label assignments: SET n:Label1:Label2
+  replaceProps?: boolean;  // For SET n = {props} - replace all properties
+  mergeProps?: boolean;    // For SET n += {props} - merge properties
 }
 
 // Clause types
@@ -808,6 +810,17 @@ export class Parser {
           labels.push(this.expectLabelOrType());
         }
         assignments.push({ variable, labels });
+      } else if (this.check("PLUS")) {
+        // Property merge: SET n += {props}
+        this.advance(); // consume "+"
+        this.expect("EQUALS");
+        const value = this.parseExpression();
+        assignments.push({ variable, value, mergeProps: true });
+      } else if (this.check("EQUALS")) {
+        // Property replace: SET n = {props}
+        this.advance(); // consume "="
+        const value = this.parseExpression();
+        assignments.push({ variable, value, replaceProps: true });
       } else {
         // Property assignment: SET n.property = value
         this.expect("DOT");

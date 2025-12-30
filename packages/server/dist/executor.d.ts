@@ -141,6 +141,10 @@ export declare class Executor {
      */
     private executeSetWithResolvedIds;
     /**
+     * Evaluate an object expression to get its key-value pairs
+     */
+    private evaluateObjectExpression;
+    /**
      * Execute DELETE clause with pre-resolved node/edge IDs
      */
     private executeDeleteWithResolvedIds;

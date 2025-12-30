@@ -487,6 +487,19 @@ export class Parser {
                 }
                 assignments.push({ variable, labels });
             }
+            else if (this.check("PLUS")) {
+                // Property merge: SET n += {props}
+                this.advance(); // consume "+"
+                this.expect("EQUALS");
+                const value = this.parseExpression();
+                assignments.push({ variable, value, mergeProps: true });
+            }
+            else if (this.check("EQUALS")) {
+                // Property replace: SET n = {props}
+                this.advance(); // consume "="
+                const value = this.parseExpression();
+                assignments.push({ variable, value, replaceProps: true });
+            }
             else {
                 // Property assignment: SET n.property = value
                 this.expect("DOT");

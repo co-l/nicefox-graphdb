@@ -90,6 +90,8 @@ export interface SetAssignment {
     property?: string;
     value?: Expression;
     labels?: string[];
+    replaceProps?: boolean;
+    mergeProps?: boolean;
 }
 export interface CreateClause {
     type: "CREATE";

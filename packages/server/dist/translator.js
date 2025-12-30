@@ -392,6 +392,61 @@ export class Translator {
                 });
                 continue;
             }
+            // Handle SET n = {props} - replace all properties
+            if (assignment.replaceProps && assignment.value) {
+                const newProps = this.evaluateObjectExpression(assignment.value);
+                // Filter out null values (they should be removed)
+                const filteredProps = {};
+                for (const [key, val] of Object.entries(newProps)) {
+                    if (val !== null) {
+                        filteredProps[key] = val;
+                    }
+                }
+                statements.push({
+                    sql: `UPDATE ${table} SET properties = ? WHERE id = ?`,
+                    params: [JSON.stringify(filteredProps), varInfo.alias],
+                });
+                continue;
+            }
+            // Handle SET n += {props} - merge properties
+            if (assignment.mergeProps && assignment.value) {
+                const newProps = this.evaluateObjectExpression(assignment.value);
+                // Use json_patch to merge. For null values, we need to remove those properties.
+                // json_patch doesn't handle null removal, so we build a compound expression.
+                // First merge, then remove null values.
+                // Actually, SQLite's json_patch DOES overwrite values, but null means "remove" in JSON Merge Patch (RFC 7396)
+                // However, SQLite's json_patch doesn't follow RFC 7396 for null handling.
+                // We'll use a combination: json_patch to add new properties, then json_remove for nulls.
+                const nullKeys = Object.entries(newProps)
+                    .filter(([_, val]) => val === null)
+                    .map(([key, _]) => key);
+                const nonNullProps = {};
+                for (const [key, val] of Object.entries(newProps)) {
+                    if (val !== null) {
+                        nonNullProps[key] = val;
+                    }
+                }
+                if (Object.keys(nonNullProps).length === 0 && nullKeys.length === 0) {
+                    // Empty map - no-op
+                    continue;
+                }
+                if (nullKeys.length > 0) {
+                    // Need to merge non-null props and remove null keys
+                    const removePaths = nullKeys.map(k => `'$.${k}'`).join(', ');
+                    statements.push({
+                        sql: `UPDATE ${table} SET properties = json_remove(json_patch(properties, ?), ${removePaths}) WHERE id = ?`,
+                        params: [JSON.stringify(nonNullProps), varInfo.alias],
+                    });
+                }
+                else {
+                    // Just merge
+                    statements.push({
+                        sql: `UPDATE ${table} SET properties = json_patch(properties, ?) WHERE id = ?`,
+                        params: [JSON.stringify(nonNullProps), varInfo.alias],
+                    });
+                }
+                continue;
+            }
             // Handle property assignment: SET n.prop = value
             if (!assignment.property || !assignment.value) {
                 throw new Error(`Invalid SET assignment for variable: ${assignment.variable}`);
@@ -415,6 +470,26 @@ export class Translator {
             }
         }
         return statements;
+    }
+    /**
+     * Evaluate an object expression to get its key-value pairs.
+     */
+    evaluateObjectExpression(expr) {
+        if (expr.type === "object" && expr.properties) {
+            const result = {};
+            for (const prop of expr.properties) {
+                result[prop.key] = this.evaluateExpression(prop.value);
+            }
+            return result;
+        }
+        if (expr.type === "parameter") {
+            const paramValue = this.ctx.paramValues[expr.name];
+            if (typeof paramValue === "object" && paramValue !== null) {
+                return paramValue;
+            }
+            throw new Error(`Parameter ${expr.name} is not an object`);
+        }
+        throw new Error(`Expected object expression, got ${expr.type}`);
     }
     // ============================================================================
     // DELETE

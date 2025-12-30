@@ -1851,6 +1851,78 @@ export class Executor {
         continue;
       }
 
+      // Handle SET n = {props} - replace all properties
+      if (assignment.replaceProps && assignment.value) {
+        const newProps = this.evaluateObjectExpression(assignment.value, params);
+        // Filter out null values (they should be removed)
+        const filteredProps: Record<string, unknown> = {};
+        for (const [key, val] of Object.entries(newProps)) {
+          if (val !== null) {
+            filteredProps[key] = val;
+          }
+        }
+        // Try nodes first, then edges
+        const nodeResult = this.db.execute(
+          `UPDATE nodes SET properties = ? WHERE id = ?`,
+          [JSON.stringify(filteredProps), nodeId]
+        );
+        if (nodeResult.changes === 0) {
+          this.db.execute(
+            `UPDATE edges SET properties = ? WHERE id = ?`,
+            [JSON.stringify(filteredProps), nodeId]
+          );
+        }
+        continue;
+      }
+
+      // Handle SET n += {props} - merge properties
+      if (assignment.mergeProps && assignment.value) {
+        const newProps = this.evaluateObjectExpression(assignment.value, params);
+        
+        const nullKeys = Object.entries(newProps)
+          .filter(([_, val]) => val === null)
+          .map(([key, _]) => key);
+        const nonNullProps: Record<string, unknown> = {};
+        for (const [key, val] of Object.entries(newProps)) {
+          if (val !== null) {
+            nonNullProps[key] = val;
+          }
+        }
+
+        if (Object.keys(nonNullProps).length === 0 && nullKeys.length === 0) {
+          // Empty map - no-op
+          continue;
+        }
+
+        if (nullKeys.length > 0) {
+          // Need to merge non-null props and remove null keys
+          const removePaths = nullKeys.map(k => `'$.${k}'`).join(', ');
+          const nodeResult = this.db.execute(
+            `UPDATE nodes SET properties = json_remove(json_patch(properties, ?), ${removePaths}) WHERE id = ?`,
+            [JSON.stringify(nonNullProps), nodeId]
+          );
+          if (nodeResult.changes === 0) {
+            this.db.execute(
+              `UPDATE edges SET properties = json_remove(json_patch(properties, ?), ${removePaths}) WHERE id = ?`,
+              [JSON.stringify(nonNullProps), nodeId]
+            );
+          }
+        } else {
+          // Just merge
+          const nodeResult = this.db.execute(
+            `UPDATE nodes SET properties = json_patch(properties, ?) WHERE id = ?`,
+            [JSON.stringify(nonNullProps), nodeId]
+          );
+          if (nodeResult.changes === 0) {
+            this.db.execute(
+              `UPDATE edges SET properties = json_patch(properties, ?) WHERE id = ?`,
+              [JSON.stringify(nonNullProps), nodeId]
+            );
+          }
+        }
+        continue;
+      }
+
       // Handle property assignments
       if (!assignment.value || !assignment.property) {
         throw new Error(`Invalid SET assignment for variable: ${assignment.variable}`);
@@ -1874,6 +1946,30 @@ export class Executor {
         );
       }
     }
+  }
+
+  /**
+   * Evaluate an object expression to get its key-value pairs
+   */
+  private evaluateObjectExpression(
+    expr: Expression,
+    params: Record<string, unknown>
+  ): Record<string, unknown> {
+    if (expr.type === "object" && expr.properties) {
+      const result: Record<string, unknown> = {};
+      for (const prop of expr.properties) {
+        result[prop.key] = this.evaluateExpression(prop.value, params);
+      }
+      return result;
+    }
+    if (expr.type === "parameter") {
+      const paramValue = params[expr.name!];
+      if (typeof paramValue === "object" && paramValue !== null) {
+        return paramValue as Record<string, unknown>;
+      }
+      throw new Error(`Parameter ${expr.name} is not an object`);
+    }
+    throw new Error(`Expected object expression, got ${expr.type}`);
   }
 
   /**

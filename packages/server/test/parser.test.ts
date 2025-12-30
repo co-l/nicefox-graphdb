@@ -520,6 +520,54 @@ describe("Parser", () => {
       expect(setClause.assignments[0].property).toBe("name");
       expect(setClause.assignments[1].labels).toEqual(["Foo"]);
     });
+
+    it("parses SET n = {props} to replace all properties", () => {
+      const query = expectSuccess("MATCH (n:X) SET n = {name: 'A', num: 5} RETURN n");
+      const setClause = query.clauses[1] as SetClause;
+
+      expect(setClause.assignments).toHaveLength(1);
+      expect(setClause.assignments[0].variable).toBe("n");
+      expect(setClause.assignments[0].property).toBeUndefined();
+      expect(setClause.assignments[0].replaceProps).toBe(true);
+      expect(setClause.assignments[0].value).toBeDefined();
+      expect(setClause.assignments[0].value!.type).toBe("object");
+    });
+
+    it("parses SET n += {props} to merge properties", () => {
+      const query = expectSuccess("MATCH (n:X) SET n += {name2: 'B'} RETURN n");
+      const setClause = query.clauses[1] as SetClause;
+
+      expect(setClause.assignments).toHaveLength(1);
+      expect(setClause.assignments[0].variable).toBe("n");
+      expect(setClause.assignments[0].property).toBeUndefined();
+      expect(setClause.assignments[0].mergeProps).toBe(true);
+      expect(setClause.assignments[0].value).toBeDefined();
+      expect(setClause.assignments[0].value!.type).toBe("object");
+    });
+
+    it("parses SET n = {} to clear all properties", () => {
+      const query = expectSuccess("MATCH (n:X) SET n = {} RETURN n");
+      const setClause = query.clauses[1] as SetClause;
+
+      expect(setClause.assignments[0].replaceProps).toBe(true);
+      expect(setClause.assignments[0].value!.type).toBe("object");
+    });
+
+    it("parses SET n += {} which should be a no-op", () => {
+      const query = expectSuccess("MATCH (n:X) SET n += {} RETURN n");
+      const setClause = query.clauses[1] as SetClause;
+
+      expect(setClause.assignments[0].mergeProps).toBe(true);
+    });
+
+    it("parses SET with mixed property and map assignments", () => {
+      const query = expectSuccess("MATCH (n) SET n.foo = 1, n += {bar: 2} RETURN n");
+      const setClause = query.clauses[1] as SetClause;
+
+      expect(setClause.assignments).toHaveLength(2);
+      expect(setClause.assignments[0].property).toBe("foo");
+      expect(setClause.assignments[1].mergeProps).toBe(true);
+    });
   });
 
   describe("WITH *", () => {

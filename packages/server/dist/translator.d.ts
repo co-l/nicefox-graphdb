@@ -30,6 +30,10 @@ export declare class Translator {
     private registerRelationshipPattern;
     private translateMerge;
     private translateSet;
+    /**
+     * Evaluate an object expression to get its key-value pairs.
+     */
+    private evaluateObjectExpression;
     private translateDelete;
     private translateReturn;
     private translateWith;
