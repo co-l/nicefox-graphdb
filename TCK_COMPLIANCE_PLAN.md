@@ -2,12 +2,20 @@
 
 ## Current Status
 
-- **Test Suite**: 819 passing, 2 skipped
+- **Test Suite**: 890 passing, 0 skipped
 - **Estimated TCK Compliance**: ~70% (based on implemented features)
 - **TCK Source**: https://github.com/opencypher/openCypher/tree/main/tck
 - **Test Runner**: `packages/server/test/tck/tck.test.ts.skip`
 
 ## Recently Completed
+
+### List Comprehensions (December 2024)
+- `[x IN list WHERE cond]` - Filter elements from a list
+- `[x IN list | expr]` - Transform/map elements  
+- `[x IN list WHERE cond | expr]` - Filter and map
+- Parser: Added `listComprehension` expression type with WHERE and PIPE handling
+- Translator: Uses `json_each()` and `json_group_array()` for efficient processing
+- Supports functions (size, toUpper, etc.) and arithmetic in comprehension expressions
 
 ### Multiple Labels - PARTIAL (December 2024)
 - Core implementation complete: parser, schema, translator, executor
@@ -240,17 +248,30 @@ MATCH (a:Person)-[:WORKS_AT]->(:Company) RETURN a
 
 ## Tier 3: Lower Impact, Various Effort
 
-### 8. Pattern Comprehensions
-**Failures**: ~6 tests
+### 8. List Comprehensions - COMPLETED
+**Status**: Implemented (December 2024)
 
 ```cypher
-RETURN [x IN range(1, 10) WHERE x % 2 = 0 | x * 2] AS evens
-RETURN [(a)-->(b) | b.name] AS names
+RETURN [x IN range(1, 10) WHERE x % 2 = 0] AS evens      -- Filter only
+RETURN [x IN [1, 2, 3] | x * 2] AS doubled               -- Map only
+RETURN [x IN [1, 2, 3, 4] WHERE x > 2 | x * 10] AS result -- Filter and map
+RETURN [x IN n.values WHERE x > 2] AS filtered           -- Property as source
 ```
 
-**Implementation**:
-- Parser: handle `[variable IN expr WHERE cond | projection]`
-- Complex translator logic for subqueries
+**Implementation** (December 2024):
+- **Parser**: 
+  - Added `PIPE` token type for `|` character
+  - Added `listComprehension` expression type with fields: `variable`, `listExpr`, `filterCondition`, `mapExpr`
+  - `parseListLiteralExpression()` detects `[var IN ...` syntax using lookahead
+  - `parseListComprehension()` handles WHERE filter and `|` map projection
+- **Translator**: 
+  - `translateListComprehension()` generates SQLite using `json_each()` and `json_group_array()`
+  - Pattern: `(SELECT json_group_array(expr) FROM json_each(source) AS __lc__ WHERE cond)`
+  - `translateListComprehensionExpr()` substitutes comprehension variable with `__lc__.value`
+  - `translateListComprehensionCondition()` handles filter conditions
+- **Test Coverage**: 21 new tests across parser, translator, and integration
+
+**Note**: Pattern comprehensions like `[(a)-->(b) | b.name]` (graph patterns in comprehension) are not yet supported.
 
 ### 9. Percentile Functions
 **Failures**: ~5 tests
@@ -291,10 +312,11 @@ RETURN [1] + [2] + [3] AS chain        -- Chained concatenation works
 | Phase 1.5 | List Concatenation (10) | ~845 | ~65.5% |
 | Phase 1.6 | Variable-Length Paths (2) | ~882 | ~68.2% |
 | Phase 1.7 | Path Expressions (1 - WIP) | ~890 | ~68.8% |
+| Phase 1.8 | List Comprehensions (8) | 890 | ~68.8% |
 | Phase 2 | Paths + Multiple Labels (1, 3) | ~940 | ~72.5% |
-| Phase 3 | Remaining (5, 8, 9) | ~1000 | ~77% |
+| Phase 3 | Remaining (5, 9) | ~1000 | ~77% |
 
-**Note**: Phase 1.6 complete. Variable-length paths now fully functional. Phase 1.7 in progress - path expressions parser and translator complete, but need to fix multiple labels implementation before tests can pass. Path expressions (item 1) and multiple labels (item 3) are being worked on in parallel for Phase 2.
+**Note**: Phase 1.8 complete. List comprehensions fully implemented with filter (WHERE) and map (|) projection support. Phase 1.7 in progress - path expressions parser and translator complete, but need to fix multiple labels implementation before tests can pass. Path expressions (item 1) and multiple labels (item 3) are being worked on in parallel for Phase 2.
 
 ---
 
