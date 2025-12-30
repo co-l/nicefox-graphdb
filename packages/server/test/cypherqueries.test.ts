@@ -2704,6 +2704,19 @@ describe("CypherQueries.json Patterns", () => {
   });
 
   describe("SET with Expressions", () => {
+    it("sets property with parenthesized variable (n).property", () => {
+      exec("CREATE (n:Person {name: 'Alice'})");
+      
+      exec(`
+        MATCH (n:Person)
+        SET (n).name = 'Bob'
+      `);
+      
+      const result = exec("MATCH (n:Person) RETURN n.name AS name");
+      expect(result.data).toHaveLength(1);
+      expect(result.data[0].name).toBe("Bob");
+    });
+
     it("sets a property to an arithmetic expression", () => {
       // TCK pattern: SET n.num = n.num + 1
       exec("CREATE (n:Counter {num: 5})");

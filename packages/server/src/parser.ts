@@ -807,7 +807,15 @@ export class Parser {
         this.expect("COMMA");
       }
 
-      const variable = this.expectIdentifier();
+      // Handle parenthesized expression: SET (n).property = value
+      let variable: string;
+      if (this.check("LPAREN")) {
+        this.advance();
+        variable = this.expectIdentifier();
+        this.expect("RPAREN");
+      } else {
+        variable = this.expectIdentifier();
+      }
       
       // Check for label assignment: SET n:Label or SET n :Label (with whitespace)
       if (this.check("COLON")) {
