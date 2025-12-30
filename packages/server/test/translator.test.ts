@@ -865,6 +865,14 @@ describe("Translator", () => {
       expect(result.statements[0].sql).toContain("GROUP_CONCAT");
       expect(result.returnColumns).toEqual(["categories"]);
     });
+
+    it("generates COUNT(*) for counting all rows", () => {
+      const result = translateCypher("MATCH (n:Person) RETURN COUNT(*) AS total");
+
+      expect(result.statements).toHaveLength(1);
+      expect(result.statements[0].sql).toContain("COUNT(*)");
+      expect(result.returnColumns).toEqual(["total"]);
+    });
   });
 
   describe("WITH clause", () => {
@@ -1089,6 +1097,18 @@ describe("Translator", () => {
 
       const sql = result.statements[0].sql;
       expect(sql).toContain("WITH RECURSIVE");
+    });
+
+    it("generates path expression with variable-length pattern and dynamic length", () => {
+      const result = translateCypher(
+        "MATCH p = (a:Person)-[*1..2]->(b:Person) RETURN length(p) as len"
+      );
+
+      const sql = result.statements[0].sql;
+      expect(sql).toContain("WITH RECURSIVE");
+      // Path length should use the depth from the CTE, not a static value
+      // The SELECT should reference the path CTE's depth column for length(p)
+      expect(sql).toMatch(/path_\d+\.depth/);
     });
   });
 

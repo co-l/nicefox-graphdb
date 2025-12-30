@@ -562,13 +562,32 @@ describe("Parser", () => {
       expect(returnClause.limit).toBe(10);
     });
 
-    it("parses RETURN COUNT(*) with alias and LIMIT", () => {
+    it("parses RETURN COUNT(n) with alias and LIMIT", () => {
       const query = expectSuccess("MATCH (n:Person) RETURN COUNT(n) AS total LIMIT 1");
       const returnClause = query.clauses[1] as ReturnClause;
 
       expect(returnClause.items[0].expression.functionName).toBe("COUNT");
       expect(returnClause.items[0].alias).toBe("total");
       expect(returnClause.limit).toBe(1);
+    });
+
+    it("parses COUNT(*) - count all rows", () => {
+      const query = expectSuccess("MATCH (n:Person) RETURN COUNT(*)");
+      const returnClause = query.clauses[1] as ReturnClause;
+
+      expect(returnClause.items[0].expression.type).toBe("function");
+      expect(returnClause.items[0].expression.functionName).toBe("COUNT");
+      // COUNT(*) should have no arguments or a special star marker
+      expect(returnClause.items[0].expression.args).toHaveLength(0);
+    });
+
+    it("parses COUNT(*) with alias", () => {
+      const query = expectSuccess("MATCH (n:Person) RETURN COUNT(*) AS total");
+      const returnClause = query.clauses[1] as ReturnClause;
+
+      expect(returnClause.items[0].expression.functionName).toBe("COUNT");
+      expect(returnClause.items[0].alias).toBe("total");
+      expect(returnClause.items[0].expression.args).toHaveLength(0);
     });
 
     it("parses RETURN with ORDER BY single property", () => {

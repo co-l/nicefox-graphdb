@@ -2287,9 +2287,7 @@ describe("CypherQueries.json Patterns", () => {
       // Both paths have length 1
     });
 
-    // TODO: Variable-length path expressions need more work to properly track
-    // intermediate nodes/edges and compute dynamic path length
-    it.skip("returns path from variable-length pattern", () => {
+    it("returns path from variable-length pattern", () => {
       // Pattern: MATCH p = (a)-[*1..2]->(b) RETURN p, length(p)
       exec("CREATE (a:Person {name: 'Alice'})");
       exec("CREATE (b:Person {name: 'Bob'})");
@@ -2319,9 +2317,7 @@ describe("CypherQueries.json Patterns", () => {
       expect(result.data[1].name).toBe("Charlie");
     });
 
-    // TODO: Variable-length path expressions need more work to properly track
-    // intermediate nodes/edges and compute dynamic path length
-    it.skip("counts paths with different lengths", () => {
+    it("counts paths with different lengths", () => {
       // Pattern: MATCH p = (a)-[*]->(b) RETURN length(p) as len, count(*) as pathCount
       exec("CREATE (a:Person {name: 'Alice'})");
       exec("CREATE (b:Person {name: 'Bob'})");

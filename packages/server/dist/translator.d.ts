@@ -77,6 +77,10 @@ export declare class Translator {
     private quoteAlias;
     private findVariablesInCondition;
     private isParameterRef;
+    /**
+     * Check if an expression is an aggregate function (COUNT, SUM, AVG, MIN, MAX, COLLECT)
+     */
+    private isAggregateExpression;
     private serializeProperties;
     private evaluateExpression;
     private getExpressionName;

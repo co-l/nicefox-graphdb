@@ -1594,7 +1594,7 @@ export class Parser {
       return this.parseCaseExpression();
     }
 
-    // Function call: COUNT(x), id(x), count(DISTINCT x)
+    // Function call: COUNT(x), id(x), count(DISTINCT x), COUNT(*)
     if (token.type === "KEYWORD" || token.type === "IDENTIFIER") {
       const nextToken = this.tokens[this.pos + 1];
       if (nextToken && nextToken.type === "LPAREN") {
@@ -1607,6 +1607,14 @@ export class Parser {
         if (this.checkKeyword("DISTINCT")) {
           this.advance();
           distinct = true;
+        }
+
+        // Special case: COUNT(*) - handle STAR token as "count all"
+        if (this.check("STAR")) {
+          this.advance(); // consume STAR
+          // COUNT(*) has no arguments - the * means "count all rows"
+          this.expect("RPAREN");
+          return { type: "function", functionName, args: [], distinct };
         }
 
         if (!this.check("RPAREN")) {

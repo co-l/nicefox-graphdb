@@ -198,6 +198,7 @@ export class Translator {
         }
         const nodeAliases = [];
         const edgeAliases = [];
+        let isVariableLength = false;
         // Register all patterns within the path
         for (const pattern of pathExpr.patterns) {
             if (this.isRelationshipPattern(pattern)) {
@@ -208,6 +209,10 @@ export class Translator {
                 this.registerRelationshipPattern(pattern, optional);
                 // Now extract the aliases that were created
                 const relPatternInfo = this.ctx.relationshipPatterns[this.ctx.relationshipPatterns.length - 1];
+                // Track if this path contains a variable-length pattern
+                if (relPatternInfo.isVariableLength) {
+                    isVariableLength = true;
+                }
                 // Add source node alias (only for first pattern in chain)
                 if (isFirstInChain) {
                     nodeAliases.push(relPatternInfo.sourceAlias);
@@ -223,13 +228,20 @@ export class Translator {
                 nodeAliases.push(nodeAlias);
             }
         }
+        // For variable-length paths, pre-allocate a CTE name so that length(p) can reference it
+        let pathCteName;
+        if (isVariableLength) {
+            pathCteName = `path_${this.ctx.aliasCounter++}`;
+        }
         this.ctx.pathExpressions.push({
             variable: pathExpr.variable,
             alias: pathAlias,
             nodeAliases: Array.from(new Set(nodeAliases)), // Remove duplicates
             edgeAliases,
             patterns: pathExpr.patterns,
-            optional
+            optional,
+            isVariableLength,
+            pathCteName // CTE name for variable-length path, used by length(p)
         });
     }
     registerNodePattern(node, optional = false) {
@@ -963,8 +975,20 @@ export class Translator {
         const sourceAlias = varLengthPattern.sourceAlias;
         const targetAlias = varLengthPattern.targetAlias;
         const allParams = [...exprParams];
-        // Build the recursive CTE
-        const pathCteName = `path_${this.ctx.aliasCounter++}`;
+        // Check if a path expression already allocated a CTE name for this variable-length pattern
+        // This allows length(p) to reference the correct CTE
+        let pathCteName;
+        const pathExpressions = this.ctx.pathExpressions;
+        if (pathExpressions) {
+            const pathExpr = pathExpressions.find(p => p.isVariableLength && p.pathCteName);
+            if (pathExpr) {
+                pathCteName = pathExpr.pathCteName;
+            }
+        }
+        // If no pre-allocated name, generate a new one
+        if (!pathCteName) {
+            pathCteName = `path_${this.ctx.aliasCounter++}`;
+        }
         // Base condition for edges
         let edgeCondition = "1=1";
         if (edgeType) {
@@ -1049,6 +1073,18 @@ export class Translator {
         sql += ` FROM nodes ${sourceAlias}, ${pathCteName}, nodes ${targetAlias}`;
         if (whereParts.length > 0) {
             sql += ` WHERE ${whereParts.join(" AND ")}`;
+        }
+        // Check if we need GROUP BY (when mixing aggregates with non-aggregates)
+        const hasAggregates = clause.items.some(item => this.isAggregateExpression(item.expression));
+        const nonAggregateItems = clause.items.filter(item => !this.isAggregateExpression(item.expression));
+        if (hasAggregates && nonAggregateItems.length > 0) {
+            // Build GROUP BY using the translated expressions for non-aggregates
+            const groupByParts = [];
+            for (const item of nonAggregateItems) {
+                const { sql: exprSql } = this.translateExpression(item.expression);
+                groupByParts.push(exprSql);
+            }
+            sql += ` GROUP BY ${groupByParts.join(", ")}`;
         }
         // Add ORDER BY if present
         if (clause.orderBy && clause.orderBy.length > 0) {
@@ -1356,7 +1392,22 @@ export class Translator {
                     if (pathExpressions) {
                         const pathInfo = pathExpressions.find(p => p.variable === expr.variable);
                         if (pathInfo) {
-                            // Add all tables involved in the path
+                            // For variable-length paths, we only have start/end nodes in the CTE
+                            // Intermediate nodes/edges are not directly accessible
+                            if (pathInfo.isVariableLength) {
+                                // Only add the node tables (start and end)
+                                tables.push(...pathInfo.nodeAliases);
+                                // Construct a simplified path object for variable-length paths
+                                const nodesJson = pathInfo.nodeAliases.map(alias => `json_object('id', ${alias}.id, 'label', ${alias}.label, 'properties', ${alias}.properties)`).join(', ');
+                                // For variable-length paths, edges array shows the path length
+                                // Full edge tracking would require extending the CTE
+                                return {
+                                    sql: `json_object('nodes', json_array(${nodesJson}), 'length', ${pathInfo.pathCteName}.depth)`,
+                                    tables,
+                                    params,
+                                };
+                            }
+                            // For fixed-length paths, include all nodes and edges
                             tables.push(...pathInfo.nodeAliases, ...pathInfo.edgeAliases);
                             // Construct a path object with nodes and edges arrays
                             const nodesJson = pathInfo.nodeAliases.map(alias => `json_object('id', ${alias}.id, 'label', ${alias}.label, 'properties', ${alias}.properties)`).join(', ');
@@ -1558,7 +1609,11 @@ export class Translator {
                                 if (pathExpressions) {
                                     const pathInfo = pathExpressions.find(p => p.variable === arg.variable);
                                     if (pathInfo) {
-                                        // Path length is the number of edges
+                                        // For variable-length paths, use the CTE's depth column
+                                        if (pathInfo.isVariableLength && pathInfo.pathCteName) {
+                                            return { sql: `${pathInfo.pathCteName}.depth`, tables, params };
+                                        }
+                                        // For fixed-length paths, return static length
                                         return { sql: `${pathInfo.edgeAliases.length}`, tables, params };
                                     }
                                 }
@@ -2705,6 +2760,16 @@ export class Translator {
     }
     isParameterRef(value) {
         return typeof value === "object" && value !== null && "type" in value && value.type === "parameter";
+    }
+    /**
+     * Check if an expression is an aggregate function (COUNT, SUM, AVG, MIN, MAX, COLLECT)
+     */
+    isAggregateExpression(expr) {
+        if (expr.type === "function" && expr.functionName) {
+            const aggregateFunctions = ["COUNT", "SUM", "AVG", "MIN", "MAX", "COLLECT"];
+            return aggregateFunctions.includes(expr.functionName.toUpperCase());
+        }
+        return false;
     }
     serializeProperties(props) {
         const resolved = {};
