@@ -2,7 +2,7 @@
 
 ## Current Status
 
-- **Test Suite**: 947 passing, 0 skipped
+- **Test Suite**: 997 passing, 0 skipped
 - **Estimated TCK Compliance**: ~70% (based on implemented features)
 - **TCK Source**: https://github.com/opencypher/openCypher/tree/main/tck
 - **Test Runner**: `packages/server/test/tck/tck.test.ts.skip`
@@ -306,6 +306,34 @@ RETURN [1] + [2] + [3] AS chain        -- Chained concatenation works
 - Uses SQL pattern: `(SELECT json_group_array(value) FROM (SELECT value FROM json_each(left) UNION ALL SELECT value FROM json_each(right)))`
 - `translateArrayLiteral()` generates `json_array(...)` for list literals
 
+### 11. List Predicates - COMPLETED
+**Status**: Implemented (December 2024)
+
+```cypher
+RETURN ALL(x IN [1, 2, 3] WHERE x > 0) AS allPositive       -- All elements satisfy condition
+RETURN ANY(x IN list WHERE x > 10) AS hasLarge               -- At least one satisfies
+RETURN NONE(x IN n.values WHERE x < 0) AS noneNegative       -- No elements satisfy
+RETURN SINGLE(x IN [1, 2, 10] WHERE x > 5) AS exactlyOne     -- Exactly one satisfies
+MATCH (n:Item) WHERE ALL(x IN n.scores WHERE x >= 10) RETURN n  -- In WHERE clause
+```
+
+**Implementation** (December 2024):
+- **Parser**:
+  - Added `ANY`, `NONE`, `SINGLE` keywords (ALL was already present)
+  - Parse list predicate syntax: `PRED(var IN listExpr WHERE cond)`
+  - Added `listPredicate` type to both Expression and WhereCondition
+  - Added logical operators (AND, OR, NOT) to return expression parsing for combining predicates
+- **Translator**:
+  - `translateListPredicate()` generates SQLite using `json_each()` subqueries
+  - ALL: `(COUNT(*) FROM json_each(list) WHERE NOT cond) = 0`
+  - ANY: `EXISTS (SELECT 1 FROM json_each(list) WHERE cond)`
+  - NONE: `NOT EXISTS (SELECT 1 FROM json_each(list) WHERE cond)`
+  - SINGLE: `(COUNT(*) FROM json_each(list) WHERE cond) = 1`
+  - Handle in both expression and WHERE condition contexts
+  - Added unary NOT operator support for expressions
+- **Test Coverage**: 50 new tests across parser, translator, and integration
+- **Empty list semantics**: ALL/NONE return true (vacuously), ANY/SINGLE return false
+
 ---
 
 ## Projected Compliance
@@ -318,10 +346,11 @@ RETURN [1] + [2] + [3] AS chain        -- Chained concatenation works
 | Phase 1.6 | Variable-Length Paths (2) | ~882 | ~68.2% |
 | Phase 1.7 | Path Expressions (1 - WIP) | ~890 | ~68.8% |
 | Phase 1.8 | List Comprehensions (8) | 890 | ~68.8% |
-| Phase 2 | Paths + Multiple Labels (1, 3) | ~940 | ~72.5% |
-| Phase 3 | Remaining (5, 9) | ~1000 | ~77% |
+| Phase 1.9 | List Predicates (11) | 997 | ~70% |
+| Phase 2 | Paths + Multiple Labels (1, 3) | ~1040 | ~75% |
+| Phase 3 | Remaining (5, 9) | ~1100 | ~80% |
 
-**Note**: Phase 1.8 complete. List comprehensions fully implemented with filter (WHERE) and map (|) projection support. Phase 1.7 in progress - path expressions parser and translator complete, but need to fix multiple labels implementation before tests can pass. Path expressions (item 1) and multiple labels (item 3) are being worked on in parallel for Phase 2.
+**Note**: Phase 1.9 complete. List predicates (ALL, ANY, NONE, SINGLE) fully implemented with support in both RETURN expressions and WHERE clauses. Phase 1.7 in progress - path expressions parser and translator complete, but need to fix multiple labels implementation before tests can pass. Path expressions (item 1) and multiple labels (item 3) are being worked on in parallel for Phase 2.
 
 ---
 
