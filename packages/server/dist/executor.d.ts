@@ -150,8 +150,13 @@ export declare class Executor {
     private executeDeleteWithResolvedIds;
     /**
      * Evaluate an expression to get its value
+     * Note: For property and binary expressions that reference nodes, use evaluateExpressionWithContext
      */
     private evaluateExpression;
+    /**
+     * Evaluate an expression with access to node/edge context for property lookups
+     */
+    private evaluateExpressionWithContext;
     /**
      * Execute a CREATE clause with pre-resolved node IDs for referenced variables
      * The resolvedIds map is mutated to include newly created node IDs

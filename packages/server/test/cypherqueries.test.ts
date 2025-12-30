@@ -2506,6 +2506,134 @@ describe("CypherQueries.json Patterns", () => {
       expect(result.data[0].relType).toBe("KNOWS");
       expect(result.data[0].since).toBe(2020);
     });
+
+    it("handles MERGE with aliased nodes through WITH clause", () => {
+      // TCK test case: MATCH (n) MATCH (m) WITH n AS a, m AS b MERGE (a)-[:T]->(b)
+      exec("CREATE (n:Node {id: 1})");
+      exec("CREATE (m:Node {id: 2})");
+
+      exec(`
+        MATCH (n:Node {id: 1})
+        MATCH (m:Node {id: 2})
+        WITH n AS a, m AS b
+        MERGE (a)-[:T]->(b)
+      `);
+
+      // Verify relationship was created
+      const result = exec(`
+        MATCH (a:Node {id: 1})-[:T]->(b:Node {id: 2})
+        RETURN a.id AS aId, b.id AS bId
+      `);
+
+      expect(result.data).toHaveLength(1);
+      expect(result.data[0].aId).toBe(1);
+      expect(result.data[0].bId).toBe(2);
+    });
+
+    it("handles MERGE with aliased nodes and RETURN", () => {
+      exec("CREATE (n:Node {id: 1})");
+      exec("CREATE (m:Node {id: 2})");
+
+      const result = exec(`
+        MATCH (n:Node {id: 1})
+        MATCH (m:Node {id: 2})
+        WITH n AS a, m AS b
+        MERGE (a)-[r:T]->(b)
+        RETURN a.id AS aId, b.id AS bId
+      `);
+
+      expect(result.data).toHaveLength(1);
+      expect(result.data[0].aId).toBe(1);
+      expect(result.data[0].bId).toBe(2);
+    });
+
+    it("handles MERGE with self-aliased node through WITH clause", () => {
+      // TCK test case: MATCH (n) WITH n AS a, n AS b MERGE (a)-[:T]->(b)
+      exec("CREATE (n:Node {id: 1})");
+
+      exec(`
+        MATCH (n:Node {id: 1})
+        WITH n AS a, n AS b
+        MERGE (a)-[:T]->(b)
+      `);
+
+      // Verify self-relationship was created
+      const result = exec(`
+        MATCH (n:Node {id: 1})-[:T]->(n)
+        RETURN n.id AS id
+      `);
+
+      expect(result.data).toHaveLength(1);
+      expect(result.data[0].id).toBe(1);
+    });
+  });
+
+  describe("SET with Expressions", () => {
+    it("sets a property to an arithmetic expression", () => {
+      // TCK pattern: SET n.num = n.num + 1
+      exec("CREATE (n:Counter {num: 5})");
+      
+      exec(`
+        MATCH (n:Counter)
+        SET n.num = n.num + 1
+      `);
+      
+      const result = exec("MATCH (n:Counter) RETURN n.num AS num");
+      expect(result.data).toHaveLength(1);
+      expect(result.data[0].num).toBe(6);
+    });
+
+    it("handles SET with multiplication", () => {
+      exec("CREATE (n:Counter {num: 5})");
+      
+      exec(`
+        MATCH (n:Counter)
+        SET n.num = n.num * 2
+      `);
+      
+      const result = exec("MATCH (n:Counter) RETURN n.num AS num");
+      expect(result.data).toHaveLength(1);
+      expect(result.data[0].num).toBe(10);
+    });
+  });
+
+  describe("Anonymous Node Creation", () => {
+    it("creates a relationship between anonymous nodes", () => {
+      // TCK pattern: CREATE ()-[:R]->()
+      exec("CREATE ()-[:R]->()");
+      
+      // Verify the relationship was created
+      const result = exec("MATCH ()-[r:R]->() RETURN count(r) AS count");
+      expect(result.data).toHaveLength(1);
+      expect(result.data[0].count).toBe(1);
+    });
+
+    it("creates a relationship with properties between anonymous nodes", () => {
+      // TCK pattern: CREATE ()-[:R {num: 42}]->()
+      exec("CREATE ()-[:R {num: 42}]->()");
+      
+      const result = exec("MATCH ()-[r:R]->() RETURN r.num AS num");
+      expect(result.data).toHaveLength(1);
+      expect(result.data[0].num).toBe(42);
+    });
+
+    it("creates a relationship with two properties between anonymous nodes", () => {
+      // TCK pattern: CREATE ()-[:R {id: 12, name: 'foo'}]->()
+      exec("CREATE ()-[:R {id: 12, name: 'foo'}]->()");
+      
+      const result = exec("MATCH ()-[r:R]->() RETURN r.id AS id, r.name AS name");
+      expect(result.data).toHaveLength(1);
+      expect(result.data[0].id).toBe(12);
+      expect(result.data[0].name).toBe("foo");
+    });
+
+    it("returns relationship properties from anonymous nodes", () => {
+      // TCK pattern: CREATE ()-[r:R {num: 42}]->() RETURN r.num
+      const result = exec("CREATE ()-[r:R {num: 42}]->() RETURN r.num AS num");
+      
+      expect(result.data).toHaveLength(1);
+      expect(result.data[0].num).toBe(42);
+    });
   });
 
   describe("List Comprehensions", () => {

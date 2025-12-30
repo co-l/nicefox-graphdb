@@ -29,7 +29,12 @@ export interface VariableRef {
     type: "variable";
     name: string;
 }
-export type PropertyValue = string | number | boolean | null | ParameterRef | VariableRef | PropertyValue[];
+export interface PropertyRef {
+    type: "property";
+    variable: string;
+    property: string;
+}
+export type PropertyValue = string | number | boolean | null | ParameterRef | VariableRef | PropertyRef | PropertyValue[];
 export interface WhereCondition {
     type: "comparison" | "and" | "or" | "not" | "contains" | "startsWith" | "endsWith" | "isNull" | "isNotNull" | "exists" | "in" | "listPredicate";
     left?: Expression;

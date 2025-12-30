@@ -184,34 +184,40 @@ export class Translator {
 
     // Create source node if it has a label (new node)
     let sourceId: string;
-    if (rel.source.label) {
+    if (rel.source.variable) {
+      const existing = this.ctx.variables.get(rel.source.variable);
+      if (existing) {
+        sourceId = existing.alias;
+      } else {
+        // Variable not found but has a label - create new node
+        const sourceStmt = this.translateCreateNode(rel.source);
+        statements.push(sourceStmt);
+        sourceId = sourceStmt.params[0] as string;
+      }
+    } else {
+      // No variable - create anonymous node (with or without label)
       const sourceStmt = this.translateCreateNode(rel.source);
       statements.push(sourceStmt);
       sourceId = sourceStmt.params[0] as string;
-    } else if (rel.source.variable) {
-      const existing = this.ctx.variables.get(rel.source.variable);
-      if (!existing) {
-        throw new Error(`Unknown variable: ${rel.source.variable}`);
-      }
-      sourceId = existing.alias;
-    } else {
-      throw new Error("Source node must have a label or reference an existing variable");
     }
 
-    // Create target node if it has a label (new node)
+    // Create target node if it has a label (new node) or is anonymous
     let targetId: string;
-    if (rel.target.label) {
+    if (rel.target.variable) {
+      const existing = this.ctx.variables.get(rel.target.variable);
+      if (existing) {
+        targetId = existing.alias;
+      } else {
+        // Variable not found but has a label - create new node
+        const targetStmt = this.translateCreateNode(rel.target);
+        statements.push(targetStmt);
+        targetId = targetStmt.params[0] as string;
+      }
+    } else {
+      // No variable - create anonymous node (with or without label)
       const targetStmt = this.translateCreateNode(rel.target);
       statements.push(targetStmt);
       targetId = targetStmt.params[0] as string;
-    } else if (rel.target.variable) {
-      const existing = this.ctx.variables.get(rel.target.variable);
-      if (!existing) {
-        throw new Error(`Unknown variable: ${rel.target.variable}`);
-      }
-      targetId = existing.alias;
-    } else {
-      throw new Error("Target node must have a label or reference an existing variable");
     }
 
     // Create edge

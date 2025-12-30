@@ -1,7 +1,7 @@
 # NiceFox GraphDB - TCK Compliance Session
 
 ## Context
-SQLite-based graph database with Cypher query support. Currently at 74.2% TCK compliance (1100/1483 tests passing).
+SQLite-based graph database with Cypher query support. Currently at 74.9% TCK compliance (1110/1492 tests passing, 68 skipped).
 
 ## Goal
 Improve openCypher TCK compliance by fixing parser/translator/executor issues.
@@ -15,20 +15,18 @@ Improve openCypher TCK compliance by fixing parser/translator/executor issues.
 6. Update this file's "Current Priority Fixes" section with new stats
 
 ## Recently Fixed (2024-12-30)
-- SET n:Label syntax - Added support for adding labels to nodes with SET clause
-- WITH * syntax - Pass through all bound variables
-- RETURN * syntax - Return all matched variables
-- UNWIND variable handling in COLLECT - Fixed collecting scalar values from UNWIND
-- SET n = {props} syntax - Replace all node properties with a map
-- SET n += {props} syntax - Merge properties from a map (with null removal)
-- Anonymous node tracking in chained patterns - Fixed `(a)-[:R]->()-[:S]->(b)` handling
-- Source property filters in variable-length paths - Fixed `{name: 'Alice'}` not being applied
+- MERGE with WITH clause aliasing - `MATCH (n) WITH n AS a MERGE (a)-[:T]->(b)` now works
+- Anonymous node creation in CREATE - `CREATE ()-[:R]->()` creates unlabeled nodes
+- SET with binary expressions - `SET n.num = n.num + 1` works with arithmetic
+- Property access in node maps - `{name: person.bornIn}` parsed and executed
+- Property access in ON CREATE/MATCH SET - Referenced properties resolved at runtime
 
 ## Current Priority Fixes (by impact)
-1. MERGE relationship patterns (18 tests) - Need executor handling
-2. Source node resolution (18 tests) - CREATE edge cases
-3. Unexpected token dot (14 tests) - `nodes.key` map/property access parsing
-4. Edge variable scope (14 tests) - `no such column: e2.id` in returns
+1. Variable-length path edge tracking (14 tests) - `no such column: e2.id` errors
+2. MERGE relationship patterns (12 tests) - Complex multi-MERGE scenarios
+3. Incomplete input in MERGE SET (14 tests) - Multi-line ON CREATE/MATCH SET parsing
+4. Invalid relationship pattern (8 tests) - Bidirectional arrow patterns
+5. FOREIGN KEY constraint failed (8 tests) - WITH aliased nodes in CREATE
 
 **Update this section after each session** with:
 - New pass rate and test counts

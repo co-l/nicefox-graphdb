@@ -978,10 +978,17 @@ export class Parser {
         if (token.type === "LBRACKET") {
             return this.parseArray();
         }
-        // Handle variable references (e.g., from UNWIND)
+        // Handle variable references (e.g., from UNWIND) or property access (e.g., person.bornIn)
         if (token.type === "IDENTIFIER") {
             this.advance();
-            return { type: "variable", name: token.value };
+            const varName = token.value;
+            // Check for property access: variable.property
+            if (this.check("DOT")) {
+                this.advance(); // consume DOT
+                const propToken = this.expect("IDENTIFIER");
+                return { type: "property", variable: varName, property: propToken.value };
+            }
+            return { type: "variable", name: varName };
         }
         throw new Error(`Expected property value, got ${token.type} '${token.value}'`);
     }

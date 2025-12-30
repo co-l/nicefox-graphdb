@@ -517,7 +517,11 @@ export class Executor {
     // Determine source node ID
     if (rel.source.variable && createdIds.has(rel.source.variable)) {
       sourceId = createdIds.get(rel.source.variable)!;
-    } else if (rel.source.label) {
+    } else if (rel.source.variable && !createdIds.has(rel.source.variable) && !rel.source.label) {
+      // Variable referenced but not found and no label - error
+      throw new Error(`Cannot resolve source node: ${rel.source.variable}`);
+    } else {
+      // Create new source node (with or without label - anonymous nodes are valid)
       sourceId = crypto.randomUUID();
       const props = this.resolvePropertiesWithUnwind(rel.source.properties || {}, params, unwindContext);
       this.db.execute(
@@ -527,14 +531,16 @@ export class Executor {
       if (rel.source.variable) {
         createdIds.set(rel.source.variable, sourceId);
       }
-    } else {
-      throw new Error(`Cannot resolve source node: ${rel.source.variable}`);
     }
     
     // Determine target node ID
     if (rel.target.variable && createdIds.has(rel.target.variable)) {
       targetId = createdIds.get(rel.target.variable)!;
-    } else if (rel.target.label) {
+    } else if (rel.target.variable && !createdIds.has(rel.target.variable) && !rel.target.label) {
+      // Variable referenced but not found and no label - error
+      throw new Error(`Cannot resolve target node: ${rel.target.variable}`);
+    } else {
+      // Create new target node (with or without label - anonymous nodes are valid)
       targetId = crypto.randomUUID();
       const props = this.resolvePropertiesWithUnwind(rel.target.properties || {}, params, unwindContext);
       this.db.execute(
@@ -544,8 +550,6 @@ export class Executor {
       if (rel.target.variable) {
         createdIds.set(rel.target.variable, targetId);
       }
-    } else {
-      throw new Error(`Cannot resolve target node: ${rel.target.variable}`);
     }
     
     // Swap source/target for left-directed relationships
@@ -658,6 +662,7 @@ export class Executor {
         const id = createdIds.get(variable);
         
         if (id) {
+          // Try nodes first
           const nodeResult = this.db.execute(
             `SELECT json_extract(properties, '$.${property}') as value FROM nodes WHERE id = ?`,
             [id]
@@ -665,6 +670,16 @@ export class Executor {
           
           if (nodeResult.rows.length > 0) {
             resultRow[alias] = nodeResult.rows[0].value;
+          } else {
+            // Try edges if not found in nodes
+            const edgeResult = this.db.execute(
+              `SELECT json_extract(properties, '$.${property}') as value FROM edges WHERE id = ?`,
+              [id]
+            );
+            
+            if (edgeResult.rows.length > 0) {
+              resultRow[alias] = edgeResult.rows[0].value;
+            }
           }
         }
       } else if (item.expression.type === "function" && item.expression.functionName === "ID") {
@@ -698,6 +713,7 @@ export class Executor {
     const clauses = query.clauses;
     
     let matchClauses: MatchClause[] = [];
+    let withClauses: WithClause[] = [];
     let mergeClause: MergeClause | null = null;
     let returnClause: ReturnClause | null = null;
     
@@ -708,6 +724,8 @@ export class Executor {
         returnClause = clause;
       } else if (clause.type === "MATCH") {
         matchClauses.push(clause);
+      } else if (clause.type === "WITH") {
+        withClauses.push(clause);
       } else {
         // Other clause types present - don't handle
         return null;
@@ -730,7 +748,7 @@ export class Executor {
     }
     
     // Execute MERGE with special handling
-    return this.executeMergeWithSetClauses(matchClauses, mergeClause, returnClause, params);
+    return this.executeMergeWithSetClauses(matchClauses, withClauses, mergeClause, returnClause, params);
   }
 
   /**
@@ -738,6 +756,7 @@ export class Executor {
    */
   private executeMergeWithSetClauses(
     matchClauses: MatchClause[],
+    withClauses: WithClause[],
     mergeClause: MergeClause,
     returnClause: ReturnClause | null,
     params: Record<string, unknown>
@@ -782,6 +801,25 @@ export class Executor {
             label: labelValue,
             properties: typeof row.properties === "string" ? JSON.parse(row.properties) : row.properties,
           });
+        }
+      }
+    }
+    
+    // Process WITH clauses to handle aliasing
+    // e.g., WITH n AS a, m AS b - creates aliases that map a->n, b->m in matched nodes
+    for (const withClause of withClauses) {
+      for (const item of withClause.items) {
+        const alias = item.alias;
+        const expr = item.expression;
+        
+        // Handle WITH n AS a - aliasing matched variable
+        if (alias && expr.type === "variable" && expr.variable) {
+          const sourceVar = expr.variable;
+          const sourceNode = matchedNodes.get(sourceVar);
+          if (sourceNode) {
+            // Create alias pointing to the same node
+            matchedNodes.set(alias, sourceNode);
+          }
         }
       }
     }
@@ -845,11 +883,19 @@ export class Executor {
       
       // Apply ON CREATE SET properties
       if (mergeClause.onCreateSet) {
+        // Convert matchedNodes to resolvedIds format for expression evaluation
+        const resolvedIds: Record<string, string> = {};
+        for (const [varName, nodeInfo] of matchedNodes) {
+          resolvedIds[varName] = nodeInfo.id;
+        }
+        
         for (const assignment of mergeClause.onCreateSet) {
           // Skip label assignments (handled separately)
           if (assignment.labels) continue;
           if (!assignment.value || !assignment.property) continue;
-          const value = this.evaluateExpression(assignment.value, params);
+          const value = assignment.value.type === "property" || assignment.value.type === "binary"
+            ? this.evaluateExpressionWithContext(assignment.value, params, resolvedIds)
+            : this.evaluateExpression(assignment.value, params);
           nodeProps[assignment.property] = value;
         }
       }
@@ -864,11 +910,19 @@ export class Executor {
       nodeId = findResult.rows[0].id as string;
       
       if (mergeClause.onMatchSet) {
+        // Convert matchedNodes to resolvedIds format for expression evaluation
+        const resolvedIds: Record<string, string> = {};
+        for (const [varName, nodeInfo] of matchedNodes) {
+          resolvedIds[varName] = nodeInfo.id;
+        }
+        
         for (const assignment of mergeClause.onMatchSet) {
           // Skip label assignments (handled separately)
           if (assignment.labels) continue;
           if (!assignment.value || !assignment.property) continue;
-          const value = this.evaluateExpression(assignment.value, params);
+          const value = assignment.value.type === "property" || assignment.value.type === "binary"
+            ? this.evaluateExpressionWithContext(assignment.value, params, resolvedIds)
+            : this.evaluateExpression(assignment.value, params);
           this.db.execute(
             `UPDATE nodes SET properties = json_set(properties, '$.${assignment.property}', json(?)) WHERE id = ?`,
             [JSON.stringify(value), nodeId]
@@ -1318,8 +1372,11 @@ export class Executor {
     // Determine source node ID
     if (rel.source.variable && createdIds.has(rel.source.variable)) {
       sourceId = createdIds.get(rel.source.variable)!;
-    } else if (rel.source.label) {
-      // Create new source node
+    } else if (rel.source.variable && !createdIds.has(rel.source.variable) && !rel.source.label) {
+      // Variable referenced but not found and no label - error
+      throw new Error(`Cannot resolve source node: ${rel.source.variable}`);
+    } else {
+      // Create new source node (with or without label - anonymous nodes are valid)
       sourceId = crypto.randomUUID();
       const props = this.resolveProperties(rel.source.properties || {}, params);
       const labelJson = this.normalizeLabelToJson(rel.source.label);
@@ -1330,17 +1387,16 @@ export class Executor {
       if (rel.source.variable) {
         createdIds.set(rel.source.variable, sourceId);
       }
-    } else if (rel.source.variable) {
-      throw new Error(`Cannot resolve source node: ${rel.source.variable}`);
-    } else {
-      throw new Error("Source node must have a label or reference an existing variable");
     }
     
     // Determine target node ID
     if (rel.target.variable && createdIds.has(rel.target.variable)) {
       targetId = createdIds.get(rel.target.variable)!;
-    } else if (rel.target.label) {
-      // Create new target node
+    } else if (rel.target.variable && !createdIds.has(rel.target.variable) && !rel.target.label) {
+      // Variable referenced but not found and no label - error
+      throw new Error(`Cannot resolve target node: ${rel.target.variable}`);
+    } else {
+      // Create new target node (with or without label - anonymous nodes are valid)
       targetId = crypto.randomUUID();
       const props = this.resolveProperties(rel.target.properties || {}, params);
       const labelJson = this.normalizeLabelToJson(rel.target.label);
@@ -1351,10 +1407,6 @@ export class Executor {
       if (rel.target.variable) {
         createdIds.set(rel.target.variable, targetId);
       }
-    } else if (rel.target.variable) {
-      throw new Error(`Cannot resolve target node: ${rel.target.variable}`);
-    } else {
-      throw new Error("Target node must have a label or reference an existing variable");
     }
     
     // Swap source/target for left-directed relationships
@@ -1928,7 +1980,10 @@ export class Executor {
         throw new Error(`Invalid SET assignment for variable: ${assignment.variable}`);
       }
 
-      const value = this.evaluateExpression(assignment.value, params);
+      // Use context-aware evaluation for expressions that may reference properties
+      const value = assignment.value.type === "binary" || assignment.value.type === "property"
+        ? this.evaluateExpressionWithContext(assignment.value, params, resolvedIds)
+        : this.evaluateExpression(assignment.value, params);
 
       // Update the property using json_set
       // We need to determine if it's a node or edge - for now assume node
@@ -2002,6 +2057,7 @@ export class Executor {
 
   /**
    * Evaluate an expression to get its value
+   * Note: For property and binary expressions that reference nodes, use evaluateExpressionWithContext
    */
   private evaluateExpression(expr: Expression, params: Record<string, unknown>): unknown {
     switch (expr.type) {
@@ -2009,6 +2065,75 @@ export class Executor {
         return expr.value;
       case "parameter":
         return params[expr.name!];
+      default:
+        throw new Error(`Cannot evaluate expression of type ${expr.type}`);
+    }
+  }
+
+  /**
+   * Evaluate an expression with access to node/edge context for property lookups
+   */
+  private evaluateExpressionWithContext(
+    expr: Expression, 
+    params: Record<string, unknown>,
+    resolvedIds: Record<string, string>
+  ): unknown {
+    switch (expr.type) {
+      case "literal":
+        return expr.value;
+      case "parameter":
+        return params[expr.name!];
+      case "property": {
+        // Look up property from node/edge
+        const varName = expr.variable!;
+        const propName = expr.property!;
+        const entityId = resolvedIds[varName];
+        if (!entityId) {
+          throw new Error(`Unknown variable: ${varName}`);
+        }
+        // Try nodes first
+        const nodeResult = this.db.execute(
+          `SELECT json_extract(properties, '$.${propName}') AS value FROM nodes WHERE id = ?`,
+          [entityId]
+        );
+        if (nodeResult.rows.length > 0) {
+          return nodeResult.rows[0].value;
+        }
+        // Try edges
+        const edgeResult = this.db.execute(
+          `SELECT json_extract(properties, '$.${propName}') AS value FROM edges WHERE id = ?`,
+          [entityId]
+        );
+        if (edgeResult.rows.length > 0) {
+          return edgeResult.rows[0].value;
+        }
+        return null;
+      }
+      case "binary": {
+        // Evaluate arithmetic expressions
+        const left = this.evaluateExpressionWithContext(expr.left!, params, resolvedIds);
+        const right = this.evaluateExpressionWithContext(expr.right!, params, resolvedIds);
+        
+        // Handle null values
+        if (left === null || right === null) {
+          return null;
+        }
+        
+        switch (expr.operator) {
+          case "+":
+            return (left as number) + (right as number);
+          case "-":
+            return (left as number) - (right as number);
+          case "*":
+            return (left as number) * (right as number);
+          case "/":
+            return (left as number) / (right as number);
+          case "%":
+            return (left as number) % (right as number);
+          default:
+            throw new Error(`Unknown binary operator: ${expr.operator}`);
+        }
+      }
       default:
         throw new Error(`Cannot evaluate expression of type ${expr.type}`);
     }
@@ -2053,8 +2178,11 @@ export class Executor {
     // Determine source node ID
     if (rel.source.variable && resolvedIds[rel.source.variable]) {
       sourceId = resolvedIds[rel.source.variable];
-    } else if (rel.source.label) {
-      // Create new source node
+    } else if (rel.source.variable && !resolvedIds[rel.source.variable] && !rel.source.label) {
+      // Variable referenced but not found and no label - error
+      throw new Error(`Cannot resolve source node: ${rel.source.variable}`);
+    } else {
+      // Create new source node (with or without label - anonymous nodes are valid)
       sourceId = crypto.randomUUID();
       const props = this.resolveProperties(rel.source.properties || {}, params);
       const labelJson = this.normalizeLabelToJson(rel.source.label);
@@ -2066,15 +2194,16 @@ export class Executor {
       if (rel.source.variable) {
         resolvedIds[rel.source.variable] = sourceId;
       }
-    } else {
-      throw new Error(`Cannot resolve source node: ${rel.source.variable}`);
     }
 
     // Determine target node ID
     if (rel.target.variable && resolvedIds[rel.target.variable]) {
       targetId = resolvedIds[rel.target.variable];
-    } else if (rel.target.label) {
-      // Create new target node
+    } else if (rel.target.variable && !resolvedIds[rel.target.variable] && !rel.target.label) {
+      // Variable referenced but not found and no label - error
+      throw new Error(`Cannot resolve target node: ${rel.target.variable}`);
+    } else {
+      // Create new target node (with or without label - anonymous nodes are valid)
       targetId = crypto.randomUUID();
       const props = this.resolveProperties(rel.target.properties || {}, params);
       const labelJson = this.normalizeLabelToJson(rel.target.label);
@@ -2086,8 +2215,6 @@ export class Executor {
       if (rel.target.variable) {
         resolvedIds[rel.target.variable] = targetId;
       }
-    } else {
-      throw new Error(`Cannot resolve target node: ${rel.target.variable}`);
     }
 
     // Swap source/target for left-directed relationships
