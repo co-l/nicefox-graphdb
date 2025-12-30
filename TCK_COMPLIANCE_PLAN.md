@@ -1,11 +1,43 @@
 # openCypher TCK Compliance Plan
 
-## Current Status
+## Current Status (December 2024)
 
-- **Test Suite**: 997 passing, 0 skipped
-- **Estimated TCK Compliance**: ~70% (based on implemented features)
+- **Total Tests**: 1538 (1074 passed, 396 failed, 68 skipped)
+- **TCK Pass Rate**: 73.1% (1074/1470 non-skipped)
+- **Unit Test Suite**: 997+ passing
 - **TCK Source**: https://github.com/opencypher/openCypher/tree/main/tck
 - **Test Runner**: `packages/server/test/tck/tck.test.ts.skip`
+
+### TCK Failures by Category
+
+| Category | Failures | Main Issues |
+|----------|----------|-------------|
+| clauses/match | ~105 | Multiple labels `:A:B`, pattern comprehensions |
+| clauses/merge | ~59 | MERGE relationship patterns, ON CREATE/MATCH SET |
+| clauses/create | ~57 | Multiple labels, property maps |
+| clauses/set | ~52 | SET multiple properties, labels |
+| clauses/return | ~40 | Map projection, pattern expressions |
+| clauses/delete | ~28 | DETACH DELETE, cascading |
+| expressions/aggregation | ~25 | percentiles, DISTINCT edge cases |
+| clauses/with | ~21 | Path variables, grouping |
+| clauses/unwind | ~11 | UNWIND with nulls, column aliases |
+
+### Top Error Patterns
+
+| Error | Count | Root Cause |
+|-------|-------|------------|
+| `Expected DOT, got COLON ':'` | 37 | Multiple labels `:A:B` in RETURN |
+| `Expected expression, got STAR '*'` | 30 | Pattern expressions `size((n)-->())` |
+| `MERGE with relationship pattern` | 18 | MERGE relationship edge cases |
+| `no such column: n0.id/e2.id` | 16 | Variable scope issues |
+| `Source node must have label` | 18 | CREATE/MERGE validation |
+| `Unexpected token '.'` | 14 | Map projection `n { .name }` |
+| `Expected RBRACKET, got LBRACKET '['` | 6 | Nested list syntax |
+
+### Recently Fixed (December 2024)
+
+- **OPTIONAL MATCH SQL syntax** - Fixed "near LEFT" errors by adding dummy FROM clause
+- **Null entity formatting** - Convert `{id: null, ...}` to `null` for OPTIONAL MATCH results
 
 ## Recently Completed
 
@@ -340,17 +372,20 @@ MATCH (n:Item) WHERE ALL(x IN n.scores WHERE x >= 10) RETURN n  -- In WHERE clau
 
 | Phase | Focus | Tests Passing | Compliance |
 |-------|-------|---------------|------------|
-| Previous | - | 814 | 62.9% |
-| Phase 1 | Quick Wins (4, 6, 7) | ~840 | ~65% |
-| Phase 1.5 | List Concatenation (10) | ~845 | ~65.5% |
-| Phase 1.6 | Variable-Length Paths (2) | ~882 | ~68.2% |
-| Phase 1.7 | Path Expressions (1 - WIP) | ~890 | ~68.8% |
-| Phase 1.8 | List Comprehensions (8) | 890 | ~68.8% |
-| Phase 1.9 | List Predicates (11) | 997 | ~70% |
-| Phase 2 | Paths + Multiple Labels (1, 3) | ~1040 | ~75% |
-| Phase 3 | Remaining (5, 9) | ~1100 | ~80% |
+| Current | TCK baseline | 1074/1470 | 73.1% |
+| Phase 2.1 | Multiple labels in RETURN | +37 | ~75.6% |
+| Phase 2.2 | Pattern expressions `(n)-->()` | +30 | ~77.6% |
+| Phase 2.3 | Map projection `n { .name }` | +14 | ~78.6% |
+| Phase 3 | MERGE edge cases, DETACH DELETE | +50 | ~82% |
 
-**Note**: Phase 1.9 complete. List predicates (ALL, ANY, NONE, SINGLE) fully implemented with support in both RETURN expressions and WHERE clauses. Phase 1.7 in progress - path expressions parser and translator complete, but need to fix multiple labels implementation before tests can pass. Path expressions (item 1) and multiple labels (item 3) are being worked on in parallel for Phase 2.
+**Note**: Phase 1 complete (OPTIONAL MATCH fixes done). Phase 2 focus on highest-impact parser/translator fixes.
+
+### Priority Implementation Order
+
+1. **Multiple labels in RETURN** - 37 tests, parser fix for `:A:B` after property access
+2. **Pattern expressions** - 30 tests, parser + translator work for `size((n)-->())`
+3. **Map projection** - 14 tests, parser + translator work for `n { .name }`
+4. **MERGE edge cases** - 18 tests, executor improvements
 
 ---
 

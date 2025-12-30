@@ -767,6 +767,11 @@ export class Translator {
         if (fromParts.length > 0) {
             sql += ` FROM ${fromParts.join(", ")}`;
         }
+        else if (joinParts.length > 0) {
+            // If we have JOINs but no FROM, we need a dummy FROM clause
+            // This happens with OPTIONAL MATCH without a prior MATCH
+            sql += ` FROM (SELECT 1) __dummy__`;
+        }
         if (joinParts.length > 0) {
             sql += ` ${joinParts.join(" ")}`;
         }

@@ -108,16 +108,35 @@ function rowsMatch(expected: unknown[][], actual: unknown[][], ordered: boolean)
 }
 
 /**
+ * Check if a value represents a null node/relationship (all fields are null)
+ */
+function isNullEntity(value: unknown): boolean {
+  if (typeof value !== "object" || value === null) return false;
+  const obj = value as Record<string, unknown>;
+  // A null entity has id: null (and possibly label/type/properties also null)
+  return obj.id === null;
+}
+
+/**
  * Extract column values from result row
  */
 function extractColumns(row: Record<string, unknown>, columns: string[]): unknown[] {
   return columns.map(col => {
     // Handle column names that might be expressions like "n.name" or "count(n)"
-    if (col in row) return row[col];
+    if (col in row) {
+      const value = row[col];
+      // Convert null entities to actual null
+      if (isNullEntity(value)) return null;
+      return value;
+    }
     
     // Try without quotes
     const cleanCol = col.replace(/['"]/g, "");
-    if (cleanCol in row) return row[cleanCol];
+    if (cleanCol in row) {
+      const value = row[cleanCol];
+      if (isNullEntity(value)) return null;
+      return value;
+    }
     
     // Try property access like "n.name"
     const parts = col.split(".");
