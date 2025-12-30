@@ -1,8 +1,8 @@
 # NiceFox GraphDB - TCK Compliance Guide
 
 ## Current Status
-- **Passing**: 1165 tests (74.0%)
-- **Failing**: 409 tests (skipped in test suite)
+- **Passing**: 1175 tests (74.6%)
+- **Failing**: 399 tests (skipped in test suite)
 - **Outline scenarios**: 276 (skipped, require template expansion)
 
 ## How TCK Tests Work
@@ -120,7 +120,8 @@ Recent error counts:
 - Label predicate expression `(n:Label)` in RETURN - checks if node has a label
 - Fixed TCK parser to correctly handle "result should be empty" before side effects table
 - Added relationship pattern matching in TCK test runner for `[:TYPE]` comparisons
-- Enabled passing Create1-6, Delete1-3, Match2, Return3 tests
+- Added column name normalization for property expressions (`n.name` -> `n_name`)
+- Enabled passing Create1-6, Delete1-3, Match2-3, Return3-6 tests
 - Bidirectional relationship patterns `<-->` and `--`
 - IS NULL / IS NOT NULL in RETURN expressions
 - Multiple relationship types `[:TYPE1|TYPE2]`

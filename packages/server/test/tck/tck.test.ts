@@ -164,7 +164,15 @@ function extractColumns(row: Record<string, unknown>, columns: string[]): unknow
       return value;
     }
     
-    // Try property access like "n.name"
+    // Try underscore version of dot notation: "n.name" -> "n_name"
+    const underscoreCol = cleanCol.replace(/\./g, "_");
+    if (underscoreCol in row) {
+      const value = row[underscoreCol];
+      if (isNullEntity(value)) return null;
+      return value;
+    }
+    
+    // Try property access like "n.name" - look up the node and get its property
     const parts = col.split(".");
     if (parts.length === 2) {
       const [varName, propName] = parts;
