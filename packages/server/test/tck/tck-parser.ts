@@ -204,8 +204,20 @@ export function parseFeatureFile(filePath: string): ParsedFeature {
       continue;
     }
     
-    // Side effects
+    // Side effects - stop expecting result table and start expecting side effects table
     if (trimmed.startsWith("And the side effects should be:") || trimmed.startsWith("And no side effects")) {
+      // First, save any pending result table
+      if (expectingTable && tableColumns.length > 0 && currentScenario) {
+        currentScenario.expectResult = {
+          ordered: currentScenario.expectResult?.ordered ?? false,
+          columns: tableColumns,
+          rows: tableRows,
+        };
+      }
+      expectingTable = false;
+      tableColumns = [];
+      tableRows = [];
+      
       if (trimmed.includes("no side effects") && currentScenario) {
         currentScenario.sideEffects = {};
       }

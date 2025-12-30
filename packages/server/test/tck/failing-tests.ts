@@ -1,11 +1,6 @@
 export const FAILING_TESTS = new Set([
-  "clauses/create > Create1 - Creating nodes|8",
-  "clauses/create > Create1 - Creating nodes|10",
-  "clauses/create > Create1 - Creating nodes|11",
+  // Create1|12: Multiple labels (:A:B:C) not supported
   "clauses/create > Create1 - Creating nodes|12",
-  "clauses/create > Create2 - Creating relationships|14",
-  "clauses/create > Create2 - Creating relationships|16",
-  "clauses/create > Create2 - Creating relationships|17",
   "clauses/delete > Delete4 - Delete clause interoperation with other clauses|1",
   "clauses/delete > Delete4 - Delete clause interoperation with other clauses|2",
   "clauses/delete > Delete5 - Delete clause interoperation with built-in data types|1",
