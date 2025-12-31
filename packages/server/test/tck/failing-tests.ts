@@ -74,8 +74,8 @@ export const FAILING_TESTS = new Set([
   // "clauses/match > Match3 - Match fixed length patterns|22",
   // Match3|25: Now works with additional label constraints fix
   // "clauses/match > Match3 - Match fixed length patterns|25",
-  // Match3|28: NULL variable from OPTIONAL MATCH propagation
-  "clauses/match > Match3 - Match fixed length patterns|28",
+  // Match3|28: NULL variable from OPTIONAL MATCH propagation - Now works
+  // "clauses/match > Match3 - Match fixed length patterns|28",
   // Match4|1,2,6,9: Now work with variable-length edge tracking in CTE
   // "clauses/match > Match4 - Match variable length patterns scenarios|1",
   // "clauses/match > Match4 - Match variable length patterns scenarios|2", // was never in list, already passed

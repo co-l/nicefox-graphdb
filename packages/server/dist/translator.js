@@ -705,9 +705,34 @@ export class Translator {
                 const relPattern = relPatterns[i];
                 const isOptional = relPattern.optional === true;
                 const joinType = isOptional ? "LEFT JOIN" : "JOIN";
+                // Check if source was from a previous optional MATCH
+                const sourceIsOptional = this.ctx[`optional_${relPattern.sourceAlias}`] === true;
                 if (i === 0 && !isOptional) {
                     // First non-optional relationship: add source node to FROM
-                    fromParts.push(`nodes ${relPattern.sourceAlias}`);
+                    // If source was optional, use LEFT JOIN to allow NULL values, then filter them out
+                    if (sourceIsOptional) {
+                        // Source is from optional MATCH - use LEFT JOIN to allow NULL, then filter in WHERE
+                        // Add a dummy FROM clause first, then LEFT JOIN the source node
+                        if (fromParts.length === 0) {
+                            fromParts.push(`(SELECT 1) AS __dummy__`);
+                        }
+                        // Add label constraint to ON clause for optional source
+                        const onConditions = ["1=1"];
+                        const onParams = [];
+                        const sourcePattern = this.ctx[`pattern_${relPattern.sourceAlias}`];
+                        if (sourcePattern?.label) {
+                            const labelMatch = this.generateLabelMatchCondition(relPattern.sourceAlias, sourcePattern.label);
+                            onConditions.push(labelMatch.sql);
+                            onParams.push(...labelMatch.params);
+                        }
+                        joinParts.push(`LEFT JOIN nodes ${relPattern.sourceAlias} ON ${onConditions.join(" AND ")}`);
+                        joinParams.push(...onParams);
+                        // Filter out NULL values in WHERE
+                        whereParts.push(`${relPattern.sourceAlias}.id IS NOT NULL`);
+                    }
+                    else {
+                        fromParts.push(`nodes ${relPattern.sourceAlias}`);
+                    }
                     addedNodeAliases.add(relPattern.sourceAlias);
                 }
                 else if (!addedNodeAliases.has(relPattern.sourceAlias)) {
@@ -722,7 +747,24 @@ export class Translator {
                         fromParts.push(`nodes ${relPattern.sourceAlias}`);
                     }
                     else {
-                        joinParts.push(`JOIN nodes ${relPattern.sourceAlias} ON 1=1`);
+                        // Check if source was from an optional MATCH
+                        if (sourceIsOptional) {
+                            // Source is from optional MATCH - use LEFT JOIN with label constraint, then filter NULL
+                            const onConditions = ["1=1"];
+                            const onParams = [];
+                            const sourcePattern = this.ctx[`pattern_${relPattern.sourceAlias}`];
+                            if (sourcePattern?.label) {
+                                const labelMatch = this.generateLabelMatchCondition(relPattern.sourceAlias, sourcePattern.label);
+                                onConditions.push(labelMatch.sql);
+                                onParams.push(...labelMatch.params);
+                            }
+                            joinParts.push(`LEFT JOIN nodes ${relPattern.sourceAlias} ON ${onConditions.join(" AND ")}`);
+                            joinParams.push(...onParams);
+                            whereParts.push(`${relPattern.sourceAlias}.id IS NOT NULL`);
+                        }
+                        else {
+                            joinParts.push(`JOIN nodes ${relPattern.sourceAlias} ON 1=1`);
+                        }
                     }
                     addedNodeAliases.add(relPattern.sourceAlias);
                 }
@@ -1340,6 +1382,11 @@ export class Translator {
                 const originalInfo = this.ctx.variables.get(originalVar);
                 if (originalInfo && alias) {
                     this.ctx.variables.set(alias, originalInfo);
+                    // Preserve optional flag for the alias
+                    const originalIsOptional = this.ctx[`optional_${originalInfo.alias}`];
+                    if (originalIsOptional) {
+                        this.ctx[`optional_${alias}`] = true;
+                    }
                 }
             }
             else if (alias) {
