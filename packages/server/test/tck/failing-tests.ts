@@ -39,7 +39,7 @@ export const FAILING_TESTS = new Set([
   // Create3|7,8: Now work with chained alias support
   // "clauses/create > Create3 - Interoperation with other clauses|7",
   // "clauses/create > Create3 - Interoperation with other clauses|8",
-  "clauses/create > Create3 - Interoperation with other clauses|12",
+  // "clauses/create > Create3 - Interoperation with other clauses|12",
   // Create6|1,2: Now work with SKIP/LIMIT fix in tryCreateReturnExecution
   // "clauses/create > Create6 - Persistence of create clause side effects|1",
   // "clauses/create > Create6 - Persistence of create clause side effects|2",
