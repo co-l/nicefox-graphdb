@@ -758,7 +758,8 @@ describe("Translator", () => {
 
       expect(result.statements).toHaveLength(1);
       expect(result.statements[0].sql).toContain("SELECT");
-      expect(result.statements[0].params).toContain(1);
+      // Integer literals are inlined in SQL (not params) to preserve integer division
+      expect(result.statements[0].sql).toContain("1");
       expect(result.returnColumns).toEqual(["expr"]);
     });
 
@@ -781,10 +782,12 @@ describe("Translator", () => {
       const result = translateCypher("RETURN 1, 'hello', true");
 
       expect(result.statements).toHaveLength(1);
-      expect(result.statements[0].params).toContain(1);
+      const sql = result.statements[0].sql;
+      // Integer literals are inlined directly into SQL for proper integer division
+      expect(sql).toContain("1");
       expect(result.statements[0].params).toContain("hello");
-      // Boolean true is converted to 1 for SQLite compatibility
-      expect(result.statements[0].params).toEqual([1, "hello", 1]);
+      // Boolean true is converted to 1 for SQLite compatibility (also inlined)
+      expect(sql).toMatch(/\b1\b/);
     });
   });
 
@@ -1090,9 +1093,10 @@ describe("Translator", () => {
 
       const sql = result.statements[0].sql;
       expect(sql).toContain("CASE");
-      expect(result.statements[0].params).toContain(1);
-      expect(result.statements[0].params).toContain(2);
-      expect(result.statements[0].params).toContain(3);
+      // Integer literals are inlined directly into SQL for proper integer division
+      expect(sql).toContain("THEN 1");
+      expect(sql).toContain("THEN 2");
+      expect(sql).toContain("ELSE 3");
     });
 
     it("handles CASE with nested AND conditions", () => {

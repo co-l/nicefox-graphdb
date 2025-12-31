@@ -238,8 +238,8 @@ export const FAILING_TESTS = new Set([
   // Return6|1,3,5,7,8,9,10,11,12,14,15,17,18,19,20,21: Now work
   // Return6|2: Now works with 'expr' fallback
   // "clauses/return > Return6 - Implicit grouping with aggregates|2",
-  // Return6|4: value mismatch (2.01... vs 2) - integer division issue
-  "clauses/return > Return6 - Implicit grouping with aggregates|4",
+  // Return6|4: Now works with integer literal inlining in SQL
+  // "clauses/return > Return6 - Implicit grouping with aggregates|4",
   // Return6|6: Now works with comparison in map literal fix
   // "clauses/return > Return6 - Implicit grouping with aggregates|6",
   // Return6|13: aggregate in GROUP BY - needs WITH/aggregate variable scoping

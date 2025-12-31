@@ -2841,6 +2841,11 @@ END FROM (SELECT json_group_array(${valueExpr}) as sv))`,
                 }
                 // Convert booleans to 1/0 for SQLite
                 const value = expr.value === true ? 1 : expr.value === false ? 0 : expr.value;
+                // Inline numeric literals to preserve integer division behavior
+                // (SQLite treats bound parameters as floats)
+                if (typeof value === "number" && Number.isInteger(value)) {
+                    return { sql: String(value), tables, params };
+                }
                 params.push(value);
                 return { sql: "?", tables, params };
             }
