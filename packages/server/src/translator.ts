@@ -2471,13 +2471,11 @@ END FROM (SELECT json_group_array(${valueExpr}) as sv))`,
               }
               tables.push(varInfo.alias);
               // For full variable, collect as JSON objects
-              // Filter out nulls: use CASE WHEN id IS NOT NULL to skip nulls
-              // Since json_group_array doesn't filter nulls directly, we use 
-              // (SELECT json_group_array(...) FROM json_each('[...]') WHERE value NOT LIKE '{"id":null%')
-              // But simpler: use CASE to return NULL and filter with json_remove at end
-              // Actually simplest: just check id IS NOT NULL in the aggregation using GROUP_CONCAT pattern
+              // Use CASE WHEN to filter nulls - json_group_array will still include null entries
+              // but we can filter them with GROUP_CONCAT pattern or post-filter
+              // The key: use a direct aggregate that works when wrapped in other functions
               return {
-                sql: `COALESCE((SELECT json_group_array(json_object('id', x.id, 'label', x.label, 'properties', x.properties)) FROM (SELECT ${varInfo.alias}.id, ${varInfo.alias}.label, ${varInfo.alias}.properties) AS x WHERE x.id IS NOT NULL), json('[]'))`,
+                sql: `json_group_array(CASE WHEN ${varInfo.alias}.id IS NOT NULL THEN json_object('id', ${varInfo.alias}.id, 'label', ${varInfo.alias}.label, 'properties', ${varInfo.alias}.properties) END)`,
                 tables,
                 params,
               };
@@ -4503,12 +4501,22 @@ END FROM (SELECT json_group_array(${valueExpr}) as sv))`,
   }
 
   /**
-   * Check if an expression is an aggregate function (COUNT, SUM, AVG, MIN, MAX, COLLECT, PERCENTILEDISC, PERCENTILECONT)
+   * Check if an expression is or contains an aggregate function (COUNT, SUM, AVG, MIN, MAX, COLLECT, PERCENTILEDISC, PERCENTILECONT)
    */
   private isAggregateExpression(expr: Expression): boolean {
     if (expr.type === "function" && expr.functionName) {
       const aggregateFunctions = ["COUNT", "SUM", "AVG", "MIN", "MAX", "COLLECT", "PERCENTILEDISC", "PERCENTILECONT"];
-      return aggregateFunctions.includes(expr.functionName.toUpperCase());
+      if (aggregateFunctions.includes(expr.functionName.toUpperCase())) {
+        return true;
+      }
+      // Check if any argument contains an aggregate (e.g., size(collect(a)))
+      if (expr.args) {
+        return expr.args.some(arg => this.isAggregateExpression(arg));
+      }
+    }
+    // Check binary expressions for aggregates
+    if (expr.type === "binary") {
+      return this.isAggregateExpression(expr.left!) || this.isAggregateExpression(expr.right!);
     }
     return false;
   }

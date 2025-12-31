@@ -122,7 +122,7 @@ export declare class Translator {
     private findVariablesInCondition;
     private isParameterRef;
     /**
-     * Check if an expression is an aggregate function (COUNT, SUM, AVG, MIN, MAX, COLLECT, PERCENTILEDISC, PERCENTILECONT)
+     * Check if an expression is or contains an aggregate function (COUNT, SUM, AVG, MIN, MAX, COLLECT, PERCENTILEDISC, PERCENTILECONT)
      */
     private isAggregateExpression;
     private serializeProperties;
