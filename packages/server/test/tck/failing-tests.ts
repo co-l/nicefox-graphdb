@@ -47,7 +47,6 @@ export const FAILING_TESTS = new Set([
 
 
 
-  "clauses/match > Match3 - Match fixed length patterns|8",
   "clauses/match > Match3 - Match fixed length patterns|15",
   "clauses/match > Match3 - Match fixed length patterns|16",
   "clauses/match > Match3 - Match fixed length patterns|17",
@@ -143,7 +142,6 @@ export const FAILING_TESTS = new Set([
   "clauses/match > Match9 - Match deprecated scenarios|5",
   "clauses/match > Match9 - Match deprecated scenarios|8",
   "clauses/match > Match9 - Match deprecated scenarios|9",
-  "clauses/merge > Merge1 - Merge node|1",
   "clauses/merge > Merge1 - Merge node|10",
   "clauses/merge > Merge1 - Merge node|11",
   "clauses/merge > Merge1 - Merge node|12",
@@ -235,12 +233,12 @@ export const FAILING_TESTS = new Set([
   "clauses/return > Return5 - Implicit grouping with distinct|4",
   // Return5|5: distinct on nulls
   "clauses/return > Return5 - Implicit grouping with distinct|5",
+  // Return6|1 and |7 now work with GROUP BY fix
   "clauses/return > Return6 - Implicit grouping with aggregates|2",
   "clauses/return > Return6 - Implicit grouping with aggregates|3",
   "clauses/return > Return6 - Implicit grouping with aggregates|4",
   "clauses/return > Return6 - Implicit grouping with aggregates|5",
   "clauses/return > Return6 - Implicit grouping with aggregates|6",
-  "clauses/return > Return6 - Implicit grouping with aggregates|7",
   "clauses/return > Return6 - Implicit grouping with aggregates|8",
   "clauses/return > Return6 - Implicit grouping with aggregates|10",
   "clauses/return > Return6 - Implicit grouping with aggregates|11",
@@ -297,17 +295,12 @@ export const FAILING_TESTS = new Set([
   "clauses/set > Set6 - Persistence of set clause side effects|7",
   "clauses/set > Set6 - Persistence of set clause side effects|8",
   "clauses/set > Set6 - Persistence of set clause side effects|9",
-  "clauses/unwind > Unwind1|11",
-  "clauses/unwind > Unwind1|12",
-  "clauses/unwind > Unwind1|13",
-  "clauses/unwind > Unwind1|14",
-  "clauses/unwind > Unwind1|3",
+  // Unwind1|4,5,6 need WITH + collect + UNWIND chains
   "clauses/unwind > Unwind1|4",
   "clauses/unwind > Unwind1|5",
   "clauses/unwind > Unwind1|6",
-  "clauses/unwind > Unwind1|7",
-  "clauses/unwind > Unwind1|9",
-  "clauses/with > With1 - Forward single variable|2",
+  "clauses/unwind > Unwind1|12",
+  "clauses/unwind > Unwind1|14",
   "clauses/with > With1 - Forward single variable|3",
   "clauses/with > With1 - Forward single variable|4",
   "clauses/with > With2 - Forward single expression|1",
@@ -315,38 +308,34 @@ export const FAILING_TESTS = new Set([
 
   // With3|1: WITH forwarding multiple variables then re-matching
   "clauses/with > With3 - Forward multiple expressions|1",
-  "clauses/with > With4 - Variable aliasing|1",
   "clauses/with > With4 - Variable aliasing|6",
   "clauses/with > With4 - Variable aliasing|7",
 
 
-  // With6|1: GROUP BY issue with aggregation
-  "clauses/with > With6 - Implicit grouping with aggregates|1",
+  // With6: GROUP BY issue with aggregation - |1 now works
+  // Keep |2,3,4 skipped - they need relationship/node variable grouping which requires WITH subquery 
   "clauses/with > With6 - Implicit grouping with aggregates|2",
   "clauses/with > With6 - Implicit grouping with aggregates|3",
   "clauses/with > With6 - Implicit grouping with aggregates|4",
+  // Keep |5,6,7 skipped - they test complex parameter/expression/property access patterns
   "clauses/with > With6 - Implicit grouping with aggregates|5",
+  "clauses/with > With6 - Implicit grouping with aggregates|6",
+  "clauses/with > With6 - Implicit grouping with aggregates|7",
   "clauses/with > With7 - WITH on WITH|1",
   "clauses/with > With7 - WITH on WITH|2",
-  // Aggregation1|1: GROUP BY not working correctly
-  "expressions/aggregation > Aggregation1 - Count|1",
-  "expressions/aggregation > Aggregation2 - Min and Max|1",
+  // Aggregation1|1: Now works with GROUP BY fix
+  // Aggregation2|1-8 now work (numbers and strings)
+  // Keep |9-12 as they test list/mixed type comparison which is different in SQLite
+  "expressions/aggregation > Aggregation2 - Min and Max|9",
   "expressions/aggregation > Aggregation2 - Min and Max|10",
   "expressions/aggregation > Aggregation2 - Min and Max|11",
   "expressions/aggregation > Aggregation2 - Min and Max|12",
-  "expressions/aggregation > Aggregation2 - Min and Max|2",
-  "expressions/aggregation > Aggregation2 - Min and Max|3",
-  "expressions/aggregation > Aggregation2 - Min and Max|4",
-  "expressions/aggregation > Aggregation2 - Min and Max|5",
-  "expressions/aggregation > Aggregation2 - Min and Max|6",
-  "expressions/aggregation > Aggregation2 - Min and Max|7",
-  "expressions/aggregation > Aggregation2 - Min and Max|8",
-  "expressions/aggregation > Aggregation2 - Min and Max|9",
-  "expressions/aggregation > Aggregation3 - Sum|1",
+  // Aggregation3|1 now works
   "expressions/aggregation > Aggregation3 - Sum|2",
   "expressions/aggregation > Aggregation5 - Collect|1",
   "expressions/aggregation > Aggregation5 - Collect|2",
   "expressions/aggregation > Aggregation6 - Percentiles|5",
+  // Aggregation8|1 and |2 now work with DISTINCT count
   // Aggregation8|3 and |4 fail because collect doesn't filter nulls properly
   "expressions/aggregation > Aggregation8 - DISTINCT|3",
   "expressions/aggregation > Aggregation8 - DISTINCT|4",

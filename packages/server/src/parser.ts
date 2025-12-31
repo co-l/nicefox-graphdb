@@ -1066,6 +1066,12 @@ export class Parser {
   private parseUnwindExpression(): Expression {
     const token = this.peek();
 
+    // NULL literal - UNWIND null produces empty result
+    if (token.type === "KEYWORD" && token.value.toUpperCase() === "NULL") {
+      this.advance();
+      return { type: "literal", value: null };
+    }
+
     // Parenthesized expression like (first + second)
     if (token.type === "LPAREN") {
       this.advance();
@@ -1271,11 +1277,15 @@ export class Parser {
         this.advance();
         const firstType = this.expectLabelOrType();
         
-        // Check for multiple types: [:TYPE1|TYPE2|TYPE3]
+        // Check for multiple types: [:TYPE1|TYPE2|TYPE3] or [:TYPE1|:TYPE2]
         if (this.check("PIPE")) {
           const types = [firstType];
           while (this.check("PIPE")) {
             this.advance();
+            // Some Cypher dialects allow :TYPE after the pipe, consume the optional colon
+            if (this.check("COLON")) {
+              this.advance();
+            }
             types.push(this.expectLabelOrType());
           }
           edge.types = types;

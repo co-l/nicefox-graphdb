@@ -718,6 +718,19 @@ export class Translator {
         clause.items[0].expression.variable === "*") {
       // Expand * to all bound variables
       const expandedItems: ReturnItem[] = [];
+      
+      // First add WITH aliases (they should appear before MATCH-bound variables in typical queries)
+      const withAliases = (this.ctx as any).withAliases as Map<string, Expression> | undefined;
+      if (withAliases) {
+        for (const [aliasName, _] of withAliases) {
+          // Only add if not already a regular variable (to avoid duplicates)
+          if (!this.ctx.variables.has(aliasName)) {
+            expandedItems.push({ expression: { type: "variable", variable: aliasName } });
+          }
+        }
+      }
+      
+      // Then add regular bound variables
       for (const [varName, varInfo] of this.ctx.variables) {
         expandedItems.push({ expression: { type: "variable", variable: varName } });
       }
@@ -971,6 +984,72 @@ export class Translator {
           filteredNodeAliases.add(relPattern.targetAlias);
         }
       }
+      
+      // Also add any standalone node patterns that are not part of relationship patterns
+      // These need to be cross-joined (e.g., MATCH (x:X), (a)->(b) - x is standalone)
+      for (const [variable, info] of this.ctx.variables) {
+        if (info.type !== "node") continue;
+        if (addedNodeAliases.has(info.alias)) continue;
+        
+        const pattern = (this.ctx as any)[`pattern_${info.alias}`];
+        const isOptional = (this.ctx as any)[`optional_${info.alias}`] === true;
+        
+        if (pattern) {
+          if (isOptional) {
+            // Optional standalone node - LEFT JOIN with its conditions
+            const onConditions: string[] = ["1=1"];
+            const onParams: unknown[] = [];
+            
+            if (pattern.label) {
+              const labelMatch = this.generateLabelMatchCondition(info.alias, pattern.label);
+              onConditions.push(labelMatch.sql);
+              onParams.push(...labelMatch.params);
+            }
+            
+            if (pattern.properties) {
+              for (const [key, value] of Object.entries(pattern.properties)) {
+                if (this.isParameterRef(value as PropertyValue)) {
+                  onConditions.push(`json_extract(${info.alias}.properties, '$.${key}') = ?`);
+                  onParams.push(this.ctx.paramValues[(value as ParameterRef).name]);
+                } else {
+                  onConditions.push(`json_extract(${info.alias}.properties, '$.${key}') = ?`);
+                  onParams.push(value);
+                }
+              }
+            }
+            
+            joinParts.push(`LEFT JOIN nodes ${info.alias} ON ${onConditions.join(" AND ")}`);
+            joinParams.push(...onParams);
+          } else {
+            // Non-optional standalone node - add to FROM (cross join) with WHERE conditions
+            if (fromParts.length === 0) {
+              fromParts.push(`nodes ${info.alias}`);
+            } else {
+              // Cross join - just add to FROM clause for cartesian product
+              fromParts.push(`nodes ${info.alias}`);
+            }
+            
+            if (pattern.label) {
+              const labelMatch = this.generateLabelMatchCondition(info.alias, pattern.label);
+              whereParts.push(labelMatch.sql);
+              whereParams.push(...labelMatch.params);
+            }
+            
+            if (pattern.properties) {
+              for (const [key, value] of Object.entries(pattern.properties)) {
+                if (this.isParameterRef(value as PropertyValue)) {
+                  whereParts.push(`json_extract(${info.alias}.properties, '$.${key}') = ?`);
+                  whereParams.push(this.ctx.paramValues[(value as ParameterRef).name]);
+                } else {
+                  whereParts.push(`json_extract(${info.alias}.properties, '$.${key}') = ?`);
+                  whereParams.push(value);
+                }
+              }
+            }
+          }
+          addedNodeAliases.add(info.alias);
+        }
+      }
     } else {
       // Simple node query (no relationships)
       let hasFromClause = false;
@@ -1136,6 +1215,43 @@ export class Translator {
       sql += ` WHERE ${whereParts.join(" AND ")}`;
     }
 
+    // Add GROUP BY for aggregation (from WITH or RETURN clauses)
+    // When we have aggregates mixed with non-aggregates, non-aggregate expressions become GROUP BY keys
+    const groupByParts: string[] = [];
+    
+    // Check WITH clause for aggregation
+    if (this.ctx.withClauses && this.ctx.withClauses.length > 0) {
+      const lastWithClause = this.ctx.withClauses[this.ctx.withClauses.length - 1];
+      const withHasAggregates = lastWithClause.items.some(item => this.isAggregateExpression(item.expression));
+      
+      if (withHasAggregates) {
+        for (const item of lastWithClause.items) {
+          if (!this.isAggregateExpression(item.expression)) {
+            // Translate the non-aggregate expression and add to GROUP BY
+            const { sql: exprSql } = this.translateExpression(item.expression);
+            groupByParts.push(exprSql);
+          }
+        }
+      }
+    }
+    
+    // Check RETURN clause for aggregation (when no WITH with aggregation)
+    if (groupByParts.length === 0) {
+      const returnHasAggregates = clause.items.some(item => this.isAggregateExpression(item.expression));
+      const nonAggregateItems = clause.items.filter(item => !this.isAggregateExpression(item.expression));
+      
+      if (returnHasAggregates && nonAggregateItems.length > 0) {
+        for (const item of nonAggregateItems) {
+          const { sql: exprSql } = this.translateExpression(item.expression);
+          groupByParts.push(exprSql);
+        }
+      }
+    }
+    
+    if (groupByParts.length > 0) {
+      sql += ` GROUP BY ${groupByParts.join(", ")}`;
+    }
+
     // Add ORDER BY clause - use WITH orderBy if RETURN doesn't have one
     const effectiveOrderBy = clause.orderBy && clause.orderBy.length > 0 ? clause.orderBy : withOrderBy;
     if (effectiveOrderBy && effectiveOrderBy.length > 0) {
@@ -1224,15 +1340,9 @@ export class Translator {
         if (originalInfo && alias) {
           this.ctx.variables.set(alias, originalInfo);
         }
-      } else if (item.expression.type === "property" && alias) {
-        // Property access with alias - this creates a "virtual" variable
-        // We'll track this separately for the return phase
-        if (!(this.ctx as any).withAliases) {
-          (this.ctx as any).withAliases = new Map();
-        }
-        (this.ctx as any).withAliases.set(alias, item.expression);
-      } else if (item.expression.type === "function" && alias) {
-        // Function with alias - track for return phase
+      } else if (alias) {
+        // For any other expression type with an alias (property, function, literal, object, binary, etc.)
+        // we track it as a "virtual" variable for the return/unwind phase
         if (!(this.ctx as any).withAliases) {
           (this.ctx as any).withAliases = new Map();
         }
@@ -1675,13 +1785,19 @@ export class Translator {
     }
     
     // Determine the expression for json_each
-    let jsonExpr: string;
+    let jsonExpr: string = "";
     let params: unknown[] = [];
     
     if (clause.expression.type === "literal") {
-      // Literal array - serialize to JSON
-      jsonExpr = "?";
-      params.push(JSON.stringify(clause.expression.value));
+      // Handle null literal - produces empty result
+      if (clause.expression.value === null) {
+        jsonExpr = "json_array()"; // Empty array produces no rows
+        // No params needed
+      } else {
+        // Literal array - serialize to JSON
+        jsonExpr = "?";
+        params.push(JSON.stringify(clause.expression.value));
+      }
     } else if (clause.expression.type === "parameter") {
       // Parameter - will be resolved at runtime
       jsonExpr = "?";
@@ -1699,12 +1815,27 @@ export class Translator {
         jsonExpr = translated.sql;
         params.push(...translated.params);
       } else {
-        // It's a regular variable
-        const varInfo = this.ctx.variables.get(varName);
-        if (varInfo) {
-          jsonExpr = `${varInfo.alias}.properties`;
+        // Check if it's a previous UNWIND variable
+        const unwindClauses = (this.ctx as any).unwindClauses as Array<{
+          alias: string;
+          variable: string;
+          jsonExpr: string;
+          params: unknown[];
+        }> | undefined;
+        
+        const unwindClause = unwindClauses?.find(u => u.variable === varName);
+        if (unwindClause) {
+          // It's a previous UNWIND variable - use .value to get the nested array
+          jsonExpr = `${unwindClause.alias}.value`;
+          // No additional params needed for this case
         } else {
-          throw new Error(`Unknown variable in UNWIND: ${varName}`);
+          // It's a regular variable
+          const varInfo = this.ctx.variables.get(varName);
+          if (varInfo) {
+            jsonExpr = `${varInfo.alias}.properties`;
+          } else {
+            throw new Error(`Unknown variable in UNWIND: ${varName}`);
+          }
         }
       }
     } else if (clause.expression.type === "property") {
@@ -2100,6 +2231,27 @@ export class Translator {
                 params,
               };
             } else if (arg.type === "variable") {
+              // Check if this is an UNWIND variable first
+              const unwindClauses = (this.ctx as any).unwindClauses as Array<{
+                alias: string;
+                variable: string;
+                jsonExpr: string;
+                params: unknown[];
+              }> | undefined;
+              
+              if (unwindClauses) {
+                const unwindClause = unwindClauses.find(u => u.variable === arg.variable);
+                if (unwindClause) {
+                  tables.push(unwindClause.alias);
+                  // For UNWIND variables, aggregate the value from json_each
+                  return {
+                    sql: `${expr.functionName}(${distinctKeyword}${unwindClause.alias}.value)`,
+                    tables,
+                    params,
+                  };
+                }
+              }
+              
               const varInfo = this.ctx.variables.get(arg.variable!);
               if (!varInfo) {
                 throw new Error(`Unknown variable: ${arg.variable}`);
@@ -3145,6 +3297,14 @@ END FROM (SELECT json_group_array(${valueExpr}) as sv))`,
     // Check if expression is likely a list/array type
     if (expr.type === "literal" && Array.isArray(expr.value)) {
       return true;
+    }
+    if (expr.type === "variable") {
+      // Check if this variable is a WITH alias that references an array
+      const withAliases = (this.ctx as any).withAliases as Map<string, Expression> | undefined;
+      if (withAliases && withAliases.has(expr.variable!)) {
+        const originalExpr = withAliases.get(expr.variable!)!;
+        return this.isListExpression(originalExpr);
+      }
     }
     if (expr.type === "property") {
       // Properties that access array fields - we assume it could be a list
