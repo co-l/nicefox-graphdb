@@ -295,6 +295,25 @@ export class Executor {
                   };
                 }
               }
+            } else if (item.expression.type === "property") {
+              // Handle property access like n.num
+              const variable = item.expression.variable!;
+              const property = item.expression.property!;
+              const id = createdIds.get(variable);
+              
+              if (id) {
+                const nodeResult = this.db.execute(
+                  "SELECT properties FROM nodes WHERE id = ?",
+                  [id]
+                );
+                
+                if (nodeResult.rows.length > 0) {
+                  const props = typeof nodeResult.rows[0].properties === "string"
+                    ? JSON.parse(nodeResult.rows[0].properties)
+                    : nodeResult.rows[0].properties;
+                  resultRow[alias] = props[property];
+                }
+              }
             }
           }
           
@@ -305,7 +324,25 @@ export class Executor {
       }
     });
     
-    return results;
+    // Apply SKIP and LIMIT if present in RETURN clause
+    let finalResults = results;
+    if (returnClause) {
+      if (returnClause.skip !== undefined && returnClause.skip !== null) {
+        const skipValue = typeof returnClause.skip === "number" 
+          ? returnClause.skip 
+          : (params[returnClause.skip] as number) || 0;
+        finalResults = finalResults.slice(skipValue);
+      }
+      
+      if (returnClause.limit !== undefined && returnClause.limit !== null) {
+        const limitValue = typeof returnClause.limit === "number"
+          ? returnClause.limit
+          : (params[returnClause.limit] as number) || 0;
+        finalResults = finalResults.slice(0, limitValue);
+      }
+    }
+    
+    return finalResults;
   }
 
   /**
@@ -778,7 +815,24 @@ export class Executor {
       results.push(resultRow);
     }
     
-    return results;
+    // Apply SKIP and LIMIT from returnClause (mutations already happened, now filter results)
+    let finalResults = results;
+    
+    if (returnClause.skip !== undefined && returnClause.skip !== null) {
+      const skipValue = typeof returnClause.skip === "number" 
+        ? returnClause.skip 
+        : (params[returnClause.skip] as number) || 0;
+      finalResults = finalResults.slice(skipValue);
+    }
+    
+    if (returnClause.limit !== undefined && returnClause.limit !== null) {
+      const limitValue = typeof returnClause.limit === "number"
+        ? returnClause.limit
+        : (params[returnClause.limit] as number) || 0;
+      finalResults = finalResults.slice(0, limitValue);
+    }
+    
+    return finalResults;
   }
 
   /**
@@ -1659,23 +1713,30 @@ export class Executor {
 
     // Build alias map from WITH clauses: alias -> original variable
     // e.g., WITH n AS a creates aliasMap["a"] = "n"
+    // Supports chaining: WITH n AS a, then WITH a AS x -> x points to n
     const aliasMap = new Map<string, string>();
     for (const withClause of withClauses) {
       for (const item of withClause.items) {
         if (item.alias && item.expression.type === "variable" && item.expression.variable) {
           const original = item.expression.variable;
-          // Only track aliases that refer to matched variables
+          // Track aliases that refer to matched variables OR to existing aliases
           if (matchedVariables.has(original)) {
             aliasMap.set(item.alias, original);
+          } else if (aliasMap.has(original)) {
+            // Chained alias: x -> a -> n, resolve the chain
+            aliasMap.set(item.alias, aliasMap.get(original)!);
           }
         }
       }
     }
 
-    // Helper to resolve an alias to its original variable
+    // Helper to resolve an alias to its original variable (follows chains)
     const resolveAlias = (varName: string): string | null => {
       if (matchedVariables.has(varName)) return varName;
-      if (aliasMap.has(varName)) return aliasMap.get(varName)!;
+      if (aliasMap.has(varName)) {
+        // The alias map already stores the fully resolved original (no chains)
+        return aliasMap.get(varName)!;
+      }
       return null;
     };
 

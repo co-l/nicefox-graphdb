@@ -274,6 +274,17 @@ export class Translator {
         let sourceIsNew = false;
         if (rel.source.variable && this.ctx.variables.has(rel.source.variable)) {
             sourceAlias = this.ctx.variables.get(rel.source.variable).alias;
+            // If the new pattern has a label constraint, track it as an additional constraint
+            if (rel.source.label) {
+                if (!this.ctx.additionalLabelConstraints) {
+                    this.ctx.additionalLabelConstraints = [];
+                }
+                this.ctx.additionalLabelConstraints.push({
+                    alias: sourceAlias,
+                    label: rel.source.label,
+                    optional
+                });
+            }
         }
         else if (!rel.source.variable && !rel.source.label && this.ctx.lastAnonymousTargetAlias) {
             // Anonymous source node in a chain - reuse the last anonymous target
@@ -289,6 +300,17 @@ export class Translator {
         let targetIsNew = false;
         if (rel.target.variable && this.ctx.variables.has(rel.target.variable)) {
             targetAlias = this.ctx.variables.get(rel.target.variable).alias;
+            // If the new pattern has a label constraint, track it as an additional constraint
+            if (rel.target.label) {
+                if (!this.ctx.additionalLabelConstraints) {
+                    this.ctx.additionalLabelConstraints = [];
+                }
+                this.ctx.additionalLabelConstraints.push({
+                    alias: targetAlias,
+                    label: rel.target.label,
+                    optional
+                });
+            }
         }
         else {
             targetAlias = this.registerNodePattern(rel.target, optional);
@@ -1094,6 +1116,22 @@ export class Translator {
                         }
                     }
                 }
+            }
+        }
+        // Apply additional label constraints from multi-MATCH patterns
+        // E.g., MATCH (a)-[r]->(b) WITH r, a MATCH (a:X)-[r]->(c) adds label constraint for :X on a
+        const additionalLabelConstraints = this.ctx.additionalLabelConstraints;
+        if (additionalLabelConstraints) {
+            for (const constraint of additionalLabelConstraints) {
+                const labelMatch = this.generateLabelMatchCondition(constraint.alias, constraint.label);
+                if (constraint.optional) {
+                    // For optional matches, allow NULL or the label constraint
+                    whereParts.push(`(${constraint.alias}.id IS NULL OR ${labelMatch.sql})`);
+                }
+                else {
+                    whereParts.push(labelMatch.sql);
+                }
+                whereParams.push(...labelMatch.params);
             }
         }
         // Add UNWIND tables using json_each
@@ -1911,10 +1949,10 @@ export class Translator {
                                 tables.push(...pathInfo.nodeAliases);
                                 // Construct a simplified path object for variable-length paths
                                 const nodesJson = pathInfo.nodeAliases.map(alias => `json_object('id', ${alias}.id, 'label', ${alias}.label, 'properties', ${alias}.properties)`).join(', ');
-                                // For variable-length paths, edges array shows the path length
-                                // Full edge tracking would require extending the CTE
+                                // For variable-length paths, we include empty edges array (actual edges would require extending CTE)
+                                // and add a length field to indicate path depth
                                 return {
-                                    sql: `json_object('nodes', json_array(${nodesJson}), 'length', ${pathInfo.pathCteName}.depth)`,
+                                    sql: `json_object('nodes', json_array(${nodesJson}), 'edges', json_array(), 'length', ${pathInfo.pathCteName}.depth)`,
                                     tables,
                                     params,
                                 };

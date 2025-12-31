@@ -31,25 +31,29 @@ export const FAILING_TESTS = new Set([
   // Create3|5,6: Now work with WITH alias handling for CREATE
   // "clauses/create > Create3 - Interoperation with other clauses|5",
   // "clauses/create > Create3 - Interoperation with other clauses|6",
-  // Create3|7,8: Require chained aliasing (WITH n AS a, WITH a AS x)
-  "clauses/create > Create3 - Interoperation with other clauses|7",
-  "clauses/create > Create3 - Interoperation with other clauses|8",
+  // Create3|7,8: Now work with chained alias support
+  // "clauses/create > Create3 - Interoperation with other clauses|7",
+  // "clauses/create > Create3 - Interoperation with other clauses|8",
   "clauses/create > Create3 - Interoperation with other clauses|12",
-  "clauses/create > Create6 - Persistence of create clause side effects|1",
+  // Create6|1,2: Now work with SKIP/LIMIT fix in tryCreateReturnExecution
+  // "clauses/create > Create6 - Persistence of create clause side effects|1",
+  // "clauses/create > Create6 - Persistence of create clause side effects|2",
+  // Create6|3,4: Now work with SKIP/LIMIT in UNWIND+CREATE
+  // "clauses/create > Create6 - Persistence of create clause side effects|3",
+  // "clauses/create > Create6 - Persistence of create clause side effects|4",
+  // Create6|5-7: Complex UNWIND+CREATE+WITH patterns
+  "clauses/create > Create6 - Persistence of create clause side effects|5",
+  "clauses/create > Create6 - Persistence of create clause side effects|6",
+  "clauses/create > Create6 - Persistence of create clause side effects|7",
+  // Create6|8,9: Now work with SKIP/LIMIT fix in tryCreateReturnExecution
+  // "clauses/create > Create6 - Persistence of create clause side effects|8",
+  // "clauses/create > Create6 - Persistence of create clause side effects|9",
+  // Create6|10-14: Complex UNWIND+CREATE+WITH patterns (relationships)
   "clauses/create > Create6 - Persistence of create clause side effects|10",
   "clauses/create > Create6 - Persistence of create clause side effects|11",
   "clauses/create > Create6 - Persistence of create clause side effects|12",
   "clauses/create > Create6 - Persistence of create clause side effects|13",
   "clauses/create > Create6 - Persistence of create clause side effects|14",
-  "clauses/create > Create6 - Persistence of create clause side effects|2",
-  "clauses/create > Create6 - Persistence of create clause side effects|3",
-  "clauses/create > Create6 - Persistence of create clause side effects|4",
-  "clauses/create > Create6 - Persistence of create clause side effects|5",
-  "clauses/create > Create6 - Persistence of create clause side effects|6",
-  "clauses/create > Create6 - Persistence of create clause side effects|7",
-  // Create6|8,9: Now work
-  // "clauses/create > Create6 - Persistence of create clause side effects|8",
-  // "clauses/create > Create6 - Persistence of create clause side effects|9",
 
 
 
@@ -61,7 +65,9 @@ export const FAILING_TESTS = new Set([
   // "clauses/match > Match3 - Match fixed length patterns|17",
   // "clauses/match > Match3 - Match fixed length patterns|18",
   // "clauses/match > Match3 - Match fixed length patterns|22",
-  "clauses/match > Match3 - Match fixed length patterns|25",
+  // Match3|25: Now works with additional label constraints fix
+  // "clauses/match > Match3 - Match fixed length patterns|25",
+  // Match3|28: NULL variable from OPTIONAL MATCH propagation
   "clauses/match > Match3 - Match fixed length patterns|28",
   "clauses/match > Match4 - Match variable length patterns scenarios|1",
   "clauses/match > Match4 - Match variable length patterns scenarios|3",
@@ -96,26 +102,27 @@ export const FAILING_TESTS = new Set([
   "clauses/match > Match5 - Match variable length patterns over given graphs scenarios|7",
   "clauses/match > Match5 - Match variable length patterns over given graphs scenarios|8",
   "clauses/match > Match5 - Match variable length patterns over given graphs scenarios|9",
-  "clauses/match > Match6 - Match named paths scenarios|1",
-  "clauses/match > Match6 - Match named paths scenarios|10",
-  "clauses/match > Match6 - Match named paths scenarios|11",
-  "clauses/match > Match6 - Match named paths scenarios|12",
+  // Match6|1,2,3,5,6,7,10,11,12,16,18,19: Now work with named path support
+  // "clauses/match > Match6 - Match named paths scenarios|1",
+  // "clauses/match > Match6 - Match named paths scenarios|2",
+  // "clauses/match > Match6 - Match named paths scenarios|3",
+  // "clauses/match > Match6 - Match named paths scenarios|5",
+  // "clauses/match > Match6 - Match named paths scenarios|6",
+  // "clauses/match > Match6 - Match named paths scenarios|7",
+  "clauses/match > Match6 - Match named paths scenarios|9",
+  // "clauses/match > Match6 - Match named paths scenarios|10",
+  // "clauses/match > Match6 - Match named paths scenarios|11",
+  // "clauses/match > Match6 - Match named paths scenarios|12",
   "clauses/match > Match6 - Match named paths scenarios|13",
   "clauses/match > Match6 - Match named paths scenarios|14",
   "clauses/match > Match6 - Match named paths scenarios|15",
-  "clauses/match > Match6 - Match named paths scenarios|16",
+  // "clauses/match > Match6 - Match named paths scenarios|16",
   "clauses/match > Match6 - Match named paths scenarios|17",
-  "clauses/match > Match6 - Match named paths scenarios|18",
-  "clauses/match > Match6 - Match named paths scenarios|19",
-  "clauses/match > Match6 - Match named paths scenarios|2",
+  // "clauses/match > Match6 - Match named paths scenarios|18",
+  // "clauses/match > Match6 - Match named paths scenarios|19",
   "clauses/match > Match6 - Match named paths scenarios|20",
-  "clauses/match > Match6 - Match named paths scenarios|3",
-  "clauses/match > Match6 - Match named paths scenarios|5",
-  "clauses/match > Match6 - Match named paths scenarios|6",
-  "clauses/match > Match6 - Match named paths scenarios|7",
-  "clauses/match > Match6 - Match named paths scenarios|9",
   "clauses/match > Match7 - Optional match|3",
-  // Match7|4,8: edge variable reuse with direction constraints - more complex
+  // Match7|4,8: edge variable reuse with direction constraints - now fails value checks
   "clauses/match > Match7 - Optional match|4",
   "clauses/match > Match7 - Optional match|8",
   "clauses/match > Match7 - Optional match|9",
@@ -126,7 +133,7 @@ export const FAILING_TESTS = new Set([
   // Match7|14,15: variable length optional patterns
   "clauses/match > Match7 - Optional match|14",
   "clauses/match > Match7 - Optional match|15",
-  // Match7|16,18: path constraints - more complex
+  // Match7|16,18: value mismatches
   "clauses/match > Match7 - Optional match|16",
   "clauses/match > Match7 - Optional match|17",
   "clauses/match > Match7 - Optional match|18",
@@ -138,7 +145,7 @@ export const FAILING_TESTS = new Set([
   "clauses/match > Match7 - Optional match|25",
   "clauses/match > Match7 - Optional match|28",
   "clauses/match > Match7 - Optional match|29",
-  // Match7|30 - needs more constraints
+  // Match7|30: value mismatch
   "clauses/match > Match7 - Optional match|30",
   "clauses/match > Match7 - Optional match|31",
 
@@ -172,7 +179,7 @@ export const FAILING_TESTS = new Set([
   // Merge5|1,2: Now work with count() fix
   // "clauses/merge > Merge5 - Merge relationships|1",
   // "clauses/merge > Merge5 - Merge relationships|2",
-  // Merge5|3: count(r) should be 2 for existing relationships but we return 1
+  // Merge5|3: value mismatch
   "clauses/merge > Merge5 - Merge relationships|3",
   // Merge5|4: CREATE+MERGE pattern (needs different handling)
   "clauses/merge > Merge5 - Merge relationships|4",
@@ -205,7 +212,7 @@ export const FAILING_TESTS = new Set([
   // "clauses/merge > Merge7 - Merge relationships - on match|3",
   "clauses/merge > Merge7 - Merge relationships - on match|4",
   "clauses/merge > Merge7 - Merge relationships - on match|5",
-  // Merge8|1: count should be 4 for multiple rows but we return 1
+  // Merge8|1: value mismatch
   "clauses/merge > Merge8 - Merge relationships - on match and on create|1",
   "clauses/merge > Merge9 - Merge clause interoperation with other clauses|1",
   "clauses/merge > Merge9 - Merge clause interoperation with other clauses|2",
@@ -235,7 +242,7 @@ export const FAILING_TESTS = new Set([
   // Return4|11: list comprehension
   "clauses/return > Return4 - Column renaming|11",
 
-  // With5|2: value comparison issue with lists in maps
+  // With5|2: value mismatch
   "clauses/with > With5 - Implicit grouping with DISTINCT|2",
 
   // Return5|4: Now works with 'expr' fallback
@@ -332,27 +339,29 @@ export const FAILING_TESTS = new Set([
   // With3|1: Forwarding multiple node/relationship variables and re-matching
   "clauses/with > With3 - Forward multiple expressions|1",
   "clauses/with > With4 - Variable aliasing|6",
+  // With4|7: value mismatch
   "clauses/with > With4 - Variable aliasing|7",
 
 
-  // With6|2-4: relationship value comparison issues
-  "clauses/with > With6 - Implicit grouping with aggregates|2",
-  "clauses/with > With6 - Implicit grouping with aggregates|3",
-  "clauses/with > With6 - Implicit grouping with aggregates|4",
+  // With6|2-4: Now work
+  // "clauses/with > With6 - Implicit grouping with aggregates|2",
+  // "clauses/with > With6 - Implicit grouping with aggregates|3",
+  // "clauses/with > With6 - Implicit grouping with aggregates|4",
   // With6|5-7: Now work
   // "clauses/with > With6 - Implicit grouping with aggregates|5",
   // "clauses/with > With6 - Implicit grouping with aggregates|6",
   // "clauses/with > With6 - Implicit grouping with aggregates|7",
   "clauses/with > With7 - WITH on WITH|1",
+  // With7|2: value mismatch
   "clauses/with > With7 - WITH on WITH|2",
   // Aggregation1|1: Now works with GROUP BY fix
   // Aggregation2|9,10: Now work
   // "expressions/aggregation > Aggregation2 - Min and Max|9",
   // "expressions/aggregation > Aggregation2 - Min and Max|10",
-  // Aggregation2|11,12: mixed value comparison issues (max of string vs int)
+  // Aggregation2|11,12: value mismatches
   "expressions/aggregation > Aggregation2 - Min and Max|11",
   "expressions/aggregation > Aggregation2 - Min and Max|12",
-  // Aggregation3|2: sum overflow value comparison
+  // Aggregation3|2: value mismatch
   "expressions/aggregation > Aggregation3 - Sum|2",
   // Aggregation5|1-2: Now work with null filtering
   // "expressions/aggregation > Aggregation5 - Collect|1",
