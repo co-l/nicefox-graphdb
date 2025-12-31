@@ -52,8 +52,9 @@ export const FAILING_TESTS = new Set([
 
 
 
-  "clauses/match > Match3 - Match fixed length patterns|15",
-  "clauses/match > Match3 - Match fixed length patterns|16",
+  // Match3|15,16: Now work with relationship uniqueness constraint
+  // "clauses/match > Match3 - Match fixed length patterns|15",
+  // "clauses/match > Match3 - Match fixed length patterns|16",
   // Match3|17,18,22: Now work
   // "clauses/match > Match3 - Match fixed length patterns|17",
   // "clauses/match > Match3 - Match fixed length patterns|18",

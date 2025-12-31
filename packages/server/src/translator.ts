@@ -392,10 +392,17 @@ export class Translator {
       targetIsNew = true;
     }
 
-    const edgeAlias = `e${this.ctx.aliasCounter++}`;
-
-    if (rel.edge.variable) {
-      this.ctx.variables.set(rel.edge.variable, { type: "edge", alias: edgeAlias });
+    // Check if edge variable is already registered (for multi-MATCH with same edge variable)
+    let edgeAlias: string;
+    let edgeIsNew = false;
+    if (rel.edge.variable && this.ctx.variables.has(rel.edge.variable)) {
+      edgeAlias = this.ctx.variables.get(rel.edge.variable)!.alias;
+    } else {
+      edgeAlias = `e${this.ctx.aliasCounter++}`;
+      edgeIsNew = true;
+      if (rel.edge.variable) {
+        this.ctx.variables.set(rel.edge.variable, { type: "edge", alias: edgeAlias });
+      }
     }
 
     (this.ctx as any)[`pattern_${edgeAlias}`] = rel.edge;
@@ -417,6 +424,7 @@ export class Translator {
       optional,
       sourceIsNew,
       targetIsNew,
+      edgeIsNew,
       isVariableLength,
       minHops: rel.edge.minHops,
       maxHops: rel.edge.maxHops,
@@ -803,6 +811,8 @@ export class Translator {
     if (relPatterns && relPatterns.length > 0) {
       // Track which node aliases we've already added to FROM/JOIN
       const addedNodeAliases = new Set<string>();
+      // Track which edge aliases we've already added to FROM/JOIN
+      const addedEdgeAliases = new Set<string>();
       // Track which node aliases have had their filters added (to avoid duplicates)
       const filteredNodeAliases = new Set<string>();
 
@@ -895,8 +905,16 @@ export class Translator {
           }
         }
 
-        joinParts.push(`${joinType} edges ${relPattern.edgeAlias} ON ${edgeOnConditions.join(" AND ")}`);
-        joinParams.push(...edgeOnParams);
+        // Only add edge join if this edge alias hasn't been added yet
+        if (!addedEdgeAliases.has(relPattern.edgeAlias)) {
+          joinParts.push(`${joinType} edges ${relPattern.edgeAlias} ON ${edgeOnConditions.join(" AND ")}`);
+          joinParams.push(...edgeOnParams);
+          addedEdgeAliases.add(relPattern.edgeAlias);
+        } else {
+          // Edge already joined - just add any additional type/property filters to WHERE
+          // (The ON conditions would be redundant but filters might differ)
+          // Note: edgeOnParams were already added when the edge was first joined
+        }
 
         // Build ON conditions for the target node join
         let targetOnConditions: string[] = [];
@@ -1009,6 +1027,79 @@ export class Translator {
             }
           }
           filteredNodeAliases.add(relPattern.targetAlias);
+        }
+      }
+      
+      // Add relationship uniqueness constraint for edges in connected chains
+      // In Cypher, when matching a pattern like (a)-[r1]->(b)-[r2]->(c), r1 and r2 must be different relationships
+      // BUT edges from separate MATCH clauses or disconnected patterns don't need to be distinct
+      // AND if the same edge variable is used twice, no uniqueness constraint is needed (it's the same edge)
+      if (relPatterns.length > 1) {
+        // Build connectivity graph to find chains of connected relationships
+        // Two relationships are connected if they share a node (source/target)
+        const edgeGroups: number[][] = []; // Groups of edge indices that are connected
+        const visited = new Set<number>();
+        
+        for (let i = 0; i < relPatterns.length; i++) {
+          if (visited.has(i)) continue;
+          
+          // BFS to find all connected edges
+          const group: number[] = [];
+          const queue = [i];
+          
+          while (queue.length > 0) {
+            const current = queue.shift()!;
+            if (visited.has(current)) continue;
+            visited.add(current);
+            group.push(current);
+            
+            const currentPattern = relPatterns[current];
+            
+            // Find all edges that share a node with current edge
+            for (let j = 0; j < relPatterns.length; j++) {
+              if (visited.has(j)) continue;
+              const otherPattern = relPatterns[j];
+              
+              // Check if they share any node
+              if (currentPattern.sourceAlias === otherPattern.sourceAlias ||
+                  currentPattern.sourceAlias === otherPattern.targetAlias ||
+                  currentPattern.targetAlias === otherPattern.sourceAlias ||
+                  currentPattern.targetAlias === otherPattern.targetAlias) {
+                queue.push(j);
+              }
+            }
+          }
+          
+          if (group.length > 1) {
+            edgeGroups.push(group);
+          }
+        }
+        
+        // Only add uniqueness constraints for edges in the same connected group
+        // Skip if they have the same edge alias (same variable used twice)
+        for (const group of edgeGroups) {
+          for (let i = 0; i < group.length; i++) {
+            for (let j = i + 1; j < group.length; j++) {
+              const edge1Idx = group[i];
+              const edge2Idx = group[j];
+              const edge1Alias = relPatterns[edge1Idx].edgeAlias;
+              const edge2Alias = relPatterns[edge2Idx].edgeAlias;
+              
+              // Skip if same edge alias (same variable referenced multiple times)
+              if (edge1Alias === edge2Alias) continue;
+              
+              const edge1Optional = relPatterns[edge1Idx].optional;
+              const edge2Optional = relPatterns[edge2Idx].optional;
+              
+              // For non-optional edges, require distinct IDs
+              // For optional edges, allow NULL (edge not matched) OR distinct
+              if (edge1Optional || edge2Optional) {
+                whereParts.push(`(${edge1Alias}.id IS NULL OR ${edge2Alias}.id IS NULL OR ${edge1Alias}.id <> ${edge2Alias}.id)`);
+              } else {
+                whereParts.push(`${edge1Alias}.id <> ${edge2Alias}.id`);
+              }
+            }
+          }
         }
       }
       
