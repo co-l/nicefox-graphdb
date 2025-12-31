@@ -510,10 +510,14 @@ export class Executor {
             return null;
         // Find CREATE and RETURN clauses
         const createClauses = [];
+        const setClauses = [];
         let returnClause = null;
         for (const clause of clauses) {
             if (clause.type === "CREATE") {
                 createClauses.push(clause);
+            }
+            else if (clause.type === "SET") {
+                setClauses.push(clause);
             }
             else if (clause.type === "RETURN") {
                 returnClause = clause;
@@ -543,6 +547,17 @@ export class Executor {
                         createdIds.set(pattern.variable, id);
                     }
                 }
+            }
+        }
+        // Execute SET clauses if present
+        if (setClauses.length > 0) {
+            // Convert createdIds Map to Record for executeSetWithResolvedIds
+            const resolvedIds = {};
+            for (const [variable, id] of createdIds) {
+                resolvedIds[variable] = id;
+            }
+            for (const setClause of setClauses) {
+                this.executeSetWithResolvedIds(setClause, resolvedIds, params);
             }
         }
         // Now query the created nodes/edges based on RETURN items
@@ -576,13 +591,13 @@ export class Executor {
                     // Try nodes first
                     const nodeResult = this.db.execute(`SELECT json_extract(properties, '$.${property}') as value FROM nodes WHERE id = ?`, [id]);
                     if (nodeResult.rows.length > 0) {
-                        resultRow[alias] = nodeResult.rows[0].value;
+                        resultRow[alias] = this.deepParseJson(nodeResult.rows[0].value);
                     }
                     else {
                         // Try edges if not found in nodes
                         const edgeResult = this.db.execute(`SELECT json_extract(properties, '$.${property}') as value FROM edges WHERE id = ?`, [id]);
                         if (edgeResult.rows.length > 0) {
-                            resultRow[alias] = edgeResult.rows[0].value;
+                            resultRow[alias] = this.deepParseJson(edgeResult.rows[0].value);
                         }
                     }
                 }
@@ -1565,13 +1580,13 @@ export class Executor {
                         // Try nodes first
                         const nodeResult = this.db.execute(`SELECT json_extract(properties, '$.${property}') as value FROM nodes WHERE id = ?`, [nodeId]);
                         if (nodeResult.rows.length > 0) {
-                            resultRow[alias] = nodeResult.rows[0].value;
+                            resultRow[alias] = this.deepParseJson(nodeResult.rows[0].value);
                         }
                         else {
                             // Try edges
                             const edgeResult = this.db.execute(`SELECT json_extract(properties, '$.${property}') as value FROM edges WHERE id = ?`, [nodeId]);
                             if (edgeResult.rows.length > 0) {
-                                resultRow[alias] = edgeResult.rows[0].value;
+                                resultRow[alias] = this.deepParseJson(edgeResult.rows[0].value);
                             }
                         }
                     }
@@ -1822,12 +1837,32 @@ export class Executor {
                 // Try nodes first
                 const nodeResult = this.db.execute(`SELECT json_extract(properties, '$.${propName}') AS value FROM nodes WHERE id = ?`, [entityId]);
                 if (nodeResult.rows.length > 0) {
-                    return nodeResult.rows[0].value;
+                    const value = nodeResult.rows[0].value;
+                    // json_extract returns JSON-encoded strings for arrays/objects
+                    // Parse if it looks like JSON
+                    if (typeof value === "string" && (value.startsWith("[") || value.startsWith("{"))) {
+                        try {
+                            return JSON.parse(value);
+                        }
+                        catch {
+                            return value;
+                        }
+                    }
+                    return value;
                 }
                 // Try edges
                 const edgeResult = this.db.execute(`SELECT json_extract(properties, '$.${propName}') AS value FROM edges WHERE id = ?`, [entityId]);
                 if (edgeResult.rows.length > 0) {
-                    return edgeResult.rows[0].value;
+                    const value = edgeResult.rows[0].value;
+                    if (typeof value === "string" && (value.startsWith("[") || value.startsWith("{"))) {
+                        try {
+                            return JSON.parse(value);
+                        }
+                        catch {
+                            return value;
+                        }
+                    }
+                    return value;
                 }
                 return null;
             }
@@ -1841,6 +1876,16 @@ export class Executor {
                 }
                 switch (expr.operator) {
                     case "+":
+                        // Handle list concatenation
+                        if (Array.isArray(left) && Array.isArray(right)) {
+                            return [...left, ...right];
+                        }
+                        if (Array.isArray(left)) {
+                            return [...left, right];
+                        }
+                        if (Array.isArray(right)) {
+                            return [left, ...right];
+                        }
                         return left + right;
                     case "-":
                         return left - right;

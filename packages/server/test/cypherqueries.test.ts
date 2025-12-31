@@ -1807,6 +1807,30 @@ describe("CypherQueries.json Patterns", () => {
       expect(result.data).toHaveLength(1);
       expect(result.data[0].chain).toEqual([1, 2, 3]);
     });
+
+    it("concatenates list in CREATE+SET via MATCH", () => {
+      // MATCH + SET should work
+      exec("CREATE (b {numbers: [1, 2, 3]})");
+      const matchResult = exec(`
+        MATCH (b)
+        SET b.numbers = b.numbers + [4, 5]
+        RETURN b.numbers AS nums
+      `);
+      expect(matchResult.data).toHaveLength(1);
+      expect(matchResult.data[0].nums).toEqual([1, 2, 3, 4, 5]);
+    });
+
+    it("concatenates list in CREATE+SET single query", () => {
+      // CREATE + SET in single query
+      const result = exec(`
+        CREATE (a {numbers: [1, 2, 3]})
+        SET a.numbers = a.numbers + [4, 5]
+        RETURN a.numbers AS nums
+      `);
+      
+      expect(result.data).toHaveLength(1);
+      expect(result.data[0].nums).toEqual([1, 2, 3, 4, 5]);
+    });
   });
 
   describe("Multiple Labels", () => {

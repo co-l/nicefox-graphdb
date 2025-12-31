@@ -50,6 +50,11 @@ export declare class Translator {
     private isListExpression;
     private wrapForArray;
     private wrapForArithmetic;
+    /**
+     * Translate an expression for a SET on a just-created node.
+     * Property references need to use subqueries since the node ID isn't a table alias.
+     */
+    private translateExpressionForCreatedNode;
     private translateComparisonExpression;
     private wrapForComparison;
     private translateObjectLiteral;

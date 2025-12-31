@@ -649,11 +649,14 @@ export class Executor {
     
     // Find CREATE and RETURN clauses
     const createClauses: CreateClause[] = [];
+    const setClauses: SetClause[] = [];
     let returnClause: ReturnClause | null = null;
     
     for (const clause of clauses) {
       if (clause.type === "CREATE") {
         createClauses.push(clause);
+      } else if (clause.type === "SET") {
+        setClauses.push(clause);
       } else if (clause.type === "RETURN") {
         returnClause = clause;
       } else if (clause.type === "MATCH") {
@@ -687,6 +690,19 @@ export class Executor {
             createdIds.set(pattern.variable, id);
           }
         }
+      }
+    }
+    
+    // Execute SET clauses if present
+    if (setClauses.length > 0) {
+      // Convert createdIds Map to Record for executeSetWithResolvedIds
+      const resolvedIds: Record<string, string> = {};
+      for (const [variable, id] of createdIds) {
+        resolvedIds[variable] = id;
+      }
+      
+      for (const setClause of setClauses) {
+        this.executeSetWithResolvedIds(setClause, resolvedIds, params);
       }
     }
     
@@ -732,7 +748,7 @@ export class Executor {
           );
           
           if (nodeResult.rows.length > 0) {
-            resultRow[alias] = nodeResult.rows[0].value;
+            resultRow[alias] = this.deepParseJson(nodeResult.rows[0].value);
           } else {
             // Try edges if not found in nodes
             const edgeResult = this.db.execute(
@@ -741,7 +757,7 @@ export class Executor {
             );
             
             if (edgeResult.rows.length > 0) {
-              resultRow[alias] = edgeResult.rows[0].value;
+              resultRow[alias] = this.deepParseJson(edgeResult.rows[0].value);
             }
           }
         }
@@ -1934,7 +1950,7 @@ export class Executor {
             );
             
             if (nodeResult.rows.length > 0) {
-              resultRow[alias] = nodeResult.rows[0].value;
+              resultRow[alias] = this.deepParseJson(nodeResult.rows[0].value);
             } else {
               // Try edges
               const edgeResult = this.db.execute(
@@ -1942,7 +1958,7 @@ export class Executor {
                 [nodeId]
               );
               if (edgeResult.rows.length > 0) {
-                resultRow[alias] = edgeResult.rows[0].value;
+                resultRow[alias] = this.deepParseJson(edgeResult.rows[0].value);
               }
             }
           }
@@ -2275,7 +2291,17 @@ export class Executor {
           [entityId]
         );
         if (nodeResult.rows.length > 0) {
-          return nodeResult.rows[0].value;
+          const value = nodeResult.rows[0].value;
+          // json_extract returns JSON-encoded strings for arrays/objects
+          // Parse if it looks like JSON
+          if (typeof value === "string" && (value.startsWith("[") || value.startsWith("{"))) {
+            try {
+              return JSON.parse(value);
+            } catch {
+              return value;
+            }
+          }
+          return value;
         }
         // Try edges
         const edgeResult = this.db.execute(
@@ -2283,7 +2309,15 @@ export class Executor {
           [entityId]
         );
         if (edgeResult.rows.length > 0) {
-          return edgeResult.rows[0].value;
+          const value = edgeResult.rows[0].value;
+          if (typeof value === "string" && (value.startsWith("[") || value.startsWith("{"))) {
+            try {
+              return JSON.parse(value);
+            } catch {
+              return value;
+            }
+          }
+          return value;
         }
         return null;
       }
@@ -2299,6 +2333,16 @@ export class Executor {
         
         switch (expr.operator) {
           case "+":
+            // Handle list concatenation
+            if (Array.isArray(left) && Array.isArray(right)) {
+              return [...left, ...right];
+            }
+            if (Array.isArray(left)) {
+              return [...left, right];
+            }
+            if (Array.isArray(right)) {
+              return [left, ...right];
+            }
             return (left as number) + (right as number);
           case "-":
             return (left as number) - (right as number);

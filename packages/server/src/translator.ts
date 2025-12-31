@@ -605,12 +605,25 @@ export class Translator {
       
       // Check if the value is a dynamic expression (function, binary op, etc.) that needs SQL translation
       if (assignment.value.type === "function" || assignment.value.type === "binary") {
-        const { sql: exprSql, params: exprParams } = this.translateExpression(assignment.value);
-        // Use json_set with the SQL expression directly
-        statements.push({
-          sql: `UPDATE ${table} SET properties = json_set(properties, '$.${assignment.property}', ${exprSql}) WHERE id = ?`,
-          params: [...exprParams, varInfo.alias],
-        });
+        // Check if the target variable was just created (alias looks like a UUID)
+        // In that case, we need to use a subquery-based approach for property references
+        const isCreatedNode = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(varInfo.alias);
+        
+        if (isCreatedNode) {
+          // For expressions on created nodes, translate with subquery pattern
+          const { sql: exprSql, params: exprParams } = this.translateExpressionForCreatedNode(assignment.value, varInfo.alias);
+          statements.push({
+            sql: `UPDATE ${table} SET properties = json_set(properties, '$.${assignment.property}', ${exprSql}) WHERE id = ?`,
+            params: [...exprParams, varInfo.alias],
+          });
+        } else {
+          const { sql: exprSql, params: exprParams } = this.translateExpression(assignment.value);
+          // Use json_set with the SQL expression directly
+          statements.push({
+            sql: `UPDATE ${table} SET properties = json_set(properties, '$.${assignment.property}', ${exprSql}) WHERE id = ?`,
+            params: [...exprParams, varInfo.alias],
+          });
+        }
       } else {
         const value = this.evaluateExpression(assignment.value);
         // If value is null, remove the property instead of setting it to null
@@ -3516,6 +3529,69 @@ END FROM (SELECT json_group_array(${valueExpr}) as sv))`,
       }
     }
     return sql;
+  }
+
+  /**
+   * Translate an expression for a SET on a just-created node.
+   * Property references need to use subqueries since the node ID isn't a table alias.
+   */
+  private translateExpressionForCreatedNode(
+    expr: Expression,
+    nodeId: string
+  ): { sql: string; params: unknown[] } {
+    const params: unknown[] = [];
+
+    switch (expr.type) {
+      case "literal":
+        if (Array.isArray(expr.value)) {
+          return this.translateArrayLiteral(expr.value as PropertyValue[]);
+        }
+        const value = expr.value === true ? 1 : expr.value === false ? 0 : expr.value;
+        params.push(value);
+        return { sql: "?", params };
+
+      case "property": {
+        // Use subquery to get property from the created node
+        const propName = expr.property!;
+        params.push(nodeId);
+        return {
+          sql: `(SELECT json_extract(properties, '$.${propName}') FROM nodes WHERE id = ?)`,
+          params,
+        };
+      }
+
+      case "binary": {
+        const leftResult = this.translateExpressionForCreatedNode(expr.left!, nodeId);
+        const rightResult = this.translateExpressionForCreatedNode(expr.right!, nodeId);
+        params.push(...leftResult.params, ...rightResult.params);
+
+        // Handle list concatenation
+        const leftIsList = this.isListExpression(expr.left!);
+        const rightIsList = this.isListExpression(expr.right!);
+
+        if (expr.operator === "+" && (leftIsList || rightIsList || expr.left!.type === "property" || expr.right!.type === "property")) {
+          // Use runtime list concatenation with json_each
+          return {
+            sql: `(SELECT json_group_array(value) FROM (
+              SELECT value FROM json_each(${leftResult.sql})
+              UNION ALL
+              SELECT value FROM json_each(${rightResult.sql})
+            ))`,
+            params,
+          };
+        }
+
+        return {
+          sql: `(${leftResult.sql} ${expr.operator} ${rightResult.sql})`,
+          params,
+        };
+      }
+
+      default:
+        // Fall back to regular translation for other expression types
+        const result = this.translateExpression(expr);
+        return { sql: result.sql, params: result.params };
+    }
   }
 
   private translateComparisonExpression(expr: Expression): { sql: string; tables: string[]; params: unknown[] } {
