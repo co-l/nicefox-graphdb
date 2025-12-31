@@ -2358,6 +2358,9 @@ export class Executor {
     // e.g., WITH n AS a creates aliasMap["a"] = "n"
     // Supports chaining: WITH n AS a, then WITH a AS x -> x points to n
     const aliasMap = new Map<string, string>();
+    // Also track property expression aliases: alias -> { variable, property }
+    // e.g., WITH n.num AS num creates propertyAliasMap["num"] = { variable: "n", property: "num" }
+    const propertyAliasMap = new Map<string, { variable: string; property: string }>();
     for (const withClause of withClauses) {
       for (const item of withClause.items) {
         if (item.alias && item.expression.type === "variable" && item.expression.variable) {
@@ -2369,6 +2372,12 @@ export class Executor {
             // Chained alias: x -> a -> n, resolve the chain
             aliasMap.set(item.alias, aliasMap.get(original)!);
           }
+        } else if (item.alias && item.expression.type === "property" && item.expression.variable && item.expression.property) {
+          // Track property expression aliases
+          propertyAliasMap.set(item.alias, { 
+            variable: item.expression.variable, 
+            property: item.expression.property 
+          });
         }
       }
     }
@@ -2459,23 +2468,33 @@ export class Executor {
 
     // Only use multi-phase WITH handling if aliases are actually used in mutations
     const needsWithAliasHandling = aliasesUsedInMutation.size > 0;
+    
+    // Check if RETURN references any property aliases (like `num` from `WITH n.num AS num`)
+    // This requires multi-phase execution because the translator can't handle property aliases
+    let returnUsesPropertyAliases = false;
+    if (returnClause && propertyAliasMap.size > 0) {
+      const returnVars = this.collectReturnVariables(returnClause);
+      returnUsesPropertyAliases = returnVars.some(v => propertyAliasMap.has(v));
+    }
 
     // DEBUG (disabled)
     // console.log("tryMultiPhaseExecution debug:", {
     //   withClauses: withClauses.length,
     //   aliasMap: [...aliasMap.entries()],
+    //   propertyAliasMap: [...propertyAliasMap.entries()],
     //   aliasesUsedInMutation: [...aliasesUsedInMutation],
     //   needsWithAliasHandling,
+    //   returnUsesPropertyAliases,
     //   createClauses: createClauses.length,
     // });
 
-    // If WITH clauses are present but no aliases are used in mutations, use standard execution
-    if (withClauses.length > 0 && !needsWithAliasHandling) {
+    // If WITH clauses are present but no aliases are used in mutations AND no property aliases in RETURN, use standard execution
+    if (withClauses.length > 0 && !needsWithAliasHandling && !returnUsesPropertyAliases) {
       return null;
     }
 
     // If no relationship patterns and nothing references matched vars, use standard execution
-    if (!hasRelationshipPattern && allReferencedVars.size === 0 && !needsWithAliasHandling) {
+    if (!hasRelationshipPattern && allReferencedVars.size === 0 && !needsWithAliasHandling && !returnUsesPropertyAliases) {
       return null;
     }
 
@@ -2508,6 +2527,7 @@ export class Executor {
       allReferencedVars,
       matchedVariables,
       aliasMap,
+      propertyAliasMap,
       params
     );
   }
@@ -2591,20 +2611,44 @@ export class Executor {
     referencedVars: Set<string>,
     allMatchedVars: Set<string>,
     aliasMap: Map<string, string>,
+    propertyAliasMap: Map<string, { variable: string; property: string }>,
     params: Record<string, unknown>
   ): Record<string, unknown>[] {
     // Phase 1: Execute MATCH to get actual node/edge IDs
     const varsToResolve = referencedVars.size > 0 ? referencedVars : allMatchedVars;
+    
+    // Also need to include variables referenced by property aliases
+    for (const [_, propInfo] of propertyAliasMap) {
+      if (allMatchedVars.has(propInfo.variable)) {
+        varsToResolve.add(propInfo.variable);
+      }
+    }
+    
+    // Build RETURN items: IDs for all variables + property values for property aliases
+    const returnItems: { expression: Expression; alias: string }[] = [];
+    
+    // Add ID lookups for variables
+    for (const v of varsToResolve) {
+      returnItems.push({
+        expression: { type: "function" as const, functionName: "ID", args: [{ type: "variable" as const, variable: v }] },
+        alias: `_id_${v}`,
+      });
+    }
+    
+    // Add property value lookups for property aliases
+    for (const [alias, propInfo] of propertyAliasMap) {
+      returnItems.push({
+        expression: { type: "property" as const, variable: propInfo.variable, property: propInfo.property },
+        alias: `_prop_${alias}`,
+      });
+    }
     
     const matchQuery: Query = {
       clauses: [
         ...matchClauses,
         {
           type: "RETURN" as const,
-          items: Array.from(varsToResolve).map((v) => ({
-            expression: { type: "function" as const, functionName: "ID", args: [{ type: "variable" as const, variable: v }] },
-            alias: `_id_${v}`,
-          })),
+          items: returnItems,
         },
       ],
     };
@@ -2628,6 +2672,8 @@ export class Executor {
     // Phase 2: Execute CREATE/SET/DELETE for each matched row
     // Keep track of all resolved IDs (including newly created nodes) for RETURN
     const allResolvedIds: Record<string, string>[] = [];
+    // Also keep track of captured property values (before nodes are deleted)
+    const allCapturedPropertyValues: Record<string, unknown>[] = [];
     
     this.db.transaction(() => {
       for (const row of matchedRows) {
@@ -2643,6 +2689,13 @@ export class Executor {
           if (resolvedIds[original]) {
             resolvedIds[alias] = resolvedIds[original];
           }
+        }
+        
+        // Capture property alias values BEFORE any mutations (especially DELETE)
+        // e.g., WITH n.num AS num -> capturedPropertyValues["num"] = value
+        const capturedPropertyValues: Record<string, unknown> = {};
+        for (const [alias, _] of propertyAliasMap) {
+          capturedPropertyValues[alias] = row[`_prop_${alias}`];
         }
 
         // Execute CREATE with resolved IDs (this mutates resolvedIds to include new node IDs)
@@ -2662,6 +2715,8 @@ export class Executor {
         
         // Save the resolved IDs for this row (including newly created nodes)
         allResolvedIds.push({ ...resolvedIds });
+        // Save the captured property values
+        allCapturedPropertyValues.push(capturedPropertyValues);
       }
     });
 
@@ -2670,15 +2725,18 @@ export class Executor {
       // Check if RETURN references any newly created variables (not in matched vars or aliases)
       const returnVars = this.collectReturnVariables(returnClause);
       const referencesCreatedVars = returnVars.some(v => 
-        !allMatchedVars.has(v) && !aliasMap.has(v)
+        !allMatchedVars.has(v) && !aliasMap.has(v) && !propertyAliasMap.has(v)
       );
+      
+      // Check if RETURN references any property aliases (like `num` from `WITH n.num AS num`)
+      const referencesPropertyAliases = returnVars.some(v => propertyAliasMap.has(v));
       
       // If SET or DELETE was executed or WITH clauses are present, we need to use buildReturnResults
       // because aliased variables need to be resolved from our ID map
       // For DELETE, nodes are gone so we can't query them - we need to return based on original match count
-      if (referencesCreatedVars || setClauses.length > 0 || deleteClauses.length > 0 || withClauses.length > 0) {
-        // RETURN references created nodes, aliased vars, or data was modified - use buildReturnResults with resolved IDs
-        return this.buildReturnResults(returnClause, allResolvedIds);
+      if (referencesCreatedVars || referencesPropertyAliases || setClauses.length > 0 || deleteClauses.length > 0 || withClauses.length > 0) {
+        // RETURN references created nodes, aliased vars, property aliases, or data was modified - use buildReturnResults with resolved IDs
+        return this.buildReturnResults(returnClause, allResolvedIds, allCapturedPropertyValues, propertyAliasMap);
       } else {
         // RETURN only references matched nodes and no mutations - use translator-based approach
         const fullQuery: Query = {
@@ -2734,7 +2792,9 @@ export class Executor {
    */
   private buildReturnResults(
     returnClause: ReturnClause,
-    allResolvedIds: Record<string, string>[]
+    allResolvedIds: Record<string, string>[],
+    allCapturedPropertyValues: Record<string, unknown>[] = [],
+    propertyAliasMap: Map<string, { variable: string; property: string }> = new Map()
   ): Record<string, unknown>[] {
     // Check if all return items are aggregates (like count(*))
     // If so, we should return a single aggregated row instead of per-row results
@@ -2752,29 +2812,127 @@ export class Executor {
         
         if (funcName === "COUNT") {
           resultRow[alias] = allResolvedIds.length;
+        } else if (funcName === "SUM") {
+          // Sum values - may reference property aliases
+          const arg = item.expression.args?.[0];
+          if (arg?.type === "variable" && arg.variable) {
+            const varName = arg.variable;
+            let sum = 0;
+            
+            // Check if this variable is a property alias
+            if (propertyAliasMap.has(varName)) {
+              // Sum the captured property values
+              for (const capturedValues of allCapturedPropertyValues) {
+                const value = capturedValues[varName];
+                if (typeof value === "number") {
+                  sum += value;
+                } else if (typeof value === "string") {
+                  const parsed = parseFloat(value);
+                  if (!isNaN(parsed)) sum += parsed;
+                }
+              }
+            }
+            resultRow[alias] = sum;
+          }
         } else if (funcName === "COLLECT") {
           // Collect all values for the variable
           const arg = item.expression.args?.[0];
           if (arg?.type === "variable" && arg.variable) {
             const values: unknown[] = [];
-            for (const resolvedIds of allResolvedIds) {
-              const nodeId = resolvedIds[arg.variable];
-              if (nodeId) {
-                const nodeResult = this.db.execute(
-                  "SELECT id, label, properties FROM nodes WHERE id = ?",
-                  [nodeId]
-                );
-                if (nodeResult.rows.length > 0) {
-                  const row = nodeResult.rows[0];
-                  values.push({
-                    id: row.id,
-                    label: this.normalizeLabelForOutput(row.label),
-                    properties: typeof row.properties === "string" ? JSON.parse(row.properties) : row.properties,
-                  });
+            const varName = arg.variable;
+            
+            // Check if this variable is a property alias
+            if (propertyAliasMap.has(varName)) {
+              // Collect the captured property values
+              for (const capturedValues of allCapturedPropertyValues) {
+                values.push(capturedValues[varName]);
+              }
+            } else {
+              // It's a node/edge variable - query from database
+              for (const resolvedIds of allResolvedIds) {
+                const nodeId = resolvedIds[varName];
+                if (nodeId) {
+                  const nodeResult = this.db.execute(
+                    "SELECT id, label, properties FROM nodes WHERE id = ?",
+                    [nodeId]
+                  );
+                  if (nodeResult.rows.length > 0) {
+                    const row = nodeResult.rows[0];
+                    values.push({
+                      id: row.id,
+                      label: this.normalizeLabelForOutput(row.label),
+                      properties: typeof row.properties === "string" ? JSON.parse(row.properties) : row.properties,
+                    });
+                  }
                 }
               }
             }
             resultRow[alias] = values;
+          }
+        } else if (funcName === "AVG") {
+          // Average values - may reference property aliases
+          const arg = item.expression.args?.[0];
+          if (arg?.type === "variable" && arg.variable) {
+            const varName = arg.variable;
+            let sum = 0;
+            let count = 0;
+            
+            // Check if this variable is a property alias
+            if (propertyAliasMap.has(varName)) {
+              // Average the captured property values
+              for (const capturedValues of allCapturedPropertyValues) {
+                const value = capturedValues[varName];
+                if (typeof value === "number") {
+                  sum += value;
+                  count++;
+                } else if (typeof value === "string") {
+                  const parsed = parseFloat(value);
+                  if (!isNaN(parsed)) {
+                    sum += parsed;
+                    count++;
+                  }
+                }
+              }
+            }
+            resultRow[alias] = count > 0 ? sum / count : null;
+          }
+        } else if (funcName === "MIN") {
+          // Min value - may reference property aliases
+          const arg = item.expression.args?.[0];
+          if (arg?.type === "variable" && arg.variable) {
+            const varName = arg.variable;
+            let min: number | null = null;
+            
+            // Check if this variable is a property alias
+            if (propertyAliasMap.has(varName)) {
+              for (const capturedValues of allCapturedPropertyValues) {
+                const value = capturedValues[varName];
+                const numValue = typeof value === "number" ? value : parseFloat(value as string);
+                if (!isNaN(numValue)) {
+                  min = min === null ? numValue : Math.min(min, numValue);
+                }
+              }
+            }
+            resultRow[alias] = min;
+          }
+        } else if (funcName === "MAX") {
+          // Max value - may reference property aliases
+          const arg = item.expression.args?.[0];
+          if (arg?.type === "variable" && arg.variable) {
+            const varName = arg.variable;
+            let max: number | null = null;
+            
+            // Check if this variable is a property alias
+            if (propertyAliasMap.has(varName)) {
+              for (const capturedValues of allCapturedPropertyValues) {
+                const value = capturedValues[varName];
+                const numValue = typeof value === "number" ? value : parseFloat(value as string);
+                if (!isNaN(numValue)) {
+                  max = max === null ? numValue : Math.max(max, numValue);
+                }
+              }
+            }
+            resultRow[alias] = max;
           }
         }
         // Add other aggregate handlers as needed
@@ -2961,6 +3119,7 @@ export class Executor {
       referencedVars,
       referencedVars,
       new Map(), // no alias map
+      new Map(), // no property alias map
       params
     );
   }

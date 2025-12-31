@@ -12,20 +12,22 @@ export const FAILING_TESTS = new Set([
   // "clauses/delete > Delete5 - Delete clause interoperation with built-in data types|5",
   // "clauses/delete > Delete5 - Delete clause interoperation with built-in data types|6",
   // "clauses/delete > Delete5 - Delete clause interoperation with built-in data types|7",
-  // Delete6|1,2,3,4,5,8,9,10,11,12: Now work with SKIP/LIMIT/literal fix
+  // Delete6|1,2,3,4,8,9,10,11: Now work with SKIP/LIMIT/literal fix
   // "clauses/delete > Delete6 - Persistence of delete clause side effects|1",
   // "clauses/delete > Delete6 - Persistence of delete clause side effects|2",
   // "clauses/delete > Delete6 - Persistence of delete clause side effects|3",
   // "clauses/delete > Delete6 - Persistence of delete clause side effects|4",
-  // "clauses/delete > Delete6 - Persistence of delete clause side effects|5",
+  // Delete6|5: Complex WITH + DELETE + WITH + WHERE pattern (needs chained property alias handling)
+  "clauses/delete > Delete6 - Persistence of delete clause side effects|5",
   // Delete6|6,7: Complex WITH + WHERE patterns
-  "clauses/delete > Delete6 - Persistence of delete clause side effects|6",
+  // "clauses/delete > Delete6 - Persistence of delete clause side effects|6",
   "clauses/delete > Delete6 - Persistence of delete clause side effects|7",
   // "clauses/delete > Delete6 - Persistence of delete clause side effects|8",
   // "clauses/delete > Delete6 - Persistence of delete clause side effects|9",
   // "clauses/delete > Delete6 - Persistence of delete clause side effects|10",
   // "clauses/delete > Delete6 - Persistence of delete clause side effects|11",
-  // "clauses/delete > Delete6 - Persistence of delete clause side effects|12",
+  // Delete6|12: Complex WITH + DELETE + WITH + WHERE pattern (needs chained property alias handling)
+  "clauses/delete > Delete6 - Persistence of delete clause side effects|12",
   // Delete6|13,14: Complex ORDER BY patterns
   "clauses/delete > Delete6 - Persistence of delete clause side effects|13",
   "clauses/delete > Delete6 - Persistence of delete clause side effects|14",
