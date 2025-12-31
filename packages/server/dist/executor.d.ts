@@ -30,6 +30,14 @@ export declare class Executor {
      */
     private tryUnwindCreateExecution;
     /**
+     * Evaluate a WITH clause WHERE condition against created nodes
+     */
+    private evaluateWithWhereCondition;
+    /**
+     * Evaluate an expression for filtering in UNWIND+CREATE+WITH context
+     */
+    private evaluateExpressionForFilter;
+    /**
      * Handle MATCH+WITH(COLLECT)+UNWIND+RETURN pattern
      * This requires a subquery for the aggregate function because SQLite doesn't
      * allow aggregate functions directly inside json_each()

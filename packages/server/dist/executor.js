@@ -136,9 +136,10 @@ export class Executor {
      */
     tryUnwindCreateExecution(query, params) {
         const clauses = query.clauses;
-        // Find UNWIND and CREATE clauses
+        // Find UNWIND, CREATE, WITH, and RETURN clauses
         const unwindClauses = [];
         const createClauses = [];
+        const withClauses = [];
         let returnClause = null;
         for (const clause of clauses) {
             if (clause.type === "UNWIND") {
@@ -149,6 +150,9 @@ export class Executor {
             }
             else if (clause.type === "RETURN") {
                 returnClause = clause;
+            }
+            else if (clause.type === "WITH") {
+                withClauses.push(clause);
             }
             else if (clause.type === "MATCH") {
                 // If there's a MATCH, don't handle here
@@ -229,7 +233,19 @@ export class Executor {
                         }
                     }
                     if (Object.keys(resultRow).length > 0) {
-                        results.push(resultRow);
+                        // Check if WITH clause has a WHERE condition that should filter this row
+                        let passesWithFilter = true;
+                        for (const withClause of withClauses) {
+                            if (withClause.where) {
+                                // Evaluate the WHERE condition against the created node(s)
+                                passesWithFilter = this.evaluateWithWhereCondition(withClause.where, createdIds, params);
+                                if (!passesWithFilter)
+                                    break;
+                            }
+                        }
+                        if (passesWithFilter) {
+                            results.push(resultRow);
+                        }
                     }
                 }
             }
@@ -251,6 +267,75 @@ export class Executor {
             }
         }
         return finalResults;
+    }
+    /**
+     * Evaluate a WITH clause WHERE condition against created nodes
+     */
+    evaluateWithWhereCondition(condition, createdIds, params) {
+        if (condition.type === "comparison") {
+            // Handle comparison: n.prop % 2 = 0
+            const left = condition.left;
+            const right = condition.right;
+            const operator = condition.operator;
+            const leftValue = this.evaluateExpressionForFilter(left, createdIds, params);
+            const rightValue = this.evaluateExpressionForFilter(right, createdIds, params);
+            switch (operator) {
+                case "=": return leftValue === rightValue;
+                case "<>": return leftValue !== rightValue;
+                case "<": return leftValue < rightValue;
+                case ">": return leftValue > rightValue;
+                case "<=": return leftValue <= rightValue;
+                case ">=": return leftValue >= rightValue;
+                default: return true;
+            }
+        }
+        else if (condition.type === "and") {
+            return condition.conditions.every((c) => this.evaluateWithWhereCondition(c, createdIds, params));
+        }
+        else if (condition.type === "or") {
+            return condition.conditions.some((c) => this.evaluateWithWhereCondition(c, createdIds, params));
+        }
+        // For other condition types, pass through
+        return true;
+    }
+    /**
+     * Evaluate an expression for filtering in UNWIND+CREATE+WITH context
+     */
+    evaluateExpressionForFilter(expr, createdIds, params) {
+        if (expr.type === "literal") {
+            return expr.value;
+        }
+        else if (expr.type === "property") {
+            const variable = expr.variable;
+            const property = expr.property;
+            const id = createdIds.get(variable);
+            if (id) {
+                const nodeResult = this.db.execute("SELECT properties FROM nodes WHERE id = ?", [id]);
+                if (nodeResult.rows.length > 0) {
+                    const props = typeof nodeResult.rows[0].properties === "string"
+                        ? JSON.parse(nodeResult.rows[0].properties)
+                        : nodeResult.rows[0].properties;
+                    return props[property];
+                }
+            }
+            return null;
+        }
+        else if (expr.type === "binary") {
+            const left = this.evaluateExpressionForFilter(expr.left, createdIds, params);
+            const right = this.evaluateExpressionForFilter(expr.right, createdIds, params);
+            switch (expr.operator) {
+                case "+": return left + right;
+                case "-": return left - right;
+                case "*": return left * right;
+                case "/": return left / right;
+                case "%": return left % right;
+                default: return null;
+            }
+        }
+        else if (expr.type === "parameter") {
+            return params[expr.name];
+        }
+        return null;
     }
     /**
      * Handle MATCH+WITH(COLLECT)+UNWIND+RETURN pattern

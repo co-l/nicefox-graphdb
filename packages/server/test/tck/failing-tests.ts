@@ -38,11 +38,11 @@ export const FAILING_TESTS = new Set([
   // Create6|1,2: Now work with SKIP/LIMIT fix in tryCreateReturnExecution
   // "clauses/create > Create6 - Persistence of create clause side effects|1",
   // "clauses/create > Create6 - Persistence of create clause side effects|2",
-  // Create6|3,4: Now work with SKIP/LIMIT in UNWIND+CREATE
+  // Create6|3,4,5: Now work with SKIP/LIMIT and WITH filtering in UNWIND+CREATE
   // "clauses/create > Create6 - Persistence of create clause side effects|3",
   // "clauses/create > Create6 - Persistence of create clause side effects|4",
-  // Create6|5-7: Complex UNWIND+CREATE+WITH patterns
-  "clauses/create > Create6 - Persistence of create clause side effects|5",
+  // "clauses/create > Create6 - Persistence of create clause side effects|5",
+  // Create6|6,7: Complex UNWIND+CREATE+WITH patterns
   "clauses/create > Create6 - Persistence of create clause side effects|6",
   "clauses/create > Create6 - Persistence of create clause side effects|7",
   // Create6|8,9: Now work with SKIP/LIMIT fix in tryCreateReturnExecution
