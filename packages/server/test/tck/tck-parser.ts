@@ -49,12 +49,15 @@ export function parseFeatureFile(filePath: string): ParsedFeature {
   let currentScenario: Partial<TCKScenario> | null = null;
   let inDocString = false;
   let docStringContent: string[] = [];
-  let docStringContext: "setup" | "query" | null = null;
+  let docStringContext: "setup" | "query" | "background" | null = null;
   let currentStep: string | null = null;
   let expectingTable = false;
   let tableColumns: string[] = [];
   let tableRows: unknown[][] = [];
   let scenarioIndex = 0;
+  // Background setup queries that apply to all scenarios
+  let backgroundSetupQueries: string[] = [];
+  let inBackground = false;
   
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i];
@@ -70,7 +73,9 @@ export function parseFeatureFile(filePath: string): ParsedFeature {
       if (inDocString) {
         // End of docstring
         const query = docStringContent.join("\n").trim();
-        if (docStringContext === "setup" && currentScenario) {
+        if (docStringContext === "background") {
+          backgroundSetupQueries.push(query);
+        } else if (docStringContext === "setup" && currentScenario) {
           currentScenario.setupQueries = currentScenario.setupQueries || [];
           currentScenario.setupQueries.push(query);
         } else if (docStringContext === "query" && currentScenario) {
@@ -83,7 +88,7 @@ export function parseFeatureFile(filePath: string): ParsedFeature {
         // Start of docstring
         inDocString = true;
         if (currentStep === "setup") {
-          docStringContext = "setup";
+          docStringContext = inBackground ? "background" : "setup";
         } else if (currentStep === "query") {
           docStringContext = "query";
         }
@@ -102,8 +107,16 @@ export function parseFeatureFile(filePath: string): ParsedFeature {
       continue;
     }
     
+    // Background section - setup that applies to all scenarios
+    if (trimmed.startsWith("Background:")) {
+      inBackground = true;
+      continue;
+    }
+    
     // Scenario or Scenario Outline
     if (trimmed.startsWith("Scenario:") || trimmed.startsWith("Scenario Outline:")) {
+      // Exiting Background if we were in it
+      inBackground = false;
       // Save previous scenario
       if (currentScenario && currentScenario.query) {
         if (expectingTable && tableColumns.length > 0) {
@@ -126,7 +139,8 @@ export function parseFeatureFile(filePath: string): ParsedFeature {
         name,
         index: scenarioIndex,
         given: "any",
-        setupQueries: [],
+        // Include background setup queries first
+        setupQueries: [...backgroundSetupQueries],
         query: "",
       };
       expectingTable = false;
