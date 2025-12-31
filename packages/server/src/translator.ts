@@ -501,10 +501,29 @@ export class Translator {
     const conditions: string[] = [labelCondition.sql.replace(/^[^.]+\./, "")]; // Remove alias prefix
     const params: unknown[] = [...labelCondition.params];
 
+    const withAliases = (this.ctx as any).withAliases as Map<string, Expression> | undefined;
+    
     for (const [key, value] of Object.entries(props)) {
       if (this.isParameterRef(value)) {
         conditions.push(`json_extract(properties, '$.${key}') = ?`);
         params.push(this.ctx.paramValues[value.name]);
+      } else if (this.isVariableRef(value)) {
+        // Check if it's a WITH alias
+        const varName = (value as { type: string; name: string }).name;
+        if (withAliases && withAliases.has(varName)) {
+          const originalExpr = withAliases.get(varName)!;
+          conditions.push(`json_extract(properties, '$.${key}') = ?`);
+          if (originalExpr.type === "literal") {
+            params.push(originalExpr.value);
+          } else if (originalExpr.type === "parameter") {
+            params.push(this.ctx.paramValues[originalExpr.name!]);
+          } else {
+            params.push(this.evaluateExpression(originalExpr));
+          }
+        } else {
+          conditions.push(`json_extract(properties, '$.${key}') = ?`);
+          params.push(value);
+        }
       } else {
         conditions.push(`json_extract(properties, '$.${key}') = ?`);
         params.push(value);
@@ -4816,16 +4835,44 @@ END FROM (SELECT json_group_array(${valueExpr}) as sv))`,
   private serializeProperties(props: Record<string, PropertyValue>): { json: string; params: unknown[] } {
     const resolved: Record<string, unknown> = {};
     const params: unknown[] = [];
+    const withAliases = (this.ctx as any).withAliases as Map<string, Expression> | undefined;
 
     for (const [key, value] of Object.entries(props)) {
       if (this.isParameterRef(value)) {
         resolved[key] = this.ctx.paramValues[value.name];
+      } else if (this.isVariableRef(value)) {
+        // Check if it's a WITH alias
+        const varName = (value as { type: string; name: string }).name;
+        if (withAliases && withAliases.has(varName)) {
+          const originalExpr = withAliases.get(varName)!;
+          // Evaluate the original expression
+          if (originalExpr.type === "literal") {
+            resolved[key] = originalExpr.value;
+          } else if (originalExpr.type === "parameter") {
+            resolved[key] = this.ctx.paramValues[originalExpr.name!];
+          } else {
+            // For complex expressions, try to evaluate
+            try {
+              resolved[key] = this.evaluateExpression(originalExpr);
+            } catch {
+              resolved[key] = value; // Keep as-is if can't evaluate
+            }
+          }
+        } else {
+          resolved[key] = value;
+        }
       } else {
         resolved[key] = value;
       }
     }
 
     return { json: JSON.stringify(resolved), params };
+  }
+  
+  private isVariableRef(value: unknown): boolean {
+    return typeof value === "object" && value !== null && 
+           (value as Record<string, unknown>).type === "variable" &&
+           typeof (value as Record<string, unknown>).name === "string";
   }
 
   private evaluateExpression(expr: Expression): unknown {

@@ -1,8 +1,8 @@
 export const FAILING_TESTS = new Set([
   // Create1|12: Multiple labels (:A:B:C) - now works
   // "clauses/create > Create1 - Creating nodes|12",
-  // Delete4|1,2: value comparison issue (count returns 0 instead of 2)
-  "clauses/delete > Delete4 - Delete clause interoperation with other clauses|1",
+  // Delete4|1: Now works with aggregate detection in buildReturnResults
+  // "clauses/delete > Delete4 - Delete clause interoperation with other clauses|1",
   "clauses/delete > Delete4 - Delete clause interoperation with other clauses|2",
   "clauses/delete > Delete5 - Delete clause interoperation with built-in data types|1",
   "clauses/delete > Delete5 - Delete clause interoperation with built-in data types|2",
@@ -178,8 +178,9 @@ export const FAILING_TESTS = new Set([
   "clauses/match > Match9 - Match deprecated scenarios|5",
   "clauses/match > Match9 - Match deprecated scenarios|8",
   "clauses/match > Match9 - Match deprecated scenarios|9",
-  // Merge1|8-9, 11-14: Complex MERGE scenarios (WITH, multiple MERGE, paths, DELETE+MERGE)
-  "clauses/merge > Merge1 - Merge node|8",
+  // Merge1|8: Now works with WITH variable resolution in serializeProperties
+  // "clauses/merge > Merge1 - Merge node|8",
+  // Merge1|9, 11-14: Complex MERGE scenarios (multiple MERGE, paths, DELETE+MERGE)
   "clauses/merge > Merge1 - Merge node|9",
   // Merge1|10: Multiple labels - now works
   // "clauses/merge > Merge1 - Merge node|10",

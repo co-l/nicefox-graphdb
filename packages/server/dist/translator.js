@@ -391,10 +391,32 @@ export class Translator {
         const labelCondition = this.generateLabelMatchCondition("", label);
         const conditions = [labelCondition.sql.replace(/^[^.]+\./, "")]; // Remove alias prefix
         const params = [...labelCondition.params];
+        const withAliases = this.ctx.withAliases;
         for (const [key, value] of Object.entries(props)) {
             if (this.isParameterRef(value)) {
                 conditions.push(`json_extract(properties, '$.${key}') = ?`);
                 params.push(this.ctx.paramValues[value.name]);
+            }
+            else if (this.isVariableRef(value)) {
+                // Check if it's a WITH alias
+                const varName = value.name;
+                if (withAliases && withAliases.has(varName)) {
+                    const originalExpr = withAliases.get(varName);
+                    conditions.push(`json_extract(properties, '$.${key}') = ?`);
+                    if (originalExpr.type === "literal") {
+                        params.push(originalExpr.value);
+                    }
+                    else if (originalExpr.type === "parameter") {
+                        params.push(this.ctx.paramValues[originalExpr.name]);
+                    }
+                    else {
+                        params.push(this.evaluateExpression(originalExpr));
+                    }
+                }
+                else {
+                    conditions.push(`json_extract(properties, '$.${key}') = ?`);
+                    params.push(value);
+                }
             }
             else {
                 conditions.push(`json_extract(properties, '$.${key}') = ?`);
@@ -4181,15 +4203,47 @@ END FROM (SELECT json_group_array(${valueExpr}) as sv))`,
     serializeProperties(props) {
         const resolved = {};
         const params = [];
+        const withAliases = this.ctx.withAliases;
         for (const [key, value] of Object.entries(props)) {
             if (this.isParameterRef(value)) {
                 resolved[key] = this.ctx.paramValues[value.name];
+            }
+            else if (this.isVariableRef(value)) {
+                // Check if it's a WITH alias
+                const varName = value.name;
+                if (withAliases && withAliases.has(varName)) {
+                    const originalExpr = withAliases.get(varName);
+                    // Evaluate the original expression
+                    if (originalExpr.type === "literal") {
+                        resolved[key] = originalExpr.value;
+                    }
+                    else if (originalExpr.type === "parameter") {
+                        resolved[key] = this.ctx.paramValues[originalExpr.name];
+                    }
+                    else {
+                        // For complex expressions, try to evaluate
+                        try {
+                            resolved[key] = this.evaluateExpression(originalExpr);
+                        }
+                        catch {
+                            resolved[key] = value; // Keep as-is if can't evaluate
+                        }
+                    }
+                }
+                else {
+                    resolved[key] = value;
+                }
             }
             else {
                 resolved[key] = value;
             }
         }
         return { json: JSON.stringify(resolved), params };
+    }
+    isVariableRef(value) {
+        return typeof value === "object" && value !== null &&
+            value.type === "variable" &&
+            typeof value.name === "string";
     }
     evaluateExpression(expr) {
         switch (expr.type) {

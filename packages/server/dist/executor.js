@@ -2028,6 +2028,45 @@ export class Executor {
      * Build RETURN results from resolved node/edge IDs
      */
     buildReturnResults(returnClause, allResolvedIds) {
+        // Check if all return items are aggregates (like count(*))
+        // If so, we should return a single aggregated row instead of per-row results
+        const allAggregates = returnClause.items.every(item => item.expression.type === "function" &&
+            ["COUNT", "SUM", "AVG", "MIN", "MAX", "COLLECT"].includes(item.expression.functionName?.toUpperCase() || ""));
+        if (allAggregates && returnClause.items.length > 0) {
+            // Return a single row with aggregated values
+            const resultRow = {};
+            for (const item of returnClause.items) {
+                const alias = item.alias || this.getExpressionName(item.expression);
+                const funcName = item.expression.functionName?.toUpperCase();
+                if (funcName === "COUNT") {
+                    resultRow[alias] = allResolvedIds.length;
+                }
+                else if (funcName === "COLLECT") {
+                    // Collect all values for the variable
+                    const arg = item.expression.args?.[0];
+                    if (arg?.type === "variable" && arg.variable) {
+                        const values = [];
+                        for (const resolvedIds of allResolvedIds) {
+                            const nodeId = resolvedIds[arg.variable];
+                            if (nodeId) {
+                                const nodeResult = this.db.execute("SELECT id, label, properties FROM nodes WHERE id = ?", [nodeId]);
+                                if (nodeResult.rows.length > 0) {
+                                    const row = nodeResult.rows[0];
+                                    values.push({
+                                        id: row.id,
+                                        label: this.normalizeLabelForOutput(row.label),
+                                        properties: typeof row.properties === "string" ? JSON.parse(row.properties) : row.properties,
+                                    });
+                                }
+                            }
+                        }
+                        resultRow[alias] = values;
+                    }
+                }
+                // Add other aggregate handlers as needed
+            }
+            return [resultRow];
+        }
         const results = [];
         for (const resolvedIds of allResolvedIds) {
             const resultRow = {};

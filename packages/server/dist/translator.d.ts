@@ -127,6 +127,7 @@ export declare class Translator {
      */
     private isAggregateExpression;
     private serializeProperties;
+    private isVariableRef;
     private evaluateExpression;
     private getExpressionName;
     private generateId;
