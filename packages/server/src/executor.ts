@@ -443,16 +443,79 @@ export class Executor {
     params: Record<string, unknown>
   ): unknown[][] {
     return unwindClauses.map((clause) => {
-      const expr = clause.expression;
+      return this.evaluateListExpression(clause.expression, params);
+    });
+  }
+
+  /**
+   * Evaluate an expression that should return a list
+   */
+  private evaluateListExpression(expr: Expression, params: Record<string, unknown>): unknown[] {
+    if (expr.type === "literal") {
+      return expr.value as unknown[];
+    } else if (expr.type === "parameter") {
+      return params[expr.name!] as unknown[];
+    } else if (expr.type === "function") {
+      const funcName = expr.functionName?.toUpperCase();
       
-      if (expr.type === "literal") {
-        return expr.value as unknown[];
-      } else if (expr.type === "parameter") {
-        return params[expr.name!] as unknown[];
+      // range(start, end[, step])
+      if (funcName === "RANGE") {
+        const args = expr.args || [];
+        if (args.length < 2) {
+          throw new Error("range() requires at least 2 arguments");
+        }
+        
+        const startVal = this.evaluateSimpleExpression(args[0], params);
+        const endVal = this.evaluateSimpleExpression(args[1], params);
+        const stepVal = args.length > 2 ? this.evaluateSimpleExpression(args[2], params) : 1;
+        
+        if (typeof startVal !== "number" || typeof endVal !== "number" || typeof stepVal !== "number") {
+          throw new Error("range() arguments must be numbers");
+        }
+        
+        const result: number[] = [];
+        if (stepVal > 0) {
+          for (let i = startVal; i <= endVal; i += stepVal) {
+            result.push(i);
+          }
+        } else if (stepVal < 0) {
+          for (let i = startVal; i >= endVal; i += stepVal) {
+            result.push(i);
+          }
+        }
+        return result;
       }
       
-      throw new Error(`Unsupported UNWIND expression type: ${expr.type}`);
-    });
+      throw new Error(`Unsupported function in UNWIND: ${funcName}`);
+    }
+    
+    throw new Error(`Unsupported UNWIND expression type: ${expr.type}`);
+  }
+
+  /**
+   * Evaluate a simple expression (literals, parameters, basic arithmetic)
+   */
+  private evaluateSimpleExpression(expr: Expression, params: Record<string, unknown>): unknown {
+    if (expr.type === "literal") {
+      return expr.value;
+    } else if (expr.type === "parameter") {
+      return params[expr.name!];
+    } else if (expr.type === "binary") {
+      const left = this.evaluateSimpleExpression(expr.left!, params) as number;
+      const right = this.evaluateSimpleExpression(expr.right!, params) as number;
+      
+      switch (expr.operator) {
+        case "+": return left + right;
+        case "-": return left - right;
+        case "*": return left * right;
+        case "/": return left / right;
+        case "%": return left % right;
+        case "^": return Math.pow(left, right);
+        default: throw new Error(`Unsupported operator: ${expr.operator}`);
+      }
+    }
+    
+    throw new Error(`Cannot evaluate expression type: ${expr.type}`);
   }
 
   /**
@@ -1893,6 +1956,55 @@ export class Executor {
               resultRow[alias] = nodeId;
             }
           }
+        } else if (item.expression.type === "function" && item.expression.functionName?.toUpperCase() === "LABELS") {
+          // Handle labels(n) function
+          const args = item.expression.args;
+          if (args && args.length > 0 && args[0].type === "variable") {
+            const variable = args[0].variable!;
+            const nodeId = resolvedIds[variable];
+            if (nodeId) {
+              const nodeResult = this.db.execute(
+                "SELECT label FROM nodes WHERE id = ?",
+                [nodeId]
+              );
+              if (nodeResult.rows.length > 0) {
+                const labelValue = nodeResult.rows[0].label;
+                // Parse label - could be a JSON array or a string
+                if (typeof labelValue === "string") {
+                  try {
+                    const parsed = JSON.parse(labelValue);
+                    resultRow[alias] = Array.isArray(parsed) ? parsed : [parsed];
+                  } catch {
+                    resultRow[alias] = labelValue ? [labelValue] : [];
+                  }
+                } else if (Array.isArray(labelValue)) {
+                  resultRow[alias] = labelValue;
+                } else {
+                  resultRow[alias] = [];
+                }
+              }
+            }
+          }
+        } else if (item.expression.type === "function" && item.expression.functionName?.toUpperCase() === "TYPE") {
+          // Handle type(r) function
+          const args = item.expression.args;
+          if (args && args.length > 0 && args[0].type === "variable") {
+            const variable = args[0].variable!;
+            const edgeId = resolvedIds[variable];
+            if (edgeId) {
+              const edgeResult = this.db.execute(
+                "SELECT type FROM edges WHERE id = ?",
+                [edgeId]
+              );
+              if (edgeResult.rows.length > 0) {
+                resultRow[alias] = edgeResult.rows[0].type;
+              }
+            }
+          }
+        } else if (item.expression.type === "function" && item.expression.functionName?.toUpperCase() === "COUNT") {
+          // Handle count(*) or count(n) - for MATCH+SET+RETURN patterns
+          // If we're in buildReturnResults, return the number of rows we processed
+          resultRow[alias] = allResolvedIds.length;
         }
       }
       
@@ -2037,20 +2149,34 @@ export class Executor {
         ? this.evaluateExpressionWithContext(assignment.value, params, resolvedIds)
         : this.evaluateExpression(assignment.value, params);
 
-      // Update the property using json_set
-      // We need to determine if it's a node or edge - for now assume node
-      // Try nodes first, then edges
-      const nodeResult = this.db.execute(
-        `UPDATE nodes SET properties = json_set(properties, '$.${assignment.property}', json(?)) WHERE id = ?`,
-        [JSON.stringify(value), nodeId]
-      );
-
-      if (nodeResult.changes === 0) {
-        // Try edges
-        this.db.execute(
-          `UPDATE edges SET properties = json_set(properties, '$.${assignment.property}', json(?)) WHERE id = ?`,
+      // If value is null, remove the property instead of setting it to null
+      if (value === null) {
+        const nodeResult = this.db.execute(
+          `UPDATE nodes SET properties = json_remove(properties, '$.${assignment.property}') WHERE id = ?`,
+          [nodeId]
+        );
+        if (nodeResult.changes === 0) {
+          this.db.execute(
+            `UPDATE edges SET properties = json_remove(properties, '$.${assignment.property}') WHERE id = ?`,
+            [nodeId]
+          );
+        }
+      } else {
+        // Update the property using json_set
+        // We need to determine if it's a node or edge - for now assume node
+        // Try nodes first, then edges
+        const nodeResult = this.db.execute(
+          `UPDATE nodes SET properties = json_set(properties, '$.${assignment.property}', json(?)) WHERE id = ?`,
           [JSON.stringify(value), nodeId]
         );
+
+        if (nodeResult.changes === 0) {
+          // Try edges
+          this.db.execute(
+            `UPDATE edges SET properties = json_set(properties, '$.${assignment.property}', json(?)) WHERE id = ?`,
+            [JSON.stringify(value), nodeId]
+          );
+        }
       }
     }
   }

@@ -278,6 +278,7 @@ type TokenType =
 interface Token {
   type: TokenType;
   value: string;
+  originalValue?: string;  // Preserve original casing for keywords used as identifiers
   position: number;
   line: number;
   column: number;
@@ -475,7 +476,8 @@ class Tokenizer {
       const value = this.readIdentifier();
       const upperValue = value.toUpperCase();
       const type: TokenType = KEYWORDS.has(upperValue) ? "KEYWORD" : "IDENTIFIER";
-      return { type, value: type === "KEYWORD" ? upperValue : value, position: startPos, line: startLine, column: startColumn };
+      // Keywords store uppercase for matching, but we also preserve original casing for when keywords are used as identifiers
+      return { type, value: type === "KEYWORD" ? upperValue : value, originalValue: value, position: startPos, line: startLine, column: startColumn };
     }
 
     throw new Error(`Unexpected character '${char}' at position ${this.pos}`);
@@ -1961,8 +1963,11 @@ export class Parser {
     }
 
     // Variable or property access
-    if (token.type === "IDENTIFIER") {
-      const variable = this.advance().value;
+    // Allow keywords to be used as variable names when not in keyword position
+    if (token.type === "IDENTIFIER" || (token.type === "KEYWORD" && !["TRUE", "FALSE", "NULL", "CASE"].includes(token.value))) {
+      const tok = this.advance();
+      // Use original casing for keywords used as identifiers
+      const variable = tok.originalValue || tok.value;
 
       if (this.check("DOT")) {
         this.advance();

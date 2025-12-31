@@ -1,6 +1,7 @@
 export const FAILING_TESTS = new Set([
   // Create1|12: Multiple labels (:A:B:C) - now works
   // "clauses/create > Create1 - Creating nodes|12",
+  // Delete4|1: value comparison issue
   "clauses/delete > Delete4 - Delete clause interoperation with other clauses|1",
   "clauses/delete > Delete4 - Delete clause interoperation with other clauses|2",
   "clauses/delete > Delete5 - Delete clause interoperation with built-in data types|1",
@@ -10,18 +11,19 @@ export const FAILING_TESTS = new Set([
   "clauses/delete > Delete5 - Delete clause interoperation with built-in data types|5",
   "clauses/delete > Delete5 - Delete clause interoperation with built-in data types|6",
   "clauses/delete > Delete5 - Delete clause interoperation with built-in data types|7",
-  "clauses/delete > Delete6 - Persistence of delete clause side effects|1",
-  "clauses/delete > Delete6 - Persistence of delete clause side effects|2",
+  // Delete6|1,2,5,8,9,12: Now work
+  // "clauses/delete > Delete6 - Persistence of delete clause side effects|1",
+  // "clauses/delete > Delete6 - Persistence of delete clause side effects|2",
   "clauses/delete > Delete6 - Persistence of delete clause side effects|3",
   "clauses/delete > Delete6 - Persistence of delete clause side effects|4",
-  "clauses/delete > Delete6 - Persistence of delete clause side effects|5",
+  // "clauses/delete > Delete6 - Persistence of delete clause side effects|5",
   "clauses/delete > Delete6 - Persistence of delete clause side effects|6",
   "clauses/delete > Delete6 - Persistence of delete clause side effects|7",
-  "clauses/delete > Delete6 - Persistence of delete clause side effects|8",
-  "clauses/delete > Delete6 - Persistence of delete clause side effects|9",
+  // "clauses/delete > Delete6 - Persistence of delete clause side effects|8",
+  // "clauses/delete > Delete6 - Persistence of delete clause side effects|9",
   "clauses/delete > Delete6 - Persistence of delete clause side effects|10",
   "clauses/delete > Delete6 - Persistence of delete clause side effects|11",
-  "clauses/delete > Delete6 - Persistence of delete clause side effects|12",
+  // "clauses/delete > Delete6 - Persistence of delete clause side effects|12",
   "clauses/delete > Delete6 - Persistence of delete clause side effects|13",
   "clauses/delete > Delete6 - Persistence of delete clause side effects|14",
   "clauses/create > Create3 - Interoperation with other clauses|5",
@@ -105,7 +107,7 @@ export const FAILING_TESTS = new Set([
   "clauses/match > Match6 - Match named paths scenarios|6",
   "clauses/match > Match6 - Match named paths scenarios|7",
   "clauses/match > Match6 - Match named paths scenarios|9",
-  // Match7|8,9: multi-hop optional match patterns
+  // Match7|8,9: multi-hop optional match patterns (value mismatch)
   "clauses/match > Match7 - Optional match|8",
   "clauses/match > Match7 - Optional match|9",
   "clauses/match > Match7 - Optional match|10",
@@ -134,6 +136,7 @@ export const FAILING_TESTS = new Set([
 
 
   "clauses/match > Match8 - Match clause interoperation with other clauses|2",
+  // Match8|3: value mismatch
   "clauses/match > Match8 - Match clause interoperation with other clauses|3",
   "clauses/match > Match9 - Match deprecated scenarios|1",
   "clauses/match > Match9 - Match deprecated scenarios|2",
@@ -193,31 +196,31 @@ export const FAILING_TESTS = new Set([
   "clauses/merge > Merge9 - Merge clause interoperation with other clauses|3",
   "clauses/merge > Merge9 - Merge clause interoperation with other clauses|4",
 
-  // Return2|10: count > 0 returns 0 instead of false
-  "clauses/return > Return2 - Return single expression (correctly projecting an expression)|10",
-  // Return2|11: large integers - precision issue
-  "clauses/return > Return2 - Return single expression (correctly projecting an expression)|11",
-  // Return2|12: list of nodes/relationships - returns AST instead of values
-  "clauses/return > Return2 - Return single expression (correctly projecting an expression)|12",
-  // Return2|13: map of nodes/relationships - needs map projection
-  "clauses/return > Return2 - Return single expression (correctly projecting an expression)|13",
-  // Return2|14: type of deleted relationship
-  "clauses/return > Return2 - Return single expression (correctly projecting an expression)|14",
-  // Return2|9: map projection column naming
+  // Return2|9: column naming for map literal (expects "{a: 1, b: 'foo'}" as column name)
   "clauses/return > Return2 - Return single expression (correctly projecting an expression)|9",
+  // Return2|10: column naming issue (count > 0 expression)
+  "clauses/return > Return2 - Return single expression (correctly projecting an expression)|10",
+  // Return2|11: Now works (large integers)
+  // "clauses/return > Return2 - Return single expression (correctly projecting an expression)|11",
+  // Return2|12: Now works (list of nodes/relationships)
+  // "clauses/return > Return2 - Return single expression (correctly projecting an expression)|12",
+  // Return2|13: column naming for map of nodes/rels
+  "clauses/return > Return2 - Return single expression (correctly projecting an expression)|13",
+  // Return2|14: type of deleted relationship - needs DETACH DELETE return
+  "clauses/return > Return2 - Return single expression (correctly projecting an expression)|14",
 
-  // Return4|4: column name preservation with spaces/casing "cOuNt( * )"
-  "clauses/return > Return4 - Column renaming|4",
-  // Return4|6: aggregation in expression
+  // Return4|4: Now works
+  // "clauses/return > Return4 - Column renaming|4",
+  // Return4|6: aggregation in expression (needs path variable)
   "clauses/return > Return4 - Column renaming|6",
   // Return4|8: Now works (column renaming for aggregations - uses MATCH () count)
   // "clauses/return > Return4 - Column renaming|8",
-  // Return4|9: path variable renaming 
+  // Return4|9: subexpression column naming issue
   "clauses/return > Return4 - Column renaming|9",
   // Return4|11: list comprehension
   "clauses/return > Return4 - Column renaming|11",
 
-  // With5|2: DISTINCT with lists in maps
+  // With5|2: value comparison issue with lists in maps
   "clauses/with > With5 - Implicit grouping with DISTINCT|2",
 
   // Return5|4: nested maps in DISTINCT inside aggregation
@@ -226,7 +229,8 @@ export const FAILING_TESTS = new Set([
   // "clauses/return > Return5 - Implicit grouping with distinct|5",
   // Return6|1 and |7 now work with GROUP BY fix
   "clauses/return > Return6 - Implicit grouping with aggregates|2",
-  "clauses/return > Return6 - Implicit grouping with aggregates|3",
+  // Return6|3: Now works (keyword as variable name)
+  // "clauses/return > Return6 - Implicit grouping with aggregates|3",
   "clauses/return > Return6 - Implicit grouping with aggregates|4",
   "clauses/return > Return6 - Implicit grouping with aggregates|5",
   "clauses/return > Return6 - Implicit grouping with aggregates|6",
@@ -311,25 +315,25 @@ export const FAILING_TESTS = new Set([
   "clauses/with > With4 - Variable aliasing|7",
 
 
-  // With6: GROUP BY issue with aggregation - |1 now works
-  // Keep |2,3,4 skipped - they need relationship/node variable grouping which requires WITH subquery 
+  // With6: GROUP BY issue with aggregation - |1 works, |2-4 need relationship value comparison
   "clauses/with > With6 - Implicit grouping with aggregates|2",
   "clauses/with > With6 - Implicit grouping with aggregates|3",
   "clauses/with > With6 - Implicit grouping with aggregates|4",
-  // Keep |5,6,7 skipped - they test complex parameter/expression/property access patterns
-  "clauses/with > With6 - Implicit grouping with aggregates|5",
+  // With6|5: Now works
+  // "clauses/with > With6 - Implicit grouping with aggregates|5",
+  // Keep |6,7 skipped - empty result mismatch
   "clauses/with > With6 - Implicit grouping with aggregates|6",
   "clauses/with > With6 - Implicit grouping with aggregates|7",
   "clauses/with > With7 - WITH on WITH|1",
   "clauses/with > With7 - WITH on WITH|2",
   // Aggregation1|1: Now works with GROUP BY fix
-  // Aggregation2|1-8 now work (numbers and strings)
-  // Keep |9-12 as they test list/mixed type comparison which is different in SQLite
-  "expressions/aggregation > Aggregation2 - Min and Max|9",
-  "expressions/aggregation > Aggregation2 - Min and Max|10",
+  // Aggregation2|9,10: Now work
+  // "expressions/aggregation > Aggregation2 - Min and Max|9",
+  // "expressions/aggregation > Aggregation2 - Min and Max|10",
+  // Aggregation2|11,12: mixed value comparison issues
   "expressions/aggregation > Aggregation2 - Min and Max|11",
   "expressions/aggregation > Aggregation2 - Min and Max|12",
-  // Aggregation3|1 now works
+  // Aggregation3|2: sum overflow value comparison
   "expressions/aggregation > Aggregation3 - Sum|2",
   // Aggregation5|1-2: Now work with null filtering
   // "expressions/aggregation > Aggregation5 - Collect|1",
