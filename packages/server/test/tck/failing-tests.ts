@@ -150,13 +150,9 @@ export const FAILING_TESTS = new Set([
   "clauses/merge > Merge1 - Merge node|12",
   "clauses/merge > Merge1 - Merge node|13",
   "clauses/merge > Merge1 - Merge node|14",
-  "clauses/merge > Merge2 - Merge node - on create|1",
-  "clauses/merge > Merge2 - Merge node - on create|2",
-  "clauses/merge > Merge2 - Merge node - on create|3",
+  // Merge2|5: Uses property of bound node in ON CREATE (needs MATCH context)
   "clauses/merge > Merge2 - Merge node - on create|5",
-  "clauses/merge > Merge3 - Merge node - on match|1",
-  "clauses/merge > Merge3 - Merge node - on match|2",
-  "clauses/merge > Merge3 - Merge node - on match|3",
+  // Merge3|4: Uses property of bound node in ON MATCH (needs MATCH context)
   "clauses/merge > Merge3 - Merge node - on match|4",
   "clauses/merge > Merge4 - Merge node - on match and on create|1",
   "clauses/merge > Merge4 - Merge node - on match and on create|2",

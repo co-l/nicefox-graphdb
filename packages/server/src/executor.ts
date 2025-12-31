@@ -868,11 +868,13 @@ export class Executor {
     }
     
     // Try to find existing node
-    // When MERGE has no label and no properties, we're just creating an empty node
-    let findResult = { rows: [] as Record<string, unknown>[] };
+    let findResult: { rows: Record<string, unknown>[] };
     if (conditions.length > 0) {
       const findSql = `SELECT id, label, properties FROM nodes WHERE ${conditions.join(" AND ")}`;
       findResult = this.db.execute(findSql, conditionParams);
+    } else {
+      // MERGE with no label and no properties - match any node
+      findResult = this.db.execute("SELECT id, label, properties FROM nodes LIMIT 1");
     }
     
     let nodeId: string;
@@ -886,6 +888,9 @@ export class Executor {
       // Start with match properties
       const nodeProps = { ...matchProps };
       
+      // Collect additional labels from ON CREATE SET
+      const additionalLabels: string[] = [];
+      
       // Apply ON CREATE SET properties
       if (mergeClause.onCreateSet) {
         // Convert matchedNodes to resolvedIds format for expression evaluation
@@ -895,8 +900,11 @@ export class Executor {
         }
         
         for (const assignment of mergeClause.onCreateSet) {
-          // Skip label assignments (handled separately)
-          if (assignment.labels) continue;
+          // Handle label assignments: ON CREATE SET a:Label
+          if (assignment.labels && assignment.labels.length > 0) {
+            additionalLabels.push(...assignment.labels);
+            continue;
+          }
           if (!assignment.value || !assignment.property) continue;
           const value = assignment.value.type === "property" || assignment.value.type === "binary"
             ? this.evaluateExpressionWithContext(assignment.value, params, resolvedIds)
@@ -905,7 +913,13 @@ export class Executor {
         }
       }
       
-      const labelJson = this.normalizeLabelToJson(pattern.label);
+      // Combine pattern label with additional labels
+      const allLabels = pattern.label 
+        ? (Array.isArray(pattern.label) ? [...pattern.label] : [pattern.label])
+        : [];
+      allLabels.push(...additionalLabels);
+      const labelJson = JSON.stringify(allLabels);
+      
       this.db.execute(
         "INSERT INTO nodes (id, label, properties) VALUES (?, ?, ?)",
         [nodeId, labelJson, JSON.stringify(nodeProps)]
@@ -922,8 +936,21 @@ export class Executor {
         }
         
         for (const assignment of mergeClause.onMatchSet) {
-          // Skip label assignments (handled separately)
-          if (assignment.labels) continue;
+          // Handle label assignments: ON MATCH SET a:Label
+          if (assignment.labels && assignment.labels.length > 0) {
+            const newLabelsJson = JSON.stringify(assignment.labels);
+            this.db.execute(
+              `UPDATE nodes SET label = (SELECT json_group_array(value) FROM (
+                SELECT DISTINCT value FROM (
+                  SELECT value FROM json_each(nodes.label)
+                  UNION ALL
+                  SELECT value FROM json_each(?)
+                ) ORDER BY value
+              )) WHERE id = ?`,
+              [newLabelsJson, nodeId]
+            );
+            continue;
+          }
           if (!assignment.value || !assignment.property) continue;
           const value = assignment.value.type === "property" || assignment.value.type === "binary"
             ? this.evaluateExpressionWithContext(assignment.value, params, resolvedIds)
