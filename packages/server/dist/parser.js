@@ -1832,13 +1832,10 @@ export class Parser {
         if (token.type !== "IDENTIFIER" && token.type !== "KEYWORD") {
             throw new Error(`Expected label or type, got ${token.type} '${token.value}'`);
         }
-        // Labels and types preserve their original case (but keywords are uppercase in token)
-        const value = this.advance().value;
-        // For labels/types, we want PascalCase typically - return as-is for identifiers
-        // For keywords used as labels (like Order), return the capitalized version
-        return token.type === "KEYWORD"
-            ? value.charAt(0) + value.slice(1).toLowerCase()
-            : value;
+        this.advance();
+        // Labels and types preserve their original case from the query
+        // Use originalValue for keywords (which stores the original casing before uppercasing)
+        return token.originalValue || token.value;
     }
 }
 // Convenience function

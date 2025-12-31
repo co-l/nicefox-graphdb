@@ -79,8 +79,8 @@ export const FAILING_TESTS = new Set([
   // Match4|1,2,6,9: Now work with variable-length edge tracking in CTE
   // "clauses/match > Match4 - Match variable length patterns scenarios|1",
   // "clauses/match > Match4 - Match variable length patterns scenarios|2", // was never in list, already passed
-  // Match4|3: Pre-existing failure - edge type case sensitivity issue with 'Contains' vs 'CONTAINS'
-  "clauses/match > Match4 - Match variable length patterns scenarios|3",
+  // Match4|3: Now works - fixed edge type case sensitivity in expectLabelOrType()
+  // "clauses/match > Match4 - Match variable length patterns scenarios|3",
   "clauses/match > Match4 - Match variable length patterns scenarios|4",
   // "clauses/match > Match4 - Match variable length patterns scenarios|5",
   // "clauses/match > Match4 - Match variable length patterns scenarios|6",

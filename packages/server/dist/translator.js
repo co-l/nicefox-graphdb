@@ -1688,6 +1688,9 @@ export class Translator {
         const whereParts = [];
         const addedNodeAliases = new Set();
         const filteredNodeAliases = new Set();
+        // Deferred WHERE params - these are added after all CTE params
+        // This is needed because CTEs are defined before the WHERE clause in SQL
+        const deferredWhereParams = [];
         // Process fixed-length patterns before the variable-length pattern
         for (let i = 0; i < fixedPatternsBefore.length; i++) {
             const pattern = fixedPatternsBefore[i];
@@ -1727,24 +1730,24 @@ export class Translator {
                 joinParts.push(`JOIN nodes ${varLengthSourceAlias} ON 1=1`);
             }
             addedNodeAliases.add(varLengthSourceAlias);
-            // Add label/property filters for the source
+            // Add label/property filters for the source - deferred until after CTE params
             const sourcePattern = this.ctx[`pattern_${varLengthSourceAlias}`];
             if (sourcePattern?.label && !filteredNodeAliases.has(varLengthSourceAlias)) {
                 const labelMatch = this.generateLabelMatchCondition(varLengthSourceAlias, sourcePattern.label);
                 whereParts.push(labelMatch.sql);
-                allParams.push(...labelMatch.params);
+                deferredWhereParams.push(...labelMatch.params);
                 filteredNodeAliases.add(varLengthSourceAlias);
             }
-            // Add source property filters
+            // Add source property filters - deferred until after CTE params
             if (sourcePattern?.properties) {
                 for (const [key, value] of Object.entries(sourcePattern.properties)) {
                     if (this.isParameterRef(value)) {
                         whereParts.push(`json_extract(${varLengthSourceAlias}.properties, '$.${key}') = ?`);
-                        allParams.push(this.ctx.paramValues[value.name]);
+                        deferredWhereParams.push(this.ctx.paramValues[value.name]);
                     }
                     else {
                         whereParts.push(`json_extract(${varLengthSourceAlias}.properties, '$.${key}') = ?`);
-                        allParams.push(value);
+                        deferredWhereParams.push(value);
                     }
                 }
             }
@@ -1775,29 +1778,29 @@ export class Translator {
             whereParts.push(`${varLengthSourceAlias}.id = ${pathCteName}.start_id`);
             // Connect target node to path end
             whereParts.push(`${varLengthTargetAlias}.id = ${pathCteName}.end_id`);
-            // Apply min depth constraint
+            // Apply min depth constraint - deferred until after CTE params
             if (minHops > 1) {
                 whereParts.push(`${pathCteName}.depth >= ?`);
-                allParams.push(minHops);
+                deferredWhereParams.push(minHops);
             }
         }
-        // Add target label/property filters for the variable-length pattern
+        // Add target label/property filters for the variable-length pattern - deferred until after CTE params
         const targetPattern = this.ctx[`pattern_${varLengthTargetAlias}`];
         if (targetPattern?.label && !filteredNodeAliases.has(varLengthTargetAlias)) {
             const labelMatch = this.generateLabelMatchCondition(varLengthTargetAlias, targetPattern.label);
             whereParts.push(labelMatch.sql);
-            allParams.push(...labelMatch.params);
+            deferredWhereParams.push(...labelMatch.params);
             filteredNodeAliases.add(varLengthTargetAlias);
         }
         if (targetPattern?.properties) {
             for (const [key, value] of Object.entries(targetPattern.properties)) {
                 if (this.isParameterRef(value)) {
                     whereParts.push(`json_extract(${varLengthTargetAlias}.properties, '$.${key}') = ?`);
-                    allParams.push(this.ctx.paramValues[value.name]);
+                    deferredWhereParams.push(this.ctx.paramValues[value.name]);
                 }
                 else {
                     whereParts.push(`json_extract(${varLengthTargetAlias}.properties, '$.${key}') = ?`);
-                    allParams.push(value);
+                    deferredWhereParams.push(value);
                 }
             }
         }
@@ -1879,28 +1882,28 @@ export class Translator {
                 whereParts.push(`${currentSourceAlias}.id = ${pathCteName2}.start_id`);
                 // Connect the second path end to its target node
                 whereParts.push(`${pathCteName2}.end_id = ${pattern.targetAlias}.id`);
-                // Apply min depth constraint for second path
+                // Apply min depth constraint for second path - deferred until after all CTE params
                 if (minHops2 > 1) {
                     whereParts.push(`${pathCteName2}.depth >= ?`);
-                    allParams.push(minHops2);
+                    deferredWhereParams.push(minHops2);
                 }
-                // Add target label/property filters for second pattern
+                // Add target label/property filters for second pattern - deferred until after all CTE params
                 const targetPattern2 = this.ctx[`pattern_${pattern.targetAlias}`];
                 if (targetPattern2?.label && !filteredNodeAliases.has(pattern.targetAlias)) {
                     const labelMatch = this.generateLabelMatchCondition(pattern.targetAlias, targetPattern2.label);
                     whereParts.push(labelMatch.sql);
-                    allParams.push(...labelMatch.params);
+                    deferredWhereParams.push(...labelMatch.params);
                     filteredNodeAliases.add(pattern.targetAlias);
                 }
                 if (targetPattern2?.properties) {
                     for (const [key, value] of Object.entries(targetPattern2.properties)) {
                         if (this.isParameterRef(value)) {
                             whereParts.push(`json_extract(${pattern.targetAlias}.properties, '$.${key}') = ?`);
-                            allParams.push(this.ctx.paramValues[value.name]);
+                            deferredWhereParams.push(this.ctx.paramValues[value.name]);
                         }
                         else {
                             whereParts.push(`json_extract(${pattern.targetAlias}.properties, '$.${key}') = ?`);
-                            allParams.push(value);
+                            deferredWhereParams.push(value);
                         }
                     }
                 }
@@ -1913,29 +1916,31 @@ export class Translator {
                     addedNodeAliases.add(pattern.sourceAlias);
                 }
                 joinParts.push(`JOIN edges ${pattern.edgeAlias} ON ${pattern.edgeAlias}.source_id = ${currentSourceAlias}.id`);
+                // Edge type filter - deferred until after all CTE params
                 if (pattern.edge.type) {
                     whereParts.push(`${pattern.edgeAlias}.type = ?`);
-                    allParams.push(pattern.edge.type);
+                    deferredWhereParams.push(pattern.edge.type);
                 }
                 if (!addedNodeAliases.has(pattern.targetAlias)) {
                     joinParts.push(`JOIN nodes ${pattern.targetAlias} ON ${pattern.edgeAlias}.target_id = ${pattern.targetAlias}.id`);
                     addedNodeAliases.add(pattern.targetAlias);
+                    // Target label/property filters - deferred until after all CTE params
                     const afterTargetPattern = this.ctx[`pattern_${pattern.targetAlias}`];
                     if (afterTargetPattern?.label && !filteredNodeAliases.has(pattern.targetAlias)) {
                         const labelMatch = this.generateLabelMatchCondition(pattern.targetAlias, afterTargetPattern.label);
                         whereParts.push(labelMatch.sql);
-                        allParams.push(...labelMatch.params);
+                        deferredWhereParams.push(...labelMatch.params);
                         filteredNodeAliases.add(pattern.targetAlias);
                     }
                     if (afterTargetPattern?.properties) {
                         for (const [key, value] of Object.entries(afterTargetPattern.properties)) {
                             if (this.isParameterRef(value)) {
                                 whereParts.push(`json_extract(${pattern.targetAlias}.properties, '$.${key}') = ?`);
-                                allParams.push(this.ctx.paramValues[value.name]);
+                                deferredWhereParams.push(this.ctx.paramValues[value.name]);
                             }
                             else {
                                 whereParts.push(`json_extract(${pattern.targetAlias}.properties, '$.${key}') = ?`);
-                                allParams.push(value);
+                                deferredWhereParams.push(value);
                             }
                         }
                     }
@@ -1943,6 +1948,8 @@ export class Translator {
                 currentSourceAlias = pattern.targetAlias;
             }
         }
+        // Now add the deferred WHERE params (after all CTE params have been added)
+        allParams.push(...deferredWhereParams);
         // Add WHERE clause from MATCH if present
         const matchWhereClause = this.ctx.whereClause;
         if (matchWhereClause) {
