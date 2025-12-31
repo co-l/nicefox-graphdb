@@ -1513,9 +1513,25 @@ export class Translator {
         // For fixed length (*2), maxHops equals minHops
         const maxHops = varLengthPattern.maxHops ?? 10;
         const edgeType = varLengthPattern.edge.type;
+        const edgeProperties = varLengthPattern.edge.properties;
         const varLengthSourceAlias = varLengthPattern.sourceAlias;
         const varLengthTargetAlias = varLengthPattern.targetAlias;
         const allParams = [...exprParams];
+        // Build edge property conditions for variable-length paths
+        // These conditions need to be applied to every edge in the path
+        const edgePropConditions = [];
+        const edgePropParams = [];
+        if (edgeProperties) {
+            for (const [key, value] of Object.entries(edgeProperties)) {
+                edgePropConditions.push(`json_extract(properties, '$.${key}') = ?`);
+                edgePropParams.push(value);
+            }
+        }
+        // Build the condition string for base case (no table alias)
+        const basePropCondition = edgePropConditions.length > 0 ? " AND " + edgePropConditions.join(" AND ") : "";
+        // Build the condition string for recursive case (with 'e.' table alias)
+        const recursivePropConditions = edgePropConditions.map(c => c.replace("properties", "e.properties"));
+        const recursivePropCondition = recursivePropConditions.length > 0 ? " AND " + recursivePropConditions.join(" AND ") : "";
         // Check if a path expression already allocated a CTE name for this variable-length pattern
         // This allows length(p) to reference the correct CTE
         let pathCteName;
@@ -1649,18 +1665,20 @@ export class Translator {
             }
             else {
                 cte = `WITH RECURSIVE ${pathCteName}(start_id, end_id, depth, edge_ids) AS (
-  SELECT source_id, target_id, 1, json_array(json_object('id', id, 'type', type, 'source_id', source_id, 'target_id', target_id, 'properties', json(properties))) FROM edges WHERE ${edgeCondition}
+  SELECT source_id, target_id, 1, json_array(json_object('id', id, 'type', type, 'source_id', source_id, 'target_id', target_id, 'properties', json(properties))) FROM edges WHERE ${edgeCondition}${basePropCondition}
   UNION ALL
   SELECT p.start_id, e.target_id, p.depth + 1, json_insert(p.edge_ids, '$[#]', json_object('id', e.id, 'type', e.type, 'source_id', e.source_id, 'target_id', e.target_id, 'properties', json(e.properties)))
   FROM ${pathCteName} p
   JOIN edges e ON p.end_id = e.source_id
-  WHERE p.depth < ?${edgeType ? " AND e.type = ?" : ""}
+  WHERE p.depth < ?${edgeType ? " AND e.type = ?" : ""}${recursivePropCondition}
 )`;
                 // For maxHops=2, we need depth to reach 2, so recursion limit should be maxHops
+                allParams.push(...edgePropParams); // for base case
                 allParams.push(maxHops);
                 if (edgeType) {
                     allParams.push(edgeType);
                 }
+                allParams.push(...edgePropParams); // for recursive case
             }
         }
         // Build FROM and JOIN clauses for fixed-length patterns before the variable-length
@@ -1783,36 +1801,99 @@ export class Translator {
                 }
             }
         }
-        // Handle fixed-length patterns AFTER the variable-length pattern
+        // Handle patterns AFTER the variable-length pattern
         // The target of the variable-length path becomes the source for the first pattern after
         let currentSourceAlias = varLengthTargetAlias;
+        console.log("Processing patterns after variable-length:", fixedPatternsAfter.map(p => ({ isVarLen: p.isVariableLength, edge: p.edge.type })));
         for (const pattern of fixedPatternsAfter) {
-            // Add edge JOIN
-            if (!addedNodeAliases.has(pattern.sourceAlias) && pattern.sourceAlias !== currentSourceAlias) {
-                // The source is the variable-length target, already in FROM
-                joinParts.push(`JOIN nodes ${pattern.sourceAlias} ON ${pattern.sourceAlias}.id = ${currentSourceAlias}.id`);
-                addedNodeAliases.add(pattern.sourceAlias);
-            }
-            joinParts.push(`JOIN edges ${pattern.edgeAlias} ON ${pattern.edgeAlias}.source_id = ${currentSourceAlias}.id`);
-            // Add edge type filter
-            if (pattern.edge.type) {
-                whereParts.push(`${pattern.edgeAlias}.type = ?`);
-                allParams.push(pattern.edge.type);
-            }
-            // Add target node JOIN
-            if (!addedNodeAliases.has(pattern.targetAlias)) {
-                joinParts.push(`JOIN nodes ${pattern.targetAlias} ON ${pattern.edgeAlias}.target_id = ${pattern.targetAlias}.id`);
-                addedNodeAliases.add(pattern.targetAlias);
-                // Add target label/property filters
-                const afterTargetPattern = this.ctx[`pattern_${pattern.targetAlias}`];
-                if (afterTargetPattern?.label && !filteredNodeAliases.has(pattern.targetAlias)) {
-                    const labelMatch = this.generateLabelMatchCondition(pattern.targetAlias, afterTargetPattern.label);
+            console.log("Processing pattern:", { isVarLen: pattern.isVariableLength, edge: pattern.edge.type, source: pattern.sourceAlias, target: pattern.targetAlias });
+            if (pattern.isVariableLength) {
+                // Handle another variable-length pattern by creating a second CTE
+                const minHops2 = pattern.minHops ?? 1;
+                const maxHops2 = pattern.maxHops ?? 10;
+                const edgeType2 = pattern.edge.type;
+                const pathCteName2 = `path_${this.ctx.aliasCounter++}`;
+                // Build second CTE
+                let cte2 = "";
+                if (minHops2 === 0 && maxHops2 === 0) {
+                    cte2 = "";
+                }
+                else if (minHops2 === 0) {
+                    if (edgeType2) {
+                        cte2 = `, ${pathCteName2}(start_id, end_id, depth, edge_ids) AS (
+  SELECT id, id, 0, json_array() FROM nodes
+  UNION ALL
+  SELECT p.start_id, e.target_id, p.depth + 1, json_insert(p.edge_ids, '$[#]', json_object('id', e.id, 'type', e.type, 'source_id', e.source_id, 'target_id', e.target_id, 'properties', json(e.properties)))
+  FROM ${pathCteName2} p
+  JOIN edges e ON p.end_id = e.source_id
+  WHERE p.depth < ? AND e.type = ?
+)`;
+                        allParams.push(maxHops2, edgeType2);
+                    }
+                    else {
+                        cte2 = `, ${pathCteName2}(start_id, end_id, depth, edge_ids) AS (
+  SELECT id, id, 0, json_array() FROM nodes
+  UNION ALL
+  SELECT p.start_id, e.target_id, p.depth + 1, json_insert(p.edge_ids, '$[#]', json_object('id', e.id, 'type', e.type, 'source_id', e.source_id, 'target_id', e.target_id, 'properties', json(e.properties)))
+  FROM ${pathCteName2} p
+  JOIN edges e ON p.end_id = e.source_id
+  WHERE p.depth < ?
+)`;
+                        allParams.push(maxHops2);
+                    }
+                }
+                else {
+                    if (edgeType2) {
+                        cte2 = `, ${pathCteName2}(start_id, end_id, depth, edge_ids) AS (
+  SELECT source_id, target_id, 1, json_array(json_object('id', id, 'type', type, 'source_id', source_id, 'target_id', target_id, 'properties', json(properties))) FROM edges WHERE type = ?
+  UNION ALL
+  SELECT p.start_id, e.target_id, p.depth + 1, json_insert(p.edge_ids, '$[#]', json_object('id', e.id, 'type', e.type, 'source_id', e.source_id, 'target_id', e.target_id, 'properties', json(e.properties)))
+  FROM ${pathCteName2} p
+  JOIN edges e ON p.end_id = e.source_id
+  WHERE p.depth < ? AND e.type = ?
+)`;
+                        allParams.push(edgeType2, maxHops2, edgeType2);
+                    }
+                    else {
+                        cte2 = `, ${pathCteName2}(start_id, end_id, depth, edge_ids) AS (
+  SELECT source_id, target_id, 1, json_array(json_object('id', id, 'type', type, 'source_id', source_id, 'target_id', target_id, 'properties', json(properties))) FROM edges
+  UNION ALL
+  SELECT p.start_id, e.target_id, p.depth + 1, json_insert(p.edge_ids, '$[#]', json_object('id', e.id, 'type', e.type, 'source_id', e.source_id, 'target_id', e.target_id, 'properties', json(e.properties)))
+  FROM ${pathCteName2} p
+  JOIN edges e ON p.end_id = e.source_id
+  WHERE p.depth < ?
+)`;
+                        allParams.push(maxHops2);
+                    }
+                }
+                // Append second CTE to the first
+                cte += cte2;
+                // Add the second CTE to FROM
+                fromParts.push(pathCteName2);
+                // Add the target node of the second variable-length pattern
+                if (!addedNodeAliases.has(pattern.targetAlias)) {
+                    fromParts.push(`nodes ${pattern.targetAlias}`);
+                    addedNodeAliases.add(pattern.targetAlias);
+                }
+                // Connect the current source (end of first path) to the second path start
+                whereParts.push(`${currentSourceAlias}.id = ${pathCteName2}.start_id`);
+                // Connect the second path end to its target node
+                whereParts.push(`${pathCteName2}.end_id = ${pattern.targetAlias}.id`);
+                // Apply min depth constraint for second path
+                if (minHops2 > 1) {
+                    whereParts.push(`${pathCteName2}.depth >= ?`);
+                    allParams.push(minHops2);
+                }
+                // Add target label/property filters for second pattern
+                const targetPattern2 = this.ctx[`pattern_${pattern.targetAlias}`];
+                if (targetPattern2?.label && !filteredNodeAliases.has(pattern.targetAlias)) {
+                    const labelMatch = this.generateLabelMatchCondition(pattern.targetAlias, targetPattern2.label);
                     whereParts.push(labelMatch.sql);
                     allParams.push(...labelMatch.params);
                     filteredNodeAliases.add(pattern.targetAlias);
                 }
-                if (afterTargetPattern?.properties) {
-                    for (const [key, value] of Object.entries(afterTargetPattern.properties)) {
+                if (targetPattern2?.properties) {
+                    for (const [key, value] of Object.entries(targetPattern2.properties)) {
                         if (this.isParameterRef(value)) {
                             whereParts.push(`json_extract(${pattern.targetAlias}.properties, '$.${key}') = ?`);
                             allParams.push(this.ctx.paramValues[value.name]);
@@ -1823,9 +1904,44 @@ export class Translator {
                         }
                     }
                 }
+                currentSourceAlias = pattern.targetAlias;
             }
-            // Update current source for next pattern in chain
-            currentSourceAlias = pattern.targetAlias;
+            else {
+                // Handle fixed-length pattern
+                if (!addedNodeAliases.has(pattern.sourceAlias) && pattern.sourceAlias !== currentSourceAlias) {
+                    joinParts.push(`JOIN nodes ${pattern.sourceAlias} ON ${pattern.sourceAlias}.id = ${currentSourceAlias}.id`);
+                    addedNodeAliases.add(pattern.sourceAlias);
+                }
+                joinParts.push(`JOIN edges ${pattern.edgeAlias} ON ${pattern.edgeAlias}.source_id = ${currentSourceAlias}.id`);
+                if (pattern.edge.type) {
+                    whereParts.push(`${pattern.edgeAlias}.type = ?`);
+                    allParams.push(pattern.edge.type);
+                }
+                if (!addedNodeAliases.has(pattern.targetAlias)) {
+                    joinParts.push(`JOIN nodes ${pattern.targetAlias} ON ${pattern.edgeAlias}.target_id = ${pattern.targetAlias}.id`);
+                    addedNodeAliases.add(pattern.targetAlias);
+                    const afterTargetPattern = this.ctx[`pattern_${pattern.targetAlias}`];
+                    if (afterTargetPattern?.label && !filteredNodeAliases.has(pattern.targetAlias)) {
+                        const labelMatch = this.generateLabelMatchCondition(pattern.targetAlias, afterTargetPattern.label);
+                        whereParts.push(labelMatch.sql);
+                        allParams.push(...labelMatch.params);
+                        filteredNodeAliases.add(pattern.targetAlias);
+                    }
+                    if (afterTargetPattern?.properties) {
+                        for (const [key, value] of Object.entries(afterTargetPattern.properties)) {
+                            if (this.isParameterRef(value)) {
+                                whereParts.push(`json_extract(${pattern.targetAlias}.properties, '$.${key}') = ?`);
+                                allParams.push(this.ctx.paramValues[value.name]);
+                            }
+                            else {
+                                whereParts.push(`json_extract(${pattern.targetAlias}.properties, '$.${key}') = ?`);
+                                allParams.push(value);
+                            }
+                        }
+                    }
+                }
+                currentSourceAlias = pattern.targetAlias;
+            }
         }
         // Add WHERE clause from MATCH if present
         const matchWhereClause = this.ctx.whereClause;
@@ -1844,6 +1960,8 @@ export class Translator {
         if (whereParts.length > 0) {
             sql += ` WHERE ${whereParts.join(" AND ")}`;
         }
+        console.log("Final SQL:", sql);
+        console.log("All params:", allParams);
         // Check if we need GROUP BY (when mixing aggregates with non-aggregates)
         const hasAggregates = clause.items.some(item => this.isAggregateExpression(item.expression));
         const nonAggregateItems = clause.items.filter(item => !this.isAggregateExpression(item.expression));

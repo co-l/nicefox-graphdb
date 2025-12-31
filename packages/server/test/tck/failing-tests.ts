@@ -79,10 +79,12 @@ export const FAILING_TESTS = new Set([
   // Match4|1,2,6,9: Now work with variable-length edge tracking in CTE
   // "clauses/match > Match4 - Match variable length patterns scenarios|1",
   // "clauses/match > Match4 - Match variable length patterns scenarios|2", // was never in list, already passed
+  // Match4|3: Pre-existing failure - edge type case sensitivity issue with 'Contains' vs 'CONTAINS'
   "clauses/match > Match4 - Match variable length patterns scenarios|3",
   "clauses/match > Match4 - Match variable length patterns scenarios|4",
-  "clauses/match > Match4 - Match variable length patterns scenarios|5",
+  // "clauses/match > Match4 - Match variable length patterns scenarios|5",
   // "clauses/match > Match4 - Match variable length patterns scenarios|6",
+  // Match4|7: Pre-existing failure - path3.id reference bug
   "clauses/match > Match4 - Match variable length patterns scenarios|7",
   "clauses/match > Match4 - Match variable length patterns scenarios|8",
   // Match5|1,4,5,7,9,10,14,15,17,18,22,24: Now work with Background parsing support
