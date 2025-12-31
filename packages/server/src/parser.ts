@@ -1936,6 +1936,19 @@ export class Parser {
       return { type: "parameter", name: token.value };
     }
 
+    // Unary minus for negative numbers
+    if (token.type === "DASH") {
+      this.advance(); // consume the dash
+      const nextToken = this.peek();
+      if (nextToken.type === "NUMBER") {
+        this.advance();
+        return { type: "literal", value: -parseFloat(nextToken.value) };
+      }
+      // For more complex expressions, create a unary minus operation
+      const operand = this.parsePrimaryExpression();
+      return { type: "binary", operator: "-", left: { type: "literal", value: 0 }, right: operand };
+    }
+
     // Literal values
     if (token.type === "STRING") {
       this.advance();
@@ -2082,20 +2095,29 @@ export class Parser {
       }
     }
     
-    // Regular list literal
-    const values: PropertyValue[] = [];
+    // Regular list literal - elements can be full expressions (including objects)
+    const elements: Expression[] = [];
 
     if (!this.check("RBRACKET")) {
       do {
-        if (values.length > 0) {
+        if (elements.length > 0) {
           this.expect("COMMA");
         }
-        values.push(this.parsePropertyValue());
+        elements.push(this.parseExpression());
       } while (this.check("COMMA"));
     }
 
     this.expect("RBRACKET");
-    return { type: "literal", value: values };
+    
+    // If all elements are literals, return as literal list
+    // Otherwise wrap in a function-like expression for arrays of expressions
+    const allLiterals = elements.every(e => e.type === "literal");
+    if (allLiterals) {
+      return { type: "literal", value: elements.map(e => e.value) as PropertyValue[] };
+    }
+    
+    // For lists containing expressions, use a special function type
+    return { type: "function", functionName: "LIST", args: elements };
   }
 
   /**

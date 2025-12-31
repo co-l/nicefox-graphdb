@@ -3175,6 +3175,21 @@ END FROM (SELECT json_group_array(${valueExpr}) as sv))`,
           throw new Error("reverse requires an argument");
         }
 
+        // LIST: array/list constructor for expressions (used when list contains non-literals)
+        if (expr.functionName === "LIST") {
+          if (expr.args && expr.args.length > 0) {
+            const elements: string[] = [];
+            for (const arg of expr.args) {
+              const argResult = this.translateExpression(arg);
+              tables.push(...argResult.tables);
+              params.push(...argResult.params);
+              elements.push(argResult.sql);
+            }
+            return { sql: `json_array(${elements.join(", ")})`, tables, params };
+          }
+          return { sql: "json_array()", tables, params };
+        }
+
         throw new Error(`Unknown function: ${expr.functionName}`);
       }
 
