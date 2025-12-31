@@ -1,8 +1,8 @@
 # NiceFox GraphDB - TCK Compliance Guide
 
 ## Current Status
-- **Passing**: 1175 tests (74.6%)
-- **Failing**: 399 tests (skipped in test suite)
+- **Passing**: 1259 tests (79.9%)
+- **Failing**: 315 tests (skipped in test suite)
 - **Outline scenarios**: 276 (skipped, require template expansion)
 
 ## How TCK Tests Work
@@ -16,6 +16,21 @@ pnpm test -- --run
 # Output shows:
 # Tests  1125 passed | 445 skipped (1570)
 ```
+
+### Quick TCK Test Tool
+
+Use `pnpm tck` to quickly run individual tests without the full test suite:
+
+```bash
+pnpm tck 'Return6|11'           # Run specific test by ID
+pnpm tck 'Counting matches'     # Run test by name
+pnpm tck 'Match3' --list        # List all Match3 tests
+pnpm tck 'Return6|11' -v        # Verbose output with setup/expected
+pnpm tck 'Return6|11' --sql     # Show generated SQL
+pnpm tck 'Return6|16' --force   # Run even if in failing list
+```
+
+This is the fastest way to debug a specific test - much quicker than running the full test suite.
 
 ## Workflow for Fixing Tests
 
