@@ -1608,7 +1608,8 @@ export class Parser {
                 // Property keys can be identifiers or keywords
                 const key = this.expectIdentifierOrKeyword();
                 this.expect("COLON");
-                const value = this.parseExpression();
+                // Use parseReturnExpression to support comparisons like {foo: a.name='Andres'}
+                const value = this.parseReturnExpression();
                 properties.push({ key, value });
             } while (this.check("COMMA"));
         }

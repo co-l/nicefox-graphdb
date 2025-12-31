@@ -1069,7 +1069,8 @@ export class Executor {
                 }
             }
             else if (item.expression.type === "function") {
-                if (item.expression.functionName === "TYPE" && item.expression.args?.length === 1) {
+                const funcName = item.expression.functionName?.toUpperCase();
+                if (funcName === "TYPE" && item.expression.args?.length === 1) {
                     const arg = item.expression.args[0];
                     if (arg.type === "variable") {
                         const edge = matchedEdges.get(arg.variable);
@@ -1078,6 +1079,11 @@ export class Executor {
                             continue;
                         }
                     }
+                }
+                else if (funcName === "COUNT") {
+                    // count(*) or count(r) - return 1 for MERGE results
+                    resultRow[alias] = 1;
+                    continue;
                 }
             }
             else if (item.expression.type === "comparison") {

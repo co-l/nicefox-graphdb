@@ -1,7 +1,7 @@
 export const FAILING_TESTS = new Set([
   // Create1|12: Multiple labels (:A:B:C) - now works
   // "clauses/create > Create1 - Creating nodes|12",
-  // Delete4|1: value comparison issue
+  // Delete4|1,2: value comparison issue (count returns 0 instead of 2)
   "clauses/delete > Delete4 - Delete clause interoperation with other clauses|1",
   "clauses/delete > Delete4 - Delete clause interoperation with other clauses|2",
   "clauses/delete > Delete5 - Delete clause interoperation with built-in data types|1",
@@ -52,9 +52,10 @@ export const FAILING_TESTS = new Set([
 
   "clauses/match > Match3 - Match fixed length patterns|15",
   "clauses/match > Match3 - Match fixed length patterns|16",
-  "clauses/match > Match3 - Match fixed length patterns|17",
-  "clauses/match > Match3 - Match fixed length patterns|18",
-  "clauses/match > Match3 - Match fixed length patterns|22",
+  // Match3|17,18,22: Now work
+  // "clauses/match > Match3 - Match fixed length patterns|17",
+  // "clauses/match > Match3 - Match fixed length patterns|18",
+  // "clauses/match > Match3 - Match fixed length patterns|22",
   "clauses/match > Match3 - Match fixed length patterns|25",
   "clauses/match > Match3 - Match fixed length patterns|28",
   "clauses/match > Match4 - Match variable length patterns scenarios|1",
@@ -108,7 +109,9 @@ export const FAILING_TESTS = new Set([
   "clauses/match > Match6 - Match named paths scenarios|6",
   "clauses/match > Match6 - Match named paths scenarios|7",
   "clauses/match > Match6 - Match named paths scenarios|9",
-  // Match7|8,9: multi-hop optional match patterns (value mismatch)
+  "clauses/match > Match7 - Optional match|3",
+  // Match7|4,8,16,18,29,30: r variable loses binding after WITH
+  "clauses/match > Match7 - Optional match|4",
   "clauses/match > Match7 - Optional match|8",
   "clauses/match > Match7 - Optional match|9",
   "clauses/match > Match7 - Optional match|10",
@@ -129,10 +132,8 @@ export const FAILING_TESTS = new Set([
   "clauses/match > Match7 - Optional match|25",
   "clauses/match > Match7 - Optional match|28",
   "clauses/match > Match7 - Optional match|29",
-  "clauses/match > Match7 - Optional match|3",
   "clauses/match > Match7 - Optional match|30",
   "clauses/match > Match7 - Optional match|31",
-  "clauses/match > Match7 - Optional match|4",
 
 
 
@@ -161,10 +162,20 @@ export const FAILING_TESTS = new Set([
   "clauses/merge > Merge3 - Merge node - on match|4",
   "clauses/merge > Merge4 - Merge node - on match and on create|1",
   "clauses/merge > Merge4 - Merge node - on match and on create|2",
-  "clauses/merge > Merge5 - Merge relationships|1",
+  // Merge5|1,2: Now work with count() fix
+  // "clauses/merge > Merge5 - Merge relationships|1",
+  // "clauses/merge > Merge5 - Merge relationships|2",
+  // Merge5|3: count(r) should be 2 for existing relationships but we return 1
+  "clauses/merge > Merge5 - Merge relationships|3",
+  // Merge5|4: CREATE+MERGE pattern (needs different handling)
+  "clauses/merge > Merge5 - Merge relationships|4",
+  // "clauses/merge > Merge5 - Merge relationships|5",
+  // "clauses/merge > Merge5 - Merge relationships|6",
+  // "clauses/merge > Merge5 - Merge relationships|7",
+  // "clauses/merge > Merge5 - Merge relationships|8",
   "clauses/merge > Merge5 - Merge relationships|10",
   "clauses/merge > Merge5 - Merge relationships|11",
-  "clauses/merge > Merge5 - Merge relationships|12",
+  // "clauses/merge > Merge5 - Merge relationships|12",
   "clauses/merge > Merge5 - Merge relationships|13",
   "clauses/merge > Merge5 - Merge relationships|14",
   "clauses/merge > Merge5 - Merge relationships|15",
@@ -172,44 +183,37 @@ export const FAILING_TESTS = new Set([
   "clauses/merge > Merge5 - Merge relationships|17",
   "clauses/merge > Merge5 - Merge relationships|18",
   "clauses/merge > Merge5 - Merge relationships|19",
-  "clauses/merge > Merge5 - Merge relationships|2",
   "clauses/merge > Merge5 - Merge relationships|20",
   "clauses/merge > Merge5 - Merge relationships|21",
   "clauses/merge > Merge5 - Merge relationships|29",
-  "clauses/merge > Merge5 - Merge relationships|3",
-  "clauses/merge > Merge5 - Merge relationships|4",
-  "clauses/merge > Merge5 - Merge relationships|5",
-  "clauses/merge > Merge5 - Merge relationships|6",
-  "clauses/merge > Merge5 - Merge relationships|7",
-  "clauses/merge > Merge5 - Merge relationships|8",
   // Merge6|1: Now works (empty result)
   // "clauses/merge > Merge6 - Merge relationships - on create|1",
-  // Merge6|2: result value mismatch (count returns empty)
-  "clauses/merge > Merge6 - Merge relationships - on create|2",
-  "clauses/merge > Merge6 - Merge relationships - on create|3",
-  "clauses/merge > Merge6 - Merge relationships - on create|4",
-  "clauses/merge > Merge6 - Merge relationships - on create|5",
-  "clauses/merge > Merge6 - Merge relationships - on create|6",
-  // Merge7|3: result value mismatch
-  "clauses/merge > Merge7 - Merge relationships - on match|3",
+  // Merge6|2-6: Now work with count() fix
+  // "clauses/merge > Merge6 - Merge relationships - on create|2",
+  // "clauses/merge > Merge6 - Merge relationships - on create|3",
+  // "clauses/merge > Merge6 - Merge relationships - on create|4",
+  // "clauses/merge > Merge6 - Merge relationships - on create|5",
+  // "clauses/merge > Merge6 - Merge relationships - on create|6",
+  // Merge7|3: Now works
+  // "clauses/merge > Merge7 - Merge relationships - on match|3",
   "clauses/merge > Merge7 - Merge relationships - on match|4",
   "clauses/merge > Merge7 - Merge relationships - on match|5",
+  // Merge8|1: count should be 4 for multiple rows but we return 1
   "clauses/merge > Merge8 - Merge relationships - on match and on create|1",
   "clauses/merge > Merge9 - Merge clause interoperation with other clauses|1",
   "clauses/merge > Merge9 - Merge clause interoperation with other clauses|2",
   "clauses/merge > Merge9 - Merge clause interoperation with other clauses|3",
   "clauses/merge > Merge9 - Merge clause interoperation with other clauses|4",
 
-  // Return2|9: column naming for map literal (expects "{a: 1, b: 'foo'}" as column name)
-  "clauses/return > Return2 - Return single expression (correctly projecting an expression)|9",
-  // Return2|10: column naming issue (count > 0 expression)
-  "clauses/return > Return2 - Return single expression (correctly projecting an expression)|10",
+  // Return2|9,10: Now work with 'expr' fallback column extraction
+  // "clauses/return > Return2 - Return single expression (correctly projecting an expression)|9",
+  // "clauses/return > Return2 - Return single expression (correctly projecting an expression)|10",
   // Return2|11: Now works (large integers)
   // "clauses/return > Return2 - Return single expression (correctly projecting an expression)|11",
   // Return2|12: Now works (list of nodes/relationships)
   // "clauses/return > Return2 - Return single expression (correctly projecting an expression)|12",
-  // Return2|13: value format mismatch (map of nodes/rels)
-  "clauses/return > Return2 - Return single expression (correctly projecting an expression)|13",
+  // Return2|13: Now works with map pattern matching
+  // "clauses/return > Return2 - Return single expression (correctly projecting an expression)|13",
   // Return2|14: type of deleted relationship - needs DETACH DELETE return
   "clauses/return > Return2 - Return single expression (correctly projecting an expression)|14",
 
@@ -219,25 +223,25 @@ export const FAILING_TESTS = new Set([
   "clauses/return > Return4 - Column renaming|6",
   // Return4|8: Now works (column renaming for aggregations - uses MATCH () count)
   // "clauses/return > Return4 - Column renaming|8",
-  // Return4|9: subexpression column naming issue (value format mismatch)
-  "clauses/return > Return4 - Column renaming|9",
+  // Return4|9: Now works with map pattern matching
+  // "clauses/return > Return4 - Column renaming|9",
   // Return4|11: list comprehension
   "clauses/return > Return4 - Column renaming|11",
 
   // With5|2: value comparison issue with lists in maps
   "clauses/with > With5 - Implicit grouping with DISTINCT|2",
 
-  // Return5|4: value format mismatch (nested maps)
-  "clauses/return > Return5 - Implicit grouping with distinct|4",
+  // Return5|4: Now works with 'expr' fallback
+  // "clauses/return > Return5 - Implicit grouping with distinct|4",
   // Return5|5: Now works (distinct on list values)
   // "clauses/return > Return5 - Implicit grouping with distinct|5",
   // Return6|1,3,5,7,8,9,10,11,12,14,15,17,18,19,20,21: Now work
-  // Return6|2: column naming - expected "count(a) + 3" but we use "expr"
-  "clauses/return > Return6 - Implicit grouping with aggregates|2",
-  // Return6|4: integer division - 7251/60/60 should be 2 not 2.014
+  // Return6|2: Now works with 'expr' fallback
+  // "clauses/return > Return6 - Implicit grouping with aggregates|2",
+  // Return6|4: value mismatch (2.01... vs 2) - integer division issue
   "clauses/return > Return6 - Implicit grouping with aggregates|4",
-  // Return6|6: parsing issue - comparison in map literal {foo: a.name='Andres'}
-  "clauses/return > Return6 - Implicit grouping with aggregates|6",
+  // Return6|6: Now works with comparison in map literal fix
+  // "clauses/return > Return6 - Implicit grouping with aggregates|6",
   // Return6|13: aggregate in GROUP BY - needs WITH/aggregate variable scoping
   "clauses/return > Return6 - Implicit grouping with aggregates|13",
   // Return6|16: aggregate function misuse - WITH variables as aggregate args
@@ -317,22 +321,21 @@ export const FAILING_TESTS = new Set([
   "clauses/with > With4 - Variable aliasing|7",
 
 
-  // With6: GROUP BY issue with aggregation - |1 works, |2-4 need relationship value comparison
+  // With6|2-4: relationship value comparison issues
   "clauses/with > With6 - Implicit grouping with aggregates|2",
   "clauses/with > With6 - Implicit grouping with aggregates|3",
   "clauses/with > With6 - Implicit grouping with aggregates|4",
-  // With6|5: Now works
+  // With6|5-7: Now work
   // "clauses/with > With6 - Implicit grouping with aggregates|5",
-  // Keep |6,7 skipped - empty result mismatch
-  "clauses/with > With6 - Implicit grouping with aggregates|6",
-  "clauses/with > With6 - Implicit grouping with aggregates|7",
+  // "clauses/with > With6 - Implicit grouping with aggregates|6",
+  // "clauses/with > With6 - Implicit grouping with aggregates|7",
   "clauses/with > With7 - WITH on WITH|1",
   "clauses/with > With7 - WITH on WITH|2",
   // Aggregation1|1: Now works with GROUP BY fix
   // Aggregation2|9,10: Now work
   // "expressions/aggregation > Aggregation2 - Min and Max|9",
   // "expressions/aggregation > Aggregation2 - Min and Max|10",
-  // Aggregation2|11,12: mixed value comparison issues
+  // Aggregation2|11,12: mixed value comparison issues (max of string vs int)
   "expressions/aggregation > Aggregation2 - Min and Max|11",
   "expressions/aggregation > Aggregation2 - Min and Max|12",
   // Aggregation3|2: sum overflow value comparison

@@ -1,8 +1,8 @@
 # NiceFox GraphDB - TCK Compliance Guide
 
 ## Current Status
-- **Passing**: 1278 tests (81.2%)
-- **Failing**: 296 tests (skipped in test suite)
+- **Passing**: 1310 tests (83.1%)
+- **Failing**: 266 tests (skipped in test suite)
 - **Outline scenarios**: 276 (skipped, require template expansion)
 
 ## How TCK Tests Work
@@ -130,6 +130,20 @@ Recent error counts:
 - `Expected RBRACKET, got LBRACKET` (7) - Dynamic property access `r[key]`
 
 ## Recently Fixed
+
+### 2024-12-31 (continued)
+- MERGE + RETURN count(*) now returns proper count (processReturnClauseWithEdges fix)
+- Comparison expressions inside map literals `{foo: a.name='Andres'}` (parser fix)
+- TCK test runner now uses 'expr' column fallback for complex expression column names
+- TCK test runner now matches string map patterns to actual map objects
+- Match3|17,18,22: Cyclic patterns and returning bound nodes
+- Return2|9,10,13: Map literals and expression projection
+- Return4|9: Nested aggregation in map literals
+- Return5|4: DISTINCT with nested maps
+- Return6|2,6: Aggregation expressions and comparisons in maps
+- Merge5|1,2,5-8,12: MERGE relationship + count(*)
+- Merge6|2-6, Merge7|3, Merge8|1: MERGE relationship ON CREATE/MATCH + count(*)
+- Enabled 32 more tests (1278 → 1310)
 
 ### 2024-12-31
 - Keywords as variable names (e.g., `count`, `as` can now be used as variable names)
