@@ -1,8 +1,8 @@
 # NiceFox GraphDB - TCK Compliance Guide
 
 ## Current Status
-- **Passing**: 1259 tests (79.9%)
-- **Failing**: 315 tests (skipped in test suite)
+- **Passing**: 1278 tests (81.2%)
+- **Failing**: 296 tests (skipped in test suite)
 - **Outline scenarios**: 276 (skipped, require template expansion)
 
 ## How TCK Tests Work
@@ -130,6 +130,16 @@ Recent error counts:
 - `Expected RBRACKET, got LBRACKET` (7) - Dynamic property access `r[key]`
 
 ## Recently Fixed
+
+### 2024-12-31
+- Keywords as variable names (e.g., `count`, `as` can now be used as variable names)
+- Nested object literals in list expressions `[{a: 1}, {b: 2}]`
+- Negative numbers in list expressions `[-1, -2, 3]`
+- AND/OR operators inside parenthesized expressions `(a AND b)`
+- Float literals starting with dot `.5` → `0.5`
+- List indexing `expr[index]` with json_extract
+- List slicing `expr[start..end]` with json_each subquery
+- Enabled 19 more tests (1259 → 1278)
 
 ### 2024-12-30
 - Label predicate expression `(n:Label)` in RETURN - checks if node has a label
