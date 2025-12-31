@@ -41,6 +41,19 @@ export class Executor {
                     },
                 };
             }
+            // 2.2. Check for UNWIND with MERGE pattern (needs special handling)
+            const unwindMergeResult = this.tryUnwindMergeExecution(parseResult.query, params);
+            if (unwindMergeResult !== null) {
+                const endTime = performance.now();
+                return {
+                    success: true,
+                    data: unwindMergeResult,
+                    meta: {
+                        count: unwindMergeResult.length,
+                        time_ms: Math.round((endTime - startTime) * 100) / 100,
+                    },
+                };
+            }
             // 2.3. Check for MATCH+WITH(COLLECT)+UNWIND+RETURN pattern (needs subquery for aggregates)
             const collectUnwindResult = this.tryCollectUnwindExecution(parseResult.query, params);
             if (collectUnwindResult !== null) {
@@ -336,6 +349,97 @@ export class Executor {
             return params[expr.name];
         }
         return null;
+    }
+    /**
+     * Handle UNWIND + MERGE pattern
+     * This requires special handling to resolve UNWIND variables in MERGE patterns
+     */
+    tryUnwindMergeExecution(query, params) {
+        const clauses = query.clauses;
+        // Find UNWIND and MERGE clauses
+        const unwindClauses = [];
+        let mergeClause = null;
+        let returnClause = null;
+        for (const clause of clauses) {
+            if (clause.type === "UNWIND") {
+                unwindClauses.push(clause);
+            }
+            else if (clause.type === "MERGE") {
+                mergeClause = clause;
+            }
+            else if (clause.type === "RETURN") {
+                returnClause = clause;
+            }
+            else if (clause.type === "MATCH" || clause.type === "CREATE") {
+                // If there's a MATCH or CREATE, don't handle here
+                return null;
+            }
+        }
+        // Only handle if we have both UNWIND and MERGE
+        if (unwindClauses.length === 0 || !mergeClause) {
+            return null;
+        }
+        // Get the values from the UNWIND expression
+        const unwindValues = this.evaluateUnwindExpressions(unwindClauses, params);
+        // Generate all combinations (cartesian product) of UNWIND values
+        const combinations = this.generateCartesianProduct(unwindValues);
+        // Track created/merged node count
+        let mergedCount = 0;
+        this.db.transaction(() => {
+            for (const combination of combinations) {
+                // Build a map of unwind variable -> current value
+                const unwindContext = {};
+                for (let i = 0; i < unwindClauses.length; i++) {
+                    unwindContext[unwindClauses[i].alias] = combination[i];
+                }
+                // Execute MERGE for each pattern
+                for (const pattern of mergeClause.patterns) {
+                    if (!this.isRelationshipPattern(pattern)) {
+                        // Node pattern MERGE
+                        const nodePattern = pattern;
+                        const props = this.resolvePropertiesWithUnwind(nodePattern.properties || {}, params, unwindContext);
+                        const labelJson = this.normalizeLabelToJson(nodePattern.label);
+                        // Check if node exists
+                        let whereConditions = [];
+                        let whereParams = [];
+                        if (nodePattern.label) {
+                            whereConditions.push("EXISTS (SELECT 1 FROM json_each(label) WHERE value = ?)");
+                            whereParams.push(nodePattern.label);
+                        }
+                        for (const [key, value] of Object.entries(props)) {
+                            whereConditions.push(`json_extract(properties, '$.${key}') = ?`);
+                            whereParams.push(value);
+                        }
+                        const existsQuery = whereConditions.length > 0
+                            ? `SELECT id FROM nodes WHERE ${whereConditions.join(" AND ")}`
+                            : "SELECT id FROM nodes LIMIT 1";
+                        const existsResult = this.db.execute(existsQuery, whereParams);
+                        if (existsResult.rows.length === 0) {
+                            // Node doesn't exist, create it
+                            const id = crypto.randomUUID();
+                            this.db.execute("INSERT INTO nodes (id, label, properties) VALUES (?, ?, ?)", [id, labelJson, JSON.stringify(props)]);
+                        }
+                        mergedCount++;
+                    }
+                }
+            }
+        });
+        // Handle RETURN clause
+        if (returnClause) {
+            // For count(*) return the number of UNWIND iterations
+            for (const item of returnClause.items) {
+                if (item.expression.type === "function" &&
+                    item.expression.functionName?.toLowerCase() === "count" &&
+                    (!item.expression.args || item.expression.args.length === 0 ||
+                        (item.expression.args.length === 1 &&
+                            item.expression.args[0].type === "literal" &&
+                            item.expression.args[0].value === "*"))) {
+                    const alias = item.alias || "count(*)";
+                    return [{ [alias]: mergedCount }];
+                }
+            }
+        }
+        return [];
     }
     /**
      * Handle MATCH+WITH(COLLECT)+UNWIND+RETURN pattern

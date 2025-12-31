@@ -218,8 +218,9 @@ export const FAILING_TESTS = new Set([
   "clauses/merge > Merge7 - Merge relationships - on match|5",
   // Merge8|1: value mismatch
   "clauses/merge > Merge8 - Merge relationships - on match and on create|1",
-  "clauses/merge > Merge9 - Merge clause interoperation with other clauses|1",
-  "clauses/merge > Merge9 - Merge clause interoperation with other clauses|2",
+  // Merge9|1,2: Now work with UNWIND+MERGE execution
+  // "clauses/merge > Merge9 - Merge clause interoperation with other clauses|1",
+  // "clauses/merge > Merge9 - Merge clause interoperation with other clauses|2",
   "clauses/merge > Merge9 - Merge clause interoperation with other clauses|3",
   "clauses/merge > Merge9 - Merge clause interoperation with other clauses|4",
 

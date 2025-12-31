@@ -38,6 +38,11 @@ export declare class Executor {
      */
     private evaluateExpressionForFilter;
     /**
+     * Handle UNWIND + MERGE pattern
+     * This requires special handling to resolve UNWIND variables in MERGE patterns
+     */
+    private tryUnwindMergeExecution;
+    /**
      * Handle MATCH+WITH(COLLECT)+UNWIND+RETURN pattern
      * This requires a subquery for the aggregate function because SQLite doesn't
      * allow aggregate functions directly inside json_each()
