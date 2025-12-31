@@ -125,6 +125,10 @@ export declare class Executor {
      */
     private findReferencedVariables;
     /**
+     * Find variables in CREATE that reference MATCH variables (with alias support)
+     */
+    private findReferencedVariablesWithAliases;
+    /**
      * Execute a complex pattern with MATCH...CREATE/SET/DELETE in multiple phases
      */
     private executeMultiPhaseGeneral;

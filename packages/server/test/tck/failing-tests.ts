@@ -26,8 +26,10 @@ export const FAILING_TESTS = new Set([
   // "clauses/delete > Delete6 - Persistence of delete clause side effects|12",
   "clauses/delete > Delete6 - Persistence of delete clause side effects|13",
   "clauses/delete > Delete6 - Persistence of delete clause side effects|14",
-  "clauses/create > Create3 - Interoperation with other clauses|5",
-  "clauses/create > Create3 - Interoperation with other clauses|6",
+  // Create3|5,6: Now work with WITH alias handling for CREATE
+  // "clauses/create > Create3 - Interoperation with other clauses|5",
+  // "clauses/create > Create3 - Interoperation with other clauses|6",
+  // Create3|7,8: Require chained aliasing (WITH n AS a, WITH a AS x)
   "clauses/create > Create3 - Interoperation with other clauses|7",
   "clauses/create > Create3 - Interoperation with other clauses|8",
   "clauses/create > Create3 - Interoperation with other clauses|12",

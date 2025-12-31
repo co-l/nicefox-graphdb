@@ -1592,6 +1592,7 @@ export class Executor {
   ): Record<string, unknown>[] | null {
     // Categorize clauses
     const matchClauses: MatchClause[] = [];
+    const withClauses: WithClause[] = [];
     const createClauses: CreateClause[] = [];
     const setClauses: SetClause[] = [];
     const deleteClauses: DeleteClause[] = [];
@@ -1601,6 +1602,9 @@ export class Executor {
       switch (clause.type) {
         case "MATCH":
           matchClauses.push(clause);
+          break;
+        case "WITH":
+          withClauses.push(clause);
           break;
         case "CREATE":
           createClauses.push(clause);
@@ -1653,11 +1657,33 @@ export class Executor {
       }
     }
 
+    // Build alias map from WITH clauses: alias -> original variable
+    // e.g., WITH n AS a creates aliasMap["a"] = "n"
+    const aliasMap = new Map<string, string>();
+    for (const withClause of withClauses) {
+      for (const item of withClause.items) {
+        if (item.alias && item.expression.type === "variable" && item.expression.variable) {
+          const original = item.expression.variable;
+          // Only track aliases that refer to matched variables
+          if (matchedVariables.has(original)) {
+            aliasMap.set(item.alias, original);
+          }
+        }
+      }
+    }
+
+    // Helper to resolve an alias to its original variable
+    const resolveAlias = (varName: string): string | null => {
+      if (matchedVariables.has(varName)) return varName;
+      if (aliasMap.has(varName)) return aliasMap.get(varName)!;
+      return null;
+    };
+
     // Determine which variables need to be resolved for CREATE
     const referencedInCreate = new Set<string>();
     for (const createClause of createClauses) {
       for (const pattern of createClause.patterns) {
-        this.findReferencedVariables(pattern, matchedVariables, referencedInCreate);
+        this.findReferencedVariablesWithAliases(pattern, matchedVariables, aliasMap, referencedInCreate);
       }
     }
 
@@ -1665,8 +1691,9 @@ export class Executor {
     const referencedInSet = new Set<string>();
     for (const setClause of setClauses) {
       for (const assignment of setClause.assignments) {
-        if (matchedVariables.has(assignment.variable)) {
-          referencedInSet.add(assignment.variable);
+        const resolved = resolveAlias(assignment.variable);
+        if (resolved) {
+          referencedInSet.add(resolved);
         }
       }
     }
@@ -1675,8 +1702,9 @@ export class Executor {
     const referencedInDelete = new Set<string>();
     for (const deleteClause of deleteClauses) {
       for (const variable of deleteClause.variables) {
-        if (matchedVariables.has(variable)) {
-          referencedInDelete.add(variable);
+        const resolved = resolveAlias(variable);
+        if (resolved) {
+          referencedInDelete.add(resolved);
         }
       }
     }
@@ -1688,9 +1716,73 @@ export class Executor {
       ...referencedInDelete,
     ]);
 
-    // If no relationship patterns and nothing references matched vars, use standard execution
-    if (!hasRelationshipPattern && allReferencedVars.size === 0) {
+    // Check if any CREATE/SET/DELETE pattern uses an aliased variable
+    // This is the specific case we need multi-phase for: WITH introduces an alias
+    // that is then used in a mutation clause
+    const aliasesUsedInMutation = new Set<string>();
+    
+    // Check CREATE patterns for aliased variables
+    for (const createClause of createClauses) {
+      for (const pattern of createClause.patterns) {
+        if (this.isRelationshipPattern(pattern)) {
+          if (pattern.source.variable && aliasMap.has(pattern.source.variable)) {
+            aliasesUsedInMutation.add(pattern.source.variable);
+          }
+          if (pattern.target.variable && aliasMap.has(pattern.target.variable)) {
+            aliasesUsedInMutation.add(pattern.target.variable);
+          }
+        }
+      }
+    }
+    
+    // Check SET assignments for aliased variables
+    for (const setClause of setClauses) {
+      for (const assignment of setClause.assignments) {
+        if (aliasMap.has(assignment.variable)) {
+          aliasesUsedInMutation.add(assignment.variable);
+        }
+      }
+    }
+    
+    // Check DELETE for aliased variables
+    for (const deleteClause of deleteClauses) {
+      for (const variable of deleteClause.variables) {
+        if (aliasMap.has(variable)) {
+          aliasesUsedInMutation.add(variable);
+        }
+      }
+    }
+
+    // Only use multi-phase WITH handling if aliases are actually used in mutations
+    const needsWithAliasHandling = aliasesUsedInMutation.size > 0;
+
+    // DEBUG (disabled)
+    // console.log("tryMultiPhaseExecution debug:", {
+    //   withClauses: withClauses.length,
+    //   aliasMap: [...aliasMap.entries()],
+    //   aliasesUsedInMutation: [...aliasesUsedInMutation],
+    //   needsWithAliasHandling,
+    //   createClauses: createClauses.length,
+    // });
+
+    // If WITH clauses are present but no aliases are used in mutations, use standard execution
+    if (withClauses.length > 0 && !needsWithAliasHandling) {
       return null;
+    }
+
+    // If no relationship patterns and nothing references matched vars, use standard execution
+    if (!hasRelationshipPattern && allReferencedVars.size === 0 && !needsWithAliasHandling) {
+      return null;
+    }
+
+    // If WITH aliases are used in mutations, add the original variables to resolution set
+    if (needsWithAliasHandling) {
+      for (const alias of aliasesUsedInMutation) {
+        const original = aliasMap.get(alias);
+        if (original) {
+          allReferencedVars.add(original);
+        }
+      }
     }
 
     // For relationship patterns with SET/DELETE, we need to resolve all matched variables
@@ -1704,12 +1796,14 @@ export class Executor {
     // Multi-phase execution needed
     return this.executeMultiPhaseGeneral(
       matchClauses,
+      withClauses,
       createClauses,
       setClauses,
       deleteClauses,
       returnClause,
       allReferencedVars,
       matchedVariables,
+      aliasMap,
       params
     );
   }
@@ -1751,16 +1845,48 @@ export class Executor {
   }
 
   /**
+   * Find variables in CREATE that reference MATCH variables (with alias support)
+   */
+  private findReferencedVariablesWithAliases(
+    pattern: NodePattern | RelationshipPattern,
+    matchedVars: Set<string>,
+    aliasMap: Map<string, string>,
+    referenced: Set<string>
+  ): void {
+    const resolveToOriginal = (varName: string | undefined): string | null => {
+      if (!varName) return null;
+      if (matchedVars.has(varName)) return varName;
+      if (aliasMap.has(varName)) return aliasMap.get(varName)!;
+      return null;
+    };
+
+    if (this.isRelationshipPattern(pattern)) {
+      // Source node references a matched variable if it has no label
+      if (pattern.source.variable && !pattern.source.label) {
+        const original = resolveToOriginal(pattern.source.variable);
+        if (original) referenced.add(original);
+      }
+      // Target node references a matched variable if it has no label
+      if (pattern.target.variable && !pattern.target.label) {
+        const original = resolveToOriginal(pattern.target.variable);
+        if (original) referenced.add(original);
+      }
+    }
+  }
+
+  /**
    * Execute a complex pattern with MATCH...CREATE/SET/DELETE in multiple phases
    */
   private executeMultiPhaseGeneral(
     matchClauses: MatchClause[],
+    withClauses: WithClause[],
     createClauses: CreateClause[],
     setClauses: SetClause[],
     deleteClauses: DeleteClause[],
     returnClause: ReturnClause | null,
     referencedVars: Set<string>,
     allMatchedVars: Set<string>,
+    aliasMap: Map<string, string>,
     params: Record<string, unknown>
   ): Record<string, unknown>[] {
     // Phase 1: Execute MATCH to get actual node/edge IDs
@@ -1807,6 +1933,14 @@ export class Executor {
           resolvedIds[v] = row[`_id_${v}`] as string;
         }
 
+        // Add aliased variable names pointing to the same IDs
+        // e.g., if WITH n AS a, then resolvedIds["a"] = resolvedIds["n"]
+        for (const [alias, original] of aliasMap.entries()) {
+          if (resolvedIds[original]) {
+            resolvedIds[alias] = resolvedIds[original];
+          }
+        }
+
         // Execute CREATE with resolved IDs (this mutates resolvedIds to include new node IDs)
         for (const createClause of createClauses) {
           this.executeCreateWithResolvedIds(createClause, resolvedIds, params);
@@ -1829,14 +1963,16 @@ export class Executor {
 
     // Phase 3: Execute RETURN if present
     if (returnClause) {
-      // Check if RETURN references any newly created variables (not in matched vars)
+      // Check if RETURN references any newly created variables (not in matched vars or aliases)
       const returnVars = this.collectReturnVariables(returnClause);
-      const referencesCreatedVars = returnVars.some(v => !allMatchedVars.has(v));
+      const referencesCreatedVars = returnVars.some(v => 
+        !allMatchedVars.has(v) && !aliasMap.has(v)
+      );
       
-      // If SET was executed, we need to use buildReturnResults to get updated values
-      // because re-running MATCH with original WHERE conditions may not find the updated nodes
-      if (referencesCreatedVars || setClauses.length > 0) {
-        // RETURN references created nodes or data was modified - use buildReturnResults with resolved IDs
+      // If SET was executed or WITH clauses are present, we need to use buildReturnResults
+      // because aliased variables need to be resolved from our ID map
+      if (referencesCreatedVars || setClauses.length > 0 || withClauses.length > 0) {
+        // RETURN references created nodes, aliased vars, or data was modified - use buildReturnResults with resolved IDs
         return this.buildReturnResults(returnClause, allResolvedIds);
       } else {
         // RETURN only references matched nodes and no mutations - use translator-based approach
@@ -2049,12 +2185,14 @@ export class Executor {
   ): Record<string, unknown>[] {
     return this.executeMultiPhaseGeneral(
       matchClauses,
+      [], // no WITH clauses
       createClauses,
       [],
       [],
       null,
       referencedVars,
       referencedVars,
+      new Map(), // no alias map
       params
     );
   }
