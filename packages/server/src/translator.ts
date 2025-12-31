@@ -44,7 +44,7 @@ export interface TranslationResult {
 
 export interface TranslationContext {
   // Maps Cypher variable names to SQL table aliases
-  variables: Map<string, { type: "node" | "edge" | "path"; alias: string }>;
+  variables: Map<string, { type: "node" | "edge" | "path" | "varLengthEdge"; alias: string; pathCteName?: string }>;
   // Parameter values provided by the user
   paramValues: Record<string, unknown>;
   // Counter for generating unique aliases
@@ -437,6 +437,12 @@ export class Translator {
     
     // Check if this is a variable-length pattern
     const isVariableLength = rel.edge.minHops !== undefined || rel.edge.maxHops !== undefined;
+    
+    // For variable-length patterns, mark the edge variable specially
+    if (isVariableLength && rel.edge.variable && edgeIsNew) {
+      // Re-register as varLengthEdge type (will be updated with pathCteName later)
+      this.ctx.variables.set(rel.edge.variable, { type: "varLengthEdge", alias: edgeAlias });
+    }
     
     (this.ctx as any).relationshipPatterns.push({ 
       sourceAlias, 
@@ -1644,7 +1650,7 @@ export class Translator {
       sourceAlias: string;
       targetAlias: string;
       edgeAlias: string;
-      edge: { type?: string; properties?: Record<string, PropertyValue>; minHops?: number; maxHops?: number };
+      edge: { variable?: string; type?: string; properties?: Record<string, PropertyValue>; minHops?: number; maxHops?: number };
       optional?: boolean;
       sourceIsNew?: boolean;
       targetIsNew?: boolean;
@@ -1715,11 +1721,28 @@ export class Translator {
       };
     }
     
+    // Update varLengthEdge variables with the pathCteName so translateExpression can reference it
+    const varLengthEdgeVariable = varLengthPattern.edge.variable;
+    if (varLengthEdgeVariable) {
+      const varInfo = this.ctx.variables.get(varLengthEdgeVariable);
+      if (varInfo && varInfo.type === "varLengthEdge") {
+        this.ctx.variables.set(varLengthEdgeVariable, { ...varInfo, pathCteName });
+        
+        // Fix up selectParts that reference this variable - replace placeholder with actual CTE name
+        for (let i = 0; i < selectParts.length; i++) {
+          if (selectParts[i].includes("path_cte.edge_ids")) {
+            selectParts[i] = selectParts[i].replace("path_cte.edge_ids", `${pathCteName}.edge_ids`);
+          }
+        }
+      }
+    }
+    
     // Build the CTE
     // The depth represents the number of edges traversed
     // For minHops=0, we need to include the source node as a potential end node (depth 0)
     // For *2, we want exactly 2 edges, so depth should stop at maxHops
     // The condition is p.depth < maxHops to allow one more recursion step
+    // We also track edge_ids as a JSON array of edge objects for variable-length edge variables
     let cte: string;
     if (minHops === 0 && maxHops === 0) {
       // Special case: *0 means zero-length path, source = target
@@ -1727,10 +1750,10 @@ export class Translator {
       cte = "";
     } else if (minHops === 0) {
       // Need to include zero-length paths (source = target) plus longer paths
-      cte = `WITH RECURSIVE ${pathCteName}(start_id, end_id, depth) AS (
-  SELECT id, id, 0 FROM nodes
+      cte = `WITH RECURSIVE ${pathCteName}(start_id, end_id, depth, edge_ids) AS (
+  SELECT id, id, 0, json_array() FROM nodes
   UNION ALL
-  SELECT p.start_id, e.target_id, p.depth + 1
+  SELECT p.start_id, e.target_id, p.depth + 1, json_insert(p.edge_ids, '$[#]', json_object('id', e.id, 'type', e.type, 'source_id', e.source_id, 'target_id', e.target_id, 'properties', json(e.properties)))
   FROM ${pathCteName} p
   JOIN edges e ON p.end_id = e.source_id
   WHERE p.depth < ?${edgeType ? " AND e.type = ?" : ""}
@@ -1747,10 +1770,10 @@ export class Translator {
         allParams.push(edgeType);
       }
       
-      cte = `WITH RECURSIVE ${pathCteName}(start_id, end_id, depth) AS (
-  SELECT source_id, target_id, 1 FROM edges WHERE ${edgeCondition}
+      cte = `WITH RECURSIVE ${pathCteName}(start_id, end_id, depth, edge_ids) AS (
+  SELECT source_id, target_id, 1, json_array(json_object('id', id, 'type', type, 'source_id', source_id, 'target_id', target_id, 'properties', json(properties))) FROM edges WHERE ${edgeCondition}
   UNION ALL
-  SELECT p.start_id, e.target_id, p.depth + 1
+  SELECT p.start_id, e.target_id, p.depth + 1, json_insert(p.edge_ids, '$[#]', json_object('id', e.id, 'type', e.type, 'source_id', e.source_id, 'target_id', e.target_id, 'properties', json(e.properties)))
   FROM ${pathCteName} p
   JOIN edges e ON p.end_id = e.source_id
   WHERE p.depth < ?${edgeType ? " AND e.type = ?" : ""}
@@ -2404,6 +2427,15 @@ export class Translator {
         if (varInfo.type === "edge") {
           return {
             sql: `json_object('id', ${varInfo.alias}.id, 'type', ${varInfo.alias}.type, 'source_id', ${varInfo.alias}.source_id, 'target_id', ${varInfo.alias}.target_id, 'properties', ${varInfo.alias}.properties)`,
+            tables,
+            params,
+          };
+        }
+        // For variable-length edge variables, return the edge_ids array from the CTE
+        if (varInfo.type === "varLengthEdge") {
+          const pathCteName = varInfo.pathCteName || "path_cte";
+          return {
+            sql: `${pathCteName}.edge_ids`,
             tables,
             params,
           };

@@ -2078,12 +2078,13 @@ export class Executor {
     );
 
     // Use multi-phase for:
-    // - Relationship patterns (multi-hop)
+    // - Relationship patterns (multi-hop) - except simple MATCH...RETURN without mutations
     // - MATCH...CREATE referencing matched vars
     // - MATCH...SET (always needs ID resolution)
     // - MATCH...DELETE (always needs ID resolution)
+    const hasMutations = createClauses.length > 0 || setClauses.length > 0 || deleteClauses.length > 0;
     const needsMultiPhase = 
-      hasRelationshipPattern ||
+      (hasRelationshipPattern && hasMutations) ||
       createClauses.length > 0 ||
       setClauses.length > 0 ||
       deleteClauses.length > 0;

@@ -9,8 +9,9 @@ export interface TranslationResult {
 }
 export interface TranslationContext {
     variables: Map<string, {
-        type: "node" | "edge" | "path";
+        type: "node" | "edge" | "path" | "varLengthEdge";
         alias: string;
+        pathCteName?: string;
     }>;
     paramValues: Record<string, unknown>;
     aliasCounter: number;

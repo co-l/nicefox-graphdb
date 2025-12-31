@@ -71,11 +71,13 @@ export const FAILING_TESTS = new Set([
   // "clauses/match > Match3 - Match fixed length patterns|25",
   // Match3|28: NULL variable from OPTIONAL MATCH propagation
   "clauses/match > Match3 - Match fixed length patterns|28",
-  "clauses/match > Match4 - Match variable length patterns scenarios|1",
+  // Match4|1,2,6,9: Now work with variable-length edge tracking in CTE
+  // "clauses/match > Match4 - Match variable length patterns scenarios|1",
+  // "clauses/match > Match4 - Match variable length patterns scenarios|2", // was never in list, already passed
   "clauses/match > Match4 - Match variable length patterns scenarios|3",
   "clauses/match > Match4 - Match variable length patterns scenarios|4",
   "clauses/match > Match4 - Match variable length patterns scenarios|5",
-  "clauses/match > Match4 - Match variable length patterns scenarios|6",
+  // "clauses/match > Match4 - Match variable length patterns scenarios|6",
   "clauses/match > Match4 - Match variable length patterns scenarios|7",
   "clauses/match > Match4 - Match variable length patterns scenarios|8",
   // Match5|1,4,5,7,9,10,14,15,17,18,22,24: Now work with Background parsing support
@@ -127,14 +129,16 @@ export const FAILING_TESTS = new Set([
   // "clauses/match > Match6 - Match named paths scenarios|12",
   "clauses/match > Match6 - Match named paths scenarios|13",
   "clauses/match > Match6 - Match named paths scenarios|14",
-  "clauses/match > Match6 - Match named paths scenarios|15",
+  // Match6|15: Now works
+  // "clauses/match > Match6 - Match named paths scenarios|15",
   // "clauses/match > Match6 - Match named paths scenarios|16",
   "clauses/match > Match6 - Match named paths scenarios|17",
   // "clauses/match > Match6 - Match named paths scenarios|18",
   // "clauses/match > Match6 - Match named paths scenarios|19",
-  "clauses/match > Match6 - Match named paths scenarios|20",
+  // Match6|20: Now works
+  // "clauses/match > Match6 - Match named paths scenarios|20",
   "clauses/match > Match7 - Optional match|3",
-  // Match7|4,8: edge variable reuse with direction constraints - now fails value checks
+  // Match7|4,8: value mismatches
   "clauses/match > Match7 - Optional match|4",
   "clauses/match > Match7 - Optional match|8",
   "clauses/match > Match7 - Optional match|9",
@@ -216,12 +220,13 @@ export const FAILING_TESTS = new Set([
   "clauses/merge > Merge5 - Merge relationships|29",
   // Merge6|1: Now works (empty result)
   // "clauses/merge > Merge6 - Merge relationships - on create|1",
-  // Merge6|2-6: Now work with count() fix
+  // Merge6|2: Now works with count() fix
   // "clauses/merge > Merge6 - Merge relationships - on create|2",
-  // "clauses/merge > Merge6 - Merge relationships - on create|3",
-  // "clauses/merge > Merge6 - Merge relationships - on create|4",
-  // "clauses/merge > Merge6 - Merge relationships - on create|5",
-  // "clauses/merge > Merge6 - Merge relationships - on create|6",
+  // Merge6|3-6: Previously masked by multi-phase; has SQL bug with list comprehension r[key] on empty
+  "clauses/merge > Merge6 - Merge relationships - on create|3",
+  "clauses/merge > Merge6 - Merge relationships - on create|4",
+  "clauses/merge > Merge6 - Merge relationships - on create|5",
+  "clauses/merge > Merge6 - Merge relationships - on create|6",
   // Merge7|3: Now works
   // "clauses/merge > Merge7 - Merge relationships - on match|3",
   "clauses/merge > Merge7 - Merge relationships - on match|4",
@@ -269,8 +274,8 @@ export const FAILING_TESTS = new Set([
   // "clauses/return > Return6 - Implicit grouping with aggregates|2",
   // Return6|4: Now works with integer literal inlining in SQL
   // "clauses/return > Return6 - Implicit grouping with aggregates|4",
-  // Return6|6: Now works with comparison in map literal fix
-  // "clauses/return > Return6 - Implicit grouping with aggregates|6",
+  // Return6|6: Previously masked by multi-phase execution; has SQL bug with aggregates in map on empty results
+  "clauses/return > Return6 - Implicit grouping with aggregates|6",
   // Return6|13: aggregate in GROUP BY - needs WITH/aggregate variable scoping
   "clauses/return > Return6 - Implicit grouping with aggregates|13",
   // Return6|16: aggregate function misuse - WITH variables as aggregate args

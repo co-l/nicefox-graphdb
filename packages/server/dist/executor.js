@@ -1692,11 +1692,12 @@ export class Executor {
         // Check if any MATCH has relationship patterns (multi-hop)
         const hasRelationshipPattern = matchClauses.some((m) => m.patterns.some((p) => this.isRelationshipPattern(p)));
         // Use multi-phase for:
-        // - Relationship patterns (multi-hop)
+        // - Relationship patterns (multi-hop) - except simple MATCH...RETURN without mutations
         // - MATCH...CREATE referencing matched vars
         // - MATCH...SET (always needs ID resolution)
         // - MATCH...DELETE (always needs ID resolution)
-        const needsMultiPhase = hasRelationshipPattern ||
+        const hasMutations = createClauses.length > 0 || setClauses.length > 0 || deleteClauses.length > 0;
+        const needsMultiPhase = (hasRelationshipPattern && hasMutations) ||
             createClauses.length > 0 ||
             setClauses.length > 0 ||
             deleteClauses.length > 0;

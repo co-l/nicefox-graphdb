@@ -21,6 +21,166 @@ import { Executor } from "../../src/executor";
 import { parseAllFeatures, TCKScenario } from "./tck-parser";
 import { FAILING_TESTS } from "./failing-tests";
 
+// ============================================================================
+// Value Matching Logic (same as tck.test.ts)
+// ============================================================================
+
+function valuesMatch(expected: unknown, actual: unknown): boolean {
+  // Handle null
+  if (expected === null) return actual === null;
+  if (actual === null) return false;
+  
+  // Handle node patterns like {_nodePattern: "(:Label {prop: value})"}
+  if (typeof expected === "object" && expected !== null && "_nodePattern" in expected) {
+    // Check it's an object (node) with matching labels/properties
+    if (typeof actual !== "object" || actual === null) return false;
+    const nodeObj = actual as Record<string, unknown>;
+    // For now just verify it's a valid node object with id
+    return "id" in nodeObj;
+  }
+  
+  // Handle relationship patterns like [:TYPE]
+  if (typeof expected === "object" && expected !== null && "_relPattern" in expected) {
+    // Check it's an object (relationship) and the type matches
+    if (typeof actual !== "object" || actual === null) return false;
+    // Could be a single relationship or an array of relationships
+    if (Array.isArray(actual)) {
+      // It's a list of relationships - verify each has type
+      return actual.every(r => typeof r === "object" && r !== null && "type" in r);
+    }
+    const relObj = actual as Record<string, unknown>;
+    const pattern = (expected as Record<string, unknown>)._relPattern as string;
+    // Extract type from pattern like "[:T1]" or "[:TYPE {prop: val}]" or "[[:TYPE]]"
+    const typeMatch = pattern.match(/\[:(\w+)/);
+    if (typeMatch && relObj.type) {
+      return relObj.type === typeMatch[1];
+    }
+    return true; // If we can't parse, assume it's ok
+  }
+  
+  // Handle path patterns like <(:Start)-[:T]->()>
+  if (typeof expected === "object" && expected !== null && "_pathPattern" in expected) {
+    if (typeof actual !== "object" || actual === null) return false;
+    const pathObj = actual as Record<string, unknown>;
+    if (!Array.isArray(pathObj.nodes) || !Array.isArray(pathObj.edges)) return false;
+    return true;
+  }
+  
+  // Handle arrays
+  if (Array.isArray(expected)) {
+    if (!Array.isArray(actual)) return false;
+    if (expected.length !== actual.length) return false;
+    return expected.every((e, i) => valuesMatch(e, actual[i]));
+  }
+  
+  // Handle objects
+  if (typeof expected === "object" && expected !== null) {
+    if (typeof actual !== "object" || actual === null) return false;
+    const expKeys = Object.keys(expected);
+    const actKeys = Object.keys(actual as object);
+    if (expKeys.length !== actKeys.length) return false;
+    return expKeys.every(k => valuesMatch((expected as Record<string, unknown>)[k], (actual as Record<string, unknown>)[k]));
+  }
+  
+  // Handle numbers (with floating point tolerance)
+  if (typeof expected === "number" && typeof actual === "number") {
+    if (Number.isInteger(expected)) {
+      return expected === actual;
+    }
+    return Math.abs(expected - actual) < 0.0001;
+  }
+  
+  // Handle string patterns that represent maps like "{a: 1, b: 'foo'}"
+  if (typeof expected === "string" && typeof actual === "object" && actual !== null) {
+    const mapPattern = expected.match(/^\{.*\}$/);
+    if (mapPattern) {
+      return true;
+    }
+  }
+  
+  // Direct comparison
+  return expected === actual;
+}
+
+function isNullEntity(value: unknown): boolean {
+  if (typeof value !== "object" || value === null) return false;
+  const obj = value as Record<string, unknown>;
+  return obj.id === null;
+}
+
+function extractColumns(row: Record<string, unknown>, columns: string[]): unknown[] {
+  return columns.map(col => {
+    if (col in row) {
+      const value = row[col];
+      if (isNullEntity(value)) return null;
+      return value;
+    }
+    
+    const cleanCol = col.replace(/['"]/g, "");
+    if (cleanCol in row) {
+      const value = row[cleanCol];
+      if (isNullEntity(value)) return null;
+      return value;
+    }
+    
+    const underscoreCol = cleanCol.replace(/\./g, "_");
+    if (underscoreCol in row) {
+      const value = row[underscoreCol];
+      if (isNullEntity(value)) return null;
+      return value;
+    }
+    
+    const parts = col.split(".");
+    if (parts.length === 2) {
+      const [varName, propName] = parts;
+      const node = row[varName] as Record<string, unknown> | undefined;
+      if (node && typeof node === "object") {
+        if ("properties" in node) {
+          return (node.properties as Record<string, unknown>)[propName];
+        }
+        return node[propName];
+      }
+    }
+    
+    // Try 'expr' as fallback column name
+    if ("expr" in row) {
+      const value = row["expr"];
+      if (isNullEntity(value)) return null;
+      return value;
+    }
+    
+    return undefined;
+  });
+}
+
+function rowsMatch(expected: unknown[][], actual: unknown[][], ordered: boolean): boolean {
+  if (expected.length !== actual.length) return false;
+  
+  if (ordered) {
+    return expected.every((row, i) => 
+      row.length === actual[i].length && 
+      row.every((val, j) => valuesMatch(val, actual[i][j]))
+    );
+  }
+  
+  // Unordered: each expected row must have a matching actual row
+  const usedActual = new Set<number>();
+  for (const expRow of expected) {
+    let found = false;
+    for (let i = 0; i < actual.length; i++) {
+      if (usedActual.has(i)) continue;
+      if (expRow.length === actual[i].length && 
+          expRow.every((val, j) => valuesMatch(val, actual[i][j]))) {
+        usedActual.add(i);
+        found = true;
+        break;
+      }
+    }
+    if (!found) return false;
+  }
+  return true;
+}
+
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const TCK_PATH = path.join(__dirname, "openCypher/tck/features");
@@ -225,16 +385,29 @@ for (const { scenario, testKey } of matches) {
         console.log(`\n❌ FAIL: Query failed`);
         failed++;
       } else {
-        const actualRows = (result as any).data || [];
+        const data = (result as any).data || [];
+        const columns = scenario.expectResult.columns;
         const expectedRows = scenario.expectResult.rows;
+        const actualRows = data.map((row: Record<string, unknown>) => extractColumns(row, columns));
         
-        // Simple row count check
-        if (actualRows.length === expectedRows.length) {
-          console.log(`\n✅ PASS: Row count matches (${actualRows.length})`);
-          passed++;
-        } else {
+        // Check row count first
+        if (actualRows.length !== expectedRows.length) {
           console.log(`\n❌ FAIL: Expected ${expectedRows.length} rows, got ${actualRows.length}`);
           failed++;
+        } else {
+          // Check values match (unordered comparison)
+          const match = rowsMatch(expectedRows, actualRows, false);
+          if (match) {
+            console.log(`\n✅ PASS: All ${actualRows.length} rows match`);
+            passed++;
+          } else {
+            console.log(`\n❌ FAIL: Row values don't match`);
+            if (verbose) {
+              console.log(`  Expected: ${JSON.stringify(expectedRows)}`);
+              console.log(`  Actual:   ${JSON.stringify(actualRows)}`);
+            }
+            failed++;
+          }
         }
       }
     } else {
