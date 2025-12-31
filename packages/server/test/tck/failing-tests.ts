@@ -250,10 +250,11 @@ export const FAILING_TESTS = new Set([
   "clauses/return > Return6 - Implicit grouping with aggregates|18",
 
 
-  // Set1|5,6,7: List property operations and list comprehensions (need list + operator and list comprehensions)
+  // Set1|5: needs list comprehension [i IN list | expr]
   "clauses/set > Set1 - Set a Property|5",
-  "clauses/set > Set1 - Set a Property|6",
-  "clauses/set > Set1 - Set a Property|7",
+  // Set1|6,7: Now work (list concatenation)
+  // "clauses/set > Set1 - Set a Property|6",
+  // "clauses/set > Set1 - Set a Property|7",
   // Set1|10: expects TypeError for nested map in list, we don't validate types the same way
   "clauses/set > Set1 - Set a Property|10",
   // Set2|1-3: Now work with property removal on null
