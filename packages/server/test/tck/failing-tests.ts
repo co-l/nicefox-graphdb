@@ -21,7 +21,7 @@ export const FAILING_TESTS = new Set([
   // "clauses/delete > Delete6 - Persistence of delete clause side effects|5",
   // Delete6|6,7: Complex WITH + WHERE patterns
   // "clauses/delete > Delete6 - Persistence of delete clause side effects|6",
-  "clauses/delete > Delete6 - Persistence of delete clause side effects|7",
+  // "clauses/delete > Delete6 - Persistence of delete clause side effects|7",
   // "clauses/delete > Delete6 - Persistence of delete clause side effects|8",
   // "clauses/delete > Delete6 - Persistence of delete clause side effects|9",
   // "clauses/delete > Delete6 - Persistence of delete clause side effects|10",

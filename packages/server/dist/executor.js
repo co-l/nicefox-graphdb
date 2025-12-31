@@ -2019,6 +2019,9 @@ export class Executor {
         // Also track property expression aliases: alias -> { variable, property }
         // e.g., WITH n.num AS num creates propertyAliasMap["num"] = { variable: "n", property: "num" }
         const propertyAliasMap = new Map();
+        // Track WITH aggregate aliases: alias -> { functionName, argVariable }
+        // e.g., WITH sum(num) AS sum creates withAggregateMap["sum"] = { functionName: "SUM", argVariable: "num" }
+        const withAggregateMap = new Map();
         for (const withClause of withClauses) {
             for (const item of withClause.items) {
                 if (item.alias && item.expression.type === "variable" && item.expression.variable) {
@@ -2038,6 +2041,20 @@ export class Executor {
                         variable: item.expression.variable,
                         property: item.expression.property
                     });
+                }
+                else if (item.alias && item.expression.type === "function") {
+                    // Track WITH aggregate aliases like: WITH sum(num) AS sum
+                    const funcName = item.expression.functionName?.toUpperCase();
+                    const aggregateFunctions = ["SUM", "COUNT", "AVG", "MIN", "MAX", "COLLECT"];
+                    if (funcName && aggregateFunctions.includes(funcName) && item.expression.args?.length === 1) {
+                        const arg = item.expression.args[0];
+                        if (arg.type === "variable" && arg.variable) {
+                            withAggregateMap.set(item.alias, {
+                                functionName: funcName,
+                                argVariable: arg.variable,
+                            });
+                        }
+                    }
                 }
             }
         }
@@ -2126,22 +2143,30 @@ export class Executor {
             const returnVars = this.collectReturnVariables(returnClause);
             returnUsesPropertyAliases = returnVars.some(v => propertyAliasMap.has(v));
         }
+        // Check if RETURN references any WITH aggregate aliases (like `sum` from `WITH sum(num) AS sum`)
+        let returnUsesWithAggregates = false;
+        if (returnClause && withAggregateMap.size > 0) {
+            const returnVars = this.collectReturnVariables(returnClause);
+            returnUsesWithAggregates = returnVars.some(v => withAggregateMap.has(v));
+        }
         // DEBUG (disabled)
         // console.log("tryMultiPhaseExecution debug:", {
         //   withClauses: withClauses.length,
         //   aliasMap: [...aliasMap.entries()],
         //   propertyAliasMap: [...propertyAliasMap.entries()],
+        //   withAggregateMap: [...withAggregateMap.entries()],
         //   aliasesUsedInMutation: [...aliasesUsedInMutation],
         //   needsWithAliasHandling,
         //   returnUsesPropertyAliases,
+        //   returnUsesWithAggregates,
         //   createClauses: createClauses.length,
         // });
-        // If WITH clauses are present but no aliases are used in mutations AND no property aliases in RETURN, use standard execution
-        if (withClauses.length > 0 && !needsWithAliasHandling && !returnUsesPropertyAliases) {
+        // If WITH clauses are present but no aliases are used in mutations AND no property aliases in RETURN AND no WITH aggregates in RETURN, use standard execution
+        if (withClauses.length > 0 && !needsWithAliasHandling && !returnUsesPropertyAliases && !returnUsesWithAggregates) {
             return null;
         }
         // If no relationship patterns and nothing references matched vars, use standard execution
-        if (!hasRelationshipPattern && allReferencedVars.size === 0 && !needsWithAliasHandling && !returnUsesPropertyAliases) {
+        if (!hasRelationshipPattern && allReferencedVars.size === 0 && !needsWithAliasHandling && !returnUsesPropertyAliases && !returnUsesWithAggregates) {
             return null;
         }
         // If WITH aliases are used in mutations, add the original variables to resolution set
@@ -2161,7 +2186,7 @@ export class Executor {
             }
         }
         // Multi-phase execution needed
-        return this.executeMultiPhaseGeneral(matchClauses, withClauses, createClauses, setClauses, deleteClauses, returnClause, allReferencedVars, matchedVariables, aliasMap, propertyAliasMap, params);
+        return this.executeMultiPhaseGeneral(matchClauses, withClauses, createClauses, setClauses, deleteClauses, returnClause, allReferencedVars, matchedVariables, aliasMap, propertyAliasMap, withAggregateMap, params);
     }
     /**
      * Collect variable names from a pattern
@@ -2226,7 +2251,7 @@ export class Executor {
     /**
      * Execute a complex pattern with MATCH...CREATE/SET/DELETE in multiple phases
      */
-    executeMultiPhaseGeneral(matchClauses, withClauses, createClauses, setClauses, deleteClauses, returnClause, referencedVars, allMatchedVars, aliasMap, propertyAliasMap, params) {
+    executeMultiPhaseGeneral(matchClauses, withClauses, createClauses, setClauses, deleteClauses, returnClause, referencedVars, allMatchedVars, aliasMap, propertyAliasMap, withAggregateMap, params) {
         // Phase 1: Execute MATCH to get actual node/edge IDs
         const varsToResolve = referencedVars.size > 0 ? referencedVars : allMatchedVars;
         // Also need to include variables referenced by property aliases
@@ -2351,7 +2376,7 @@ export class Executor {
                     }
                 }
                 // RETURN references created nodes, aliased vars, property aliases, or data was modified - use buildReturnResults with resolved IDs
-                return this.buildReturnResults(returnClause, filteredResolvedIds, filteredPropertyValues, propertyAliasMap);
+                return this.buildReturnResults(returnClause, filteredResolvedIds, filteredPropertyValues, propertyAliasMap, withAggregateMap);
             }
             else {
                 // RETURN only references matched nodes and no mutations - use translator-based approach
@@ -2401,11 +2426,110 @@ export class Executor {
     /**
      * Build RETURN results from resolved node/edge IDs
      */
-    buildReturnResults(returnClause, allResolvedIds, allCapturedPropertyValues = [], propertyAliasMap = new Map()) {
+    buildReturnResults(returnClause, allResolvedIds, allCapturedPropertyValues = [], propertyAliasMap = new Map(), withAggregateMap = new Map()) {
         // Check if all return items are aggregates (like count(*))
         // If so, we should return a single aggregated row instead of per-row results
         const allAggregates = returnClause.items.every(item => item.expression.type === "function" &&
             ["COUNT", "SUM", "AVG", "MIN", "MAX", "COLLECT"].includes(item.expression.functionName?.toUpperCase() || ""));
+        // Check if RETURN references a WITH aggregate alias (like `sum` from `WITH sum(num) AS sum`)
+        // If so, we need to compute the aggregate and return it
+        const returnReferencesWithAggregates = returnClause.items.some(item => item.expression.type === "variable" &&
+            item.expression.variable &&
+            withAggregateMap.has(item.expression.variable));
+        // Handle RETURN that references WITH aggregate aliases (like `RETURN sum` where `sum` is from `WITH sum(num) AS sum`)
+        if (returnReferencesWithAggregates) {
+            const resultRow = {};
+            for (const item of returnClause.items) {
+                const alias = item.alias || this.getExpressionName(item.expression);
+                if (item.expression.type === "variable" && item.expression.variable) {
+                    const varName = item.expression.variable;
+                    // Check if this is a WITH aggregate alias
+                    if (withAggregateMap.has(varName)) {
+                        const aggInfo = withAggregateMap.get(varName);
+                        const { functionName, argVariable } = aggInfo;
+                        // Compute the aggregate from captured property values
+                        if (propertyAliasMap.has(argVariable)) {
+                            // The argument is a property alias - compute aggregate from captured values
+                            switch (functionName) {
+                                case "SUM": {
+                                    let sum = 0;
+                                    for (const capturedValues of allCapturedPropertyValues) {
+                                        const value = capturedValues[argVariable];
+                                        if (typeof value === "number") {
+                                            sum += value;
+                                        }
+                                        else if (typeof value === "string") {
+                                            const parsed = parseFloat(value);
+                                            if (!isNaN(parsed))
+                                                sum += parsed;
+                                        }
+                                    }
+                                    resultRow[alias] = sum;
+                                    break;
+                                }
+                                case "COUNT": {
+                                    resultRow[alias] = allCapturedPropertyValues.length;
+                                    break;
+                                }
+                                case "AVG": {
+                                    let sum = 0;
+                                    let count = 0;
+                                    for (const capturedValues of allCapturedPropertyValues) {
+                                        const value = capturedValues[argVariable];
+                                        if (typeof value === "number") {
+                                            sum += value;
+                                            count++;
+                                        }
+                                        else if (typeof value === "string") {
+                                            const parsed = parseFloat(value);
+                                            if (!isNaN(parsed)) {
+                                                sum += parsed;
+                                                count++;
+                                            }
+                                        }
+                                    }
+                                    resultRow[alias] = count > 0 ? sum / count : null;
+                                    break;
+                                }
+                                case "MIN": {
+                                    let min = null;
+                                    for (const capturedValues of allCapturedPropertyValues) {
+                                        const value = capturedValues[argVariable];
+                                        const numValue = typeof value === "number" ? value : parseFloat(value);
+                                        if (!isNaN(numValue)) {
+                                            min = min === null ? numValue : Math.min(min, numValue);
+                                        }
+                                    }
+                                    resultRow[alias] = min;
+                                    break;
+                                }
+                                case "MAX": {
+                                    let max = null;
+                                    for (const capturedValues of allCapturedPropertyValues) {
+                                        const value = capturedValues[argVariable];
+                                        const numValue = typeof value === "number" ? value : parseFloat(value);
+                                        if (!isNaN(numValue)) {
+                                            max = max === null ? numValue : Math.max(max, numValue);
+                                        }
+                                    }
+                                    resultRow[alias] = max;
+                                    break;
+                                }
+                                case "COLLECT": {
+                                    const values = [];
+                                    for (const capturedValues of allCapturedPropertyValues) {
+                                        values.push(capturedValues[argVariable]);
+                                    }
+                                    resultRow[alias] = values;
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            return [resultRow];
+        }
         if (allAggregates && returnClause.items.length > 0) {
             // Return a single row with aggregated values
             const resultRow = {};
@@ -2697,6 +2821,7 @@ export class Executor {
         return this.executeMultiPhaseGeneral(matchClauses, [], // no WITH clauses
         createClauses, [], [], null, referencedVars, referencedVars, new Map(), // no alias map
         new Map(), // no property alias map
+        new Map(), // no WITH aggregate map
         params);
     }
     /**
