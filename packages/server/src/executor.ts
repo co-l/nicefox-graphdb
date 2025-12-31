@@ -2182,6 +2182,8 @@ export class Executor {
             return (left as number) / (right as number);
           case "%":
             return (left as number) % (right as number);
+          case "^":
+            return Math.pow(left as number, right as number);
           default:
             throw new Error(`Unknown binary operator: ${expr.operator}`);
         }

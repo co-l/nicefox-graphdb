@@ -1733,6 +1733,8 @@ export class Executor {
                         return left / right;
                     case "%":
                         return left % right;
+                    case "^":
+                        return Math.pow(left, right);
                     default:
                         throw new Error(`Unknown binary operator: ${expr.operator}`);
                 }

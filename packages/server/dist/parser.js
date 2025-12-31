@@ -148,6 +148,7 @@ class Tokenizer {
             "+": "PLUS",
             "/": "SLASH",
             "%": "PERCENT",
+            "^": "CARET",
             "=": "EQUALS",
             "<": "LT",
             ">": "GT",
@@ -1306,9 +1307,9 @@ export class Parser {
         }
         return left;
     }
-    // Handle *, /, % (higher precedence)
+    // Handle *, /, % (higher precedence than +, -)
     parseMultiplicativeExpression() {
-        let left = this.parsePrimaryExpression();
+        let left = this.parseExponentialExpression();
         while (this.check("STAR") || this.check("SLASH") || this.check("PERCENT")) {
             const operatorToken = this.advance();
             let operator;
@@ -1318,8 +1319,18 @@ export class Parser {
                 operator = "/";
             else
                 operator = "%";
-            const right = this.parsePrimaryExpression();
+            const right = this.parseExponentialExpression();
             left = { type: "binary", operator, left, right };
+        }
+        return left;
+    }
+    // Handle ^ (exponentiation - highest precedence among arithmetic operators)
+    parseExponentialExpression() {
+        let left = this.parsePrimaryExpression();
+        while (this.check("CARET")) {
+            this.advance(); // consume ^
+            const right = this.parsePrimaryExpression();
+            left = { type: "binary", operator: "^", left, right };
         }
         return left;
     }

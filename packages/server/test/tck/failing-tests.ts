@@ -191,8 +191,7 @@ export const FAILING_TESTS = new Set([
   "clauses/merge > Merge9 - Merge clause interoperation with other clauses|2",
   "clauses/merge > Merge9 - Merge clause interoperation with other clauses|3",
   "clauses/merge > Merge9 - Merge clause interoperation with other clauses|4",
-  // Return2|1: ^ operator not supported
-  "clauses/return > Return2 - Return single expression (correctly projecting an expression)|1",
+
   // Return2|10: count > 0 returns 0 instead of false
   "clauses/return > Return2 - Return single expression (correctly projecting an expression)|10",
   // Return2|11: large integers - precision issue

@@ -107,7 +107,7 @@ export interface Expression {
   whens?: CaseWhen[];
   elseExpr?: Expression;
   // Binary operation fields (arithmetic)
-  operator?: "+" | "-" | "*" | "/" | "%" | "AND" | "OR" | "NOT";
+  operator?: "+" | "-" | "*" | "/" | "%" | "^" | "AND" | "OR" | "NOT";
   left?: Expression;
   right?: Expression;
   // Unary operation fields
@@ -264,6 +264,7 @@ type TokenType =
   | "PLUS"
   | "SLASH"
   | "PERCENT"
+  | "CARET"
   | "EQUALS"
   | "NOT_EQUALS"
   | "LT"
@@ -437,6 +438,7 @@ class Tokenizer {
       "+": "PLUS",
       "/": "SLASH",
       "%": "PERCENT",
+      "^": "CARET",
       "=": "EQUALS",
       "<": "LT",
       ">": "GT",
@@ -1785,9 +1787,9 @@ export class Parser {
     return left;
   }
 
-  // Handle *, /, % (higher precedence)
+  // Handle *, /, % (higher precedence than +, -)
   private parseMultiplicativeExpression(): Expression {
-    let left = this.parsePrimaryExpression();
+    let left = this.parseExponentialExpression();
 
     while (this.check("STAR") || this.check("SLASH") || this.check("PERCENT")) {
       const operatorToken = this.advance();
@@ -1795,8 +1797,21 @@ export class Parser {
       if (operatorToken.type === "STAR") operator = "*";
       else if (operatorToken.type === "SLASH") operator = "/";
       else operator = "%";
-      const right = this.parsePrimaryExpression();
+      const right = this.parseExponentialExpression();
       left = { type: "binary", operator, left, right };
+    }
+
+    return left;
+  }
+
+  // Handle ^ (exponentiation - highest precedence among arithmetic operators)
+  private parseExponentialExpression(): Expression {
+    let left = this.parsePrimaryExpression();
+
+    while (this.check("CARET")) {
+      this.advance(); // consume ^
+      const right = this.parsePrimaryExpression();
+      left = { type: "binary", operator: "^", left, right };
     }
 
     return left;

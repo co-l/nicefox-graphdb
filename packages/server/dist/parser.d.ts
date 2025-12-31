@@ -76,7 +76,7 @@ export interface Expression {
     expression?: Expression;
     whens?: CaseWhen[];
     elseExpr?: Expression;
-    operator?: "+" | "-" | "*" | "/" | "%" | "AND" | "OR" | "NOT";
+    operator?: "+" | "-" | "*" | "/" | "%" | "^" | "AND" | "OR" | "NOT";
     left?: Expression;
     right?: Expression;
     operand?: Expression;
@@ -242,6 +242,7 @@ export declare class Parser {
     private parseComparisonExpression;
     private parseAdditiveExpression;
     private parseMultiplicativeExpression;
+    private parseExponentialExpression;
     private parsePrimaryExpression;
     private parseCaseExpression;
     private parseObjectLiteral;

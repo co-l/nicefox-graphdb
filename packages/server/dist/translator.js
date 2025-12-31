@@ -2828,6 +2828,14 @@ END FROM (SELECT json_group_array(${valueExpr}) as sv))`,
         // For property access in arithmetic, we need to use json_extract to get the numeric value
         const leftSql = this.wrapForArithmetic(expr.left, leftResult.sql);
         const rightSql = this.wrapForArithmetic(expr.right, rightResult.sql);
+        // Handle exponentiation operator (SQLite uses POWER function)
+        if (expr.operator === "^") {
+            return {
+                sql: `POWER(${leftSql}, ${rightSql})`,
+                tables,
+                params,
+            };
+        }
         return {
             sql: `(${leftSql} ${expr.operator} ${rightSql})`,
             tables,
