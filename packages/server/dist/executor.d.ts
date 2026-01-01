@@ -167,6 +167,20 @@ export declare class Executor {
      */
     private findReferencedVariablesWithAliases;
     /**
+     * Validate that all variable references in CREATE clause properties are defined.
+     * Throws an error if an undefined variable is referenced.
+     */
+    private validateCreatePropertyVariables;
+    /**
+     * Check a properties object for undefined variable references.
+     * Throws an error if found.
+     */
+    private validatePropertiesForUndefinedVariables;
+    /**
+     * Recursively check a value for undefined variable references.
+     */
+    private validateValueForUndefinedVariables;
+    /**
      * Execute a complex pattern with MATCH...CREATE/SET/DELETE in multiple phases
      */
     private executeMultiPhaseGeneral;

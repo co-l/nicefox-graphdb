@@ -2643,6 +2643,10 @@ export class Executor {
       return null;
     };
 
+    // Validate that all variable references in CREATE properties are defined
+    // (either matched variables, aliases, or parameters)
+    this.validateCreatePropertyVariables(createClauses, matchedVariables, aliasMap, params);
+
     // Determine which variables need to be resolved for CREATE
     const referencedInCreate = new Set<string>();
     for (const createClause of createClauses) {
@@ -2857,6 +2861,140 @@ export class Executor {
         if (original) referenced.add(original);
       }
     }
+  }
+
+  /**
+   * Validate that all variable references in CREATE clause properties are defined.
+   * Throws an error if an undefined variable is referenced.
+   */
+  private validateCreatePropertyVariables(
+    createClauses: CreateClause[],
+    matchedVariables: Set<string>,
+    aliasMap: Map<string, string>,
+    params: Record<string, unknown>
+  ): void {
+    for (const createClause of createClauses) {
+      for (const pattern of createClause.patterns) {
+        // Track variables that will be defined in this pattern (for relationship patterns)
+        const willDefine = new Set<string>();
+        
+        if (this.isRelationshipPattern(pattern)) {
+          // For relationship patterns, check source, edge, and target properties
+          // Source node - its variable will be available for subsequent parts
+          if (pattern.source.variable) {
+            willDefine.add(pattern.source.variable);
+          }
+          this.validatePropertiesForUndefinedVariables(
+            pattern.source.properties || {},
+            matchedVariables,
+            aliasMap,
+            willDefine,
+            params
+          );
+          
+          // Edge properties
+          if (pattern.edge.variable) {
+            willDefine.add(pattern.edge.variable);
+          }
+          this.validatePropertiesForUndefinedVariables(
+            pattern.edge.properties || {},
+            matchedVariables,
+            aliasMap,
+            willDefine,
+            params
+          );
+          
+          // Target node properties
+          if (pattern.target.variable) {
+            willDefine.add(pattern.target.variable);
+          }
+          this.validatePropertiesForUndefinedVariables(
+            pattern.target.properties || {},
+            matchedVariables,
+            aliasMap,
+            willDefine,
+            params
+          );
+        } else {
+          // Simple node pattern
+          if (pattern.variable) {
+            willDefine.add(pattern.variable);
+          }
+          this.validatePropertiesForUndefinedVariables(
+            pattern.properties || {},
+            matchedVariables,
+            aliasMap,
+            willDefine,
+            params
+          );
+        }
+      }
+    }
+  }
+
+  /**
+   * Check a properties object for undefined variable references.
+   * Throws an error if found.
+   */
+  private validatePropertiesForUndefinedVariables(
+    props: Record<string, unknown>,
+    matchedVariables: Set<string>,
+    aliasMap: Map<string, string>,
+    willDefine: Set<string>,
+    params: Record<string, unknown>
+  ): void {
+    for (const [_key, value] of Object.entries(props)) {
+      this.validateValueForUndefinedVariables(value, matchedVariables, aliasMap, willDefine, params);
+    }
+  }
+
+  /**
+   * Recursively check a value for undefined variable references.
+   */
+  private validateValueForUndefinedVariables(
+    value: unknown,
+    matchedVariables: Set<string>,
+    aliasMap: Map<string, string>,
+    willDefine: Set<string>,
+    params: Record<string, unknown>
+  ): void {
+    if (typeof value !== "object" || value === null) return;
+    
+    const typedValue = value as { type?: string; name?: string; variable?: string; left?: unknown; right?: unknown };
+    
+    if (typedValue.type === "variable" && typedValue.name) {
+      const varName = typedValue.name;
+      // Check if it's a matched variable, an alias, or a parameter
+      const isValidVar = 
+        matchedVariables.has(varName) ||
+        aliasMap.has(varName) ||
+        willDefine.has(varName) ||
+        params.hasOwnProperty(varName);
+      
+      if (!isValidVar) {
+        throw new Error(`Variable \`${varName}\` not defined`);
+      }
+    } else if (typedValue.type === "property" && typedValue.variable) {
+      const varName = typedValue.variable;
+      // Check if it's a matched variable, an alias, or will be defined
+      const isValidVar = 
+        matchedVariables.has(varName) ||
+        aliasMap.has(varName) ||
+        willDefine.has(varName);
+      
+      if (!isValidVar) {
+        throw new Error(`Variable \`${varName}\` not defined`);
+      }
+    } else if (typedValue.type === "binary") {
+      // Recursively check left and right operands
+      if (typedValue.left) {
+        this.validateValueForUndefinedVariables(typedValue.left, matchedVariables, aliasMap, willDefine, params);
+      }
+      if (typedValue.right) {
+        this.validateValueForUndefinedVariables(typedValue.right, matchedVariables, aliasMap, willDefine, params);
+      }
+    }
+    // Parameters and literals are always valid, no check needed
   }
 
   /**
