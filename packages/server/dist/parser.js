@@ -394,6 +394,15 @@ export class Parser {
             this.advance();
             patterns.push(...this.parsePatternChain());
         }
+        // Validate: CREATE requires relationship type
+        for (const pattern of patterns) {
+            if ("edge" in pattern) {
+                // This is a RelationshipPattern
+                if (!pattern.edge.type && !pattern.edge.types) {
+                    throw new Error("A relationship type is required to create a relationship");
+                }
+            }
+        }
         return { type: "CREATE", patterns };
     }
     parseMatch(optional = false) {
