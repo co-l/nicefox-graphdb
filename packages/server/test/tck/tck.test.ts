@@ -314,7 +314,7 @@ const priorityCategories = [
   "clauses/with-skip-limit",
   "clauses/unwind",
   "clauses/union",
-  "clauses/call",
+  // "clauses/call", // Not yet supported - CALL procedures
   // Expressions
   "expressions/aggregation",
   "expressions/boolean",
