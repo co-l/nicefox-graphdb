@@ -3920,6 +3920,15 @@ export class Executor {
       if (deleteClause.detach) {
         // DETACH DELETE: First delete all edges connected to this node
         this.db.execute("DELETE FROM edges WHERE source_id = ? OR target_id = ?", [id, id]);
+      } else {
+        // Check if this is a node with connected edges
+        const edgeCheck = this.db.execute(
+          "SELECT 1 FROM edges WHERE source_id = ? OR target_id = ? LIMIT 1",
+          [id, id]
+        );
+        if (edgeCheck.rows.length > 0) {
+          throw new Error("Cannot delete node because it still has relationships. To delete this node, you must first delete its relationships, or use DETACH DELETE.");
+        }
       }
 
       // Try deleting from nodes first

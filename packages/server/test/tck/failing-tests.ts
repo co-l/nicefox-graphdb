@@ -14,7 +14,7 @@ export const FAILING_TESTS = new Set<string>([
   // "clauses/create > Create2 - Creating relationships|22",
   // "clauses/create > Create2 - Creating relationships|23",
   // "clauses/create > Create2 - Creating relationships|24",
-  "clauses/delete > Delete1 - Deleting nodes|7",
+  // "clauses/delete > Delete1 - Deleting nodes|7",
   // "clauses/delete > Delete1 - Deleting nodes|8",
   // "clauses/delete > Delete2 - Deleting relationships|5",
   // "clauses/delete > Delete5 - Delete clause interoperation with built-in data types|8",
