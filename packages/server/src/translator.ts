@@ -2102,9 +2102,7 @@ export class Translator {
     // Handle patterns AFTER the variable-length pattern
     // The target of the variable-length path becomes the source for the first pattern after
     let currentSourceAlias = varLengthTargetAlias;
-    console.log("Processing patterns after variable-length:", fixedPatternsAfter.map(p => ({ isVarLen: p.isVariableLength, edge: p.edge.type })));
     for (const pattern of fixedPatternsAfter) {
-      console.log("Processing pattern:", { isVarLen: pattern.isVariableLength, edge: pattern.edge.type, source: pattern.sourceAlias, target: pattern.targetAlias });
       if (pattern.isVariableLength) {
         // Handle another variable-length pattern by creating a second CTE
         const minHops2 = pattern.minHops ?? 1;
@@ -2271,8 +2269,6 @@ export class Translator {
     if (whereParts.length > 0) {
       sql += ` WHERE ${whereParts.join(" AND ")}`;
     }
-    console.log("Final SQL:", sql);
-    console.log("All params:", allParams);
 
     // Check if we need GROUP BY (when mixing aggregates with non-aggregates)
     const hasAggregates = clause.items.some(item => this.isAggregateExpression(item.expression));
