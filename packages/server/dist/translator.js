@@ -113,6 +113,10 @@ export class Translator {
         if (rel.source.variable) {
             const existing = this.ctx.variables.get(rel.source.variable);
             if (existing) {
+                // Variable already bound - check for label conflict
+                if (rel.source.label) {
+                    throw new Error(`Variable \`${rel.source.variable}\` already declared`);
+                }
                 sourceId = existing.alias;
             }
             else {
@@ -133,6 +137,10 @@ export class Translator {
         if (rel.target.variable) {
             const existing = this.ctx.variables.get(rel.target.variable);
             if (existing) {
+                // Variable already bound - check for label conflict
+                if (rel.target.label) {
+                    throw new Error(`Variable \`${rel.target.variable}\` already declared`);
+                }
                 targetId = existing.alias;
             }
             else {

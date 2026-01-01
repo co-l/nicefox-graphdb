@@ -2,8 +2,8 @@
 
 ## Current Status (vs Neo4j 3.5 Baseline)
 - **Target**: 2703 tests (what Neo4j 3.5 passes)
-- **Passing**: 825 tests (30.5% of target)
-- **Failing**: 1878 tests (to be fixed)
+- **Passing**: 829 tests (30.7% of target)
+- **Failing**: 1874 tests (to be fixed)
 - **Not in baseline**: 19 tests (parser edge cases)
 
 ### What This Means
