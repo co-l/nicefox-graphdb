@@ -349,8 +349,14 @@ export class Translator {
         // Check if edge variable is already registered (for multi-MATCH with same edge variable)
         let edgeAlias;
         let edgeIsNew = false;
+        let boundEdgeOriginalPattern;
         if (rel.edge.variable && this.ctx.variables.has(rel.edge.variable)) {
             edgeAlias = this.ctx.variables.get(rel.edge.variable).alias;
+            // Find the original relationship pattern for this bound edge
+            const relPatterns = this.ctx.relationshipPatterns;
+            if (relPatterns) {
+                boundEdgeOriginalPattern = relPatterns.find(p => p.edgeAlias === edgeAlias);
+            }
         }
         else {
             edgeAlias = `e${this.ctx.aliasCounter++}`;
@@ -384,6 +390,8 @@ export class Translator {
             isVariableLength,
             minHops: rel.edge.minHops,
             maxHops: rel.edge.maxHops,
+            // If edge is bound, store original pattern info for constraint generation
+            boundEdgeOriginalPattern,
         });
         // Track the last anonymous target for chained patterns
         // This allows (a)-[:R]->()-[:S]->(b) to share the anonymous node
@@ -1811,6 +1819,7 @@ export class Translator {
         const joinParams = [];
         const whereParts = [];
         const addedNodeAliases = new Set();
+        const addedEdgeAliases = new Set();
         const filteredNodeAliases = new Set();
         // Deferred WHERE params - these are added after all CTE params
         // This is needed because CTEs are defined before the WHERE clause in SQL
@@ -1831,16 +1840,35 @@ export class Translator {
                 }
                 filteredNodeAliases.add(pattern.sourceAlias);
             }
-            // Add edge JOIN
-            joinParts.push(`JOIN edges ${pattern.edgeAlias} ON ${pattern.edgeAlias}.source_id = ${pattern.sourceAlias}.id`);
-            // Add edge type filter
-            if (pattern.edge.type) {
-                whereParts.push(`${pattern.edgeAlias}.type = ?`);
-                allParams.push(pattern.edge.type);
+            // Add edge JOIN (only if not already added - handles bound relationships)
+            if (!addedEdgeAliases.has(pattern.edgeAlias)) {
+                const isUndirectedPattern = pattern.edge.direction === "none";
+                if (isUndirectedPattern) {
+                    // For undirected patterns, match edges in either direction
+                    joinParts.push(`JOIN edges ${pattern.edgeAlias} ON (${pattern.edgeAlias}.source_id = ${pattern.sourceAlias}.id OR ${pattern.edgeAlias}.target_id = ${pattern.sourceAlias}.id)`);
+                }
+                else {
+                    joinParts.push(`JOIN edges ${pattern.edgeAlias} ON ${pattern.edgeAlias}.source_id = ${pattern.sourceAlias}.id`);
+                }
+                addedEdgeAliases.add(pattern.edgeAlias);
+                // Add edge type filter
+                if (pattern.edge.type) {
+                    whereParts.push(`${pattern.edgeAlias}.type = ?`);
+                    allParams.push(pattern.edge.type);
+                }
             }
             // Add target node JOIN
             if (!addedNodeAliases.has(pattern.targetAlias)) {
-                joinParts.push(`JOIN nodes ${pattern.targetAlias} ON ${pattern.edgeAlias}.target_id = ${pattern.targetAlias}.id`);
+                const isUndirectedPattern = pattern.edge.direction === "none";
+                if (isUndirectedPattern) {
+                    // For undirected, target could be on either side
+                    joinParts.push(`JOIN nodes ${pattern.targetAlias} ON (${pattern.edgeAlias}.target_id = ${pattern.targetAlias}.id OR ${pattern.edgeAlias}.source_id = ${pattern.targetAlias}.id)`);
+                    // Also ensure source and target are different (for undirected edges)
+                    whereParts.push(`${pattern.sourceAlias}.id != ${pattern.targetAlias}.id`);
+                }
+                else {
+                    joinParts.push(`JOIN nodes ${pattern.targetAlias} ON ${pattern.edgeAlias}.target_id = ${pattern.targetAlias}.id`);
+                }
                 addedNodeAliases.add(pattern.targetAlias);
             }
         }
@@ -1937,6 +1965,7 @@ export class Translator {
                 const minHops2 = pattern.minHops ?? 1;
                 const maxHops2 = pattern.maxHops ?? 10;
                 const edgeType2 = pattern.edge.type;
+                const isUndirected2 = pattern.edge.direction === "none";
                 const pathCteName2 = `path_${this.ctx.aliasCounter++}`;
                 // Build second CTE
                 let cte2 = "";
@@ -1944,8 +1973,36 @@ export class Translator {
                     cte2 = "";
                 }
                 else if (minHops2 === 0) {
-                    if (edgeType2) {
-                        cte2 = `, ${pathCteName2}(start_id, end_id, depth, edge_ids) AS (
+                    // Zero-length path support: start with each node connected to itself
+                    if (isUndirected2) {
+                        // Undirected: traverse in both directions
+                        if (edgeType2) {
+                            cte2 = `, ${pathCteName2}(start_id, end_id, depth, edge_ids) AS (
+  SELECT id, id, 0, json_array() FROM nodes
+  UNION ALL
+  SELECT p.start_id, CASE WHEN p.end_id = e.source_id THEN e.target_id ELSE e.source_id END, p.depth + 1, json_insert(p.edge_ids, '$[#]', json_object('id', e.id, 'type', e.type, 'source_id', e.source_id, 'target_id', e.target_id, 'properties', json(e.properties)))
+  FROM ${pathCteName2} p
+  JOIN edges e ON (p.end_id = e.source_id OR p.end_id = e.target_id)
+  WHERE p.depth < ? AND e.type = ? AND NOT EXISTS (SELECT 1 FROM json_each(p.edge_ids) WHERE json_extract(value, '$.id') = e.id)
+)`;
+                            allParams.push(maxHops2, edgeType2);
+                        }
+                        else {
+                            cte2 = `, ${pathCteName2}(start_id, end_id, depth, edge_ids) AS (
+  SELECT id, id, 0, json_array() FROM nodes
+  UNION ALL
+  SELECT p.start_id, CASE WHEN p.end_id = e.source_id THEN e.target_id ELSE e.source_id END, p.depth + 1, json_insert(p.edge_ids, '$[#]', json_object('id', e.id, 'type', e.type, 'source_id', e.source_id, 'target_id', e.target_id, 'properties', json(e.properties)))
+  FROM ${pathCteName2} p
+  JOIN edges e ON (p.end_id = e.source_id OR p.end_id = e.target_id)
+  WHERE p.depth < ? AND NOT EXISTS (SELECT 1 FROM json_each(p.edge_ids) WHERE json_extract(value, '$.id') = e.id)
+)`;
+                            allParams.push(maxHops2);
+                        }
+                    }
+                    else {
+                        // Directed
+                        if (edgeType2) {
+                            cte2 = `, ${pathCteName2}(start_id, end_id, depth, edge_ids) AS (
   SELECT id, id, 0, json_array() FROM nodes
   UNION ALL
   SELECT p.start_id, e.target_id, p.depth + 1, json_insert(p.edge_ids, '$[#]', json_object('id', e.id, 'type', e.type, 'source_id', e.source_id, 'target_id', e.target_id, 'properties', json(e.properties)))
@@ -1953,10 +2010,10 @@ export class Translator {
   JOIN edges e ON p.end_id = e.source_id
   WHERE p.depth < ? AND e.type = ?
 )`;
-                        allParams.push(maxHops2, edgeType2);
-                    }
-                    else {
-                        cte2 = `, ${pathCteName2}(start_id, end_id, depth, edge_ids) AS (
+                            allParams.push(maxHops2, edgeType2);
+                        }
+                        else {
+                            cte2 = `, ${pathCteName2}(start_id, end_id, depth, edge_ids) AS (
   SELECT id, id, 0, json_array() FROM nodes
   UNION ALL
   SELECT p.start_id, e.target_id, p.depth + 1, json_insert(p.edge_ids, '$[#]', json_object('id', e.id, 'type', e.type, 'source_id', e.source_id, 'target_id', e.target_id, 'properties', json(e.properties)))
@@ -1964,12 +2021,44 @@ export class Translator {
   JOIN edges e ON p.end_id = e.source_id
   WHERE p.depth < ?
 )`;
-                        allParams.push(maxHops2);
+                            allParams.push(maxHops2);
+                        }
                     }
                 }
                 else {
-                    if (edgeType2) {
-                        cte2 = `, ${pathCteName2}(start_id, end_id, depth, edge_ids) AS (
+                    if (isUndirected2) {
+                        // Undirected: traverse in both directions
+                        if (edgeType2) {
+                            cte2 = `, ${pathCteName2}(start_id, end_id, depth, edge_ids) AS (
+  SELECT source_id, target_id, 1, json_array(json_object('id', id, 'type', type, 'source_id', source_id, 'target_id', target_id, 'properties', json(properties))) FROM edges WHERE type = ?
+  UNION ALL
+  SELECT target_id, source_id, 1, json_array(json_object('id', id, 'type', type, 'source_id', source_id, 'target_id', target_id, 'properties', json(properties))) FROM edges WHERE type = ?
+  UNION ALL
+  SELECT p.start_id, CASE WHEN p.end_id = e.source_id THEN e.target_id ELSE e.source_id END, p.depth + 1, json_insert(p.edge_ids, '$[#]', json_object('id', e.id, 'type', e.type, 'source_id', e.source_id, 'target_id', e.target_id, 'properties', json(e.properties)))
+  FROM ${pathCteName2} p
+  JOIN edges e ON (p.end_id = e.source_id OR p.end_id = e.target_id)
+  WHERE p.depth < ? AND e.type = ? AND NOT EXISTS (SELECT 1 FROM json_each(p.edge_ids) WHERE json_extract(value, '$.id') = e.id)
+)`;
+                            allParams.push(edgeType2, edgeType2, maxHops2, edgeType2);
+                        }
+                        else {
+                            cte2 = `, ${pathCteName2}(start_id, end_id, depth, edge_ids) AS (
+  SELECT source_id, target_id, 1, json_array(json_object('id', id, 'type', type, 'source_id', source_id, 'target_id', target_id, 'properties', json(properties))) FROM edges
+  UNION ALL
+  SELECT target_id, source_id, 1, json_array(json_object('id', id, 'type', type, 'source_id', source_id, 'target_id', target_id, 'properties', json(properties))) FROM edges
+  UNION ALL
+  SELECT p.start_id, CASE WHEN p.end_id = e.source_id THEN e.target_id ELSE e.source_id END, p.depth + 1, json_insert(p.edge_ids, '$[#]', json_object('id', e.id, 'type', e.type, 'source_id', e.source_id, 'target_id', e.target_id, 'properties', json(e.properties)))
+  FROM ${pathCteName2} p
+  JOIN edges e ON (p.end_id = e.source_id OR p.end_id = e.target_id)
+  WHERE p.depth < ? AND NOT EXISTS (SELECT 1 FROM json_each(p.edge_ids) WHERE json_extract(value, '$.id') = e.id)
+)`;
+                            allParams.push(maxHops2);
+                        }
+                    }
+                    else {
+                        // Directed
+                        if (edgeType2) {
+                            cte2 = `, ${pathCteName2}(start_id, end_id, depth, edge_ids) AS (
   SELECT source_id, target_id, 1, json_array(json_object('id', id, 'type', type, 'source_id', source_id, 'target_id', target_id, 'properties', json(properties))) FROM edges WHERE type = ?
   UNION ALL
   SELECT p.start_id, e.target_id, p.depth + 1, json_insert(p.edge_ids, '$[#]', json_object('id', e.id, 'type', e.type, 'source_id', e.source_id, 'target_id', e.target_id, 'properties', json(e.properties)))
@@ -1977,10 +2066,10 @@ export class Translator {
   JOIN edges e ON p.end_id = e.source_id
   WHERE p.depth < ? AND e.type = ?
 )`;
-                        allParams.push(edgeType2, maxHops2, edgeType2);
-                    }
-                    else {
-                        cte2 = `, ${pathCteName2}(start_id, end_id, depth, edge_ids) AS (
+                            allParams.push(edgeType2, maxHops2, edgeType2);
+                        }
+                        else {
+                            cte2 = `, ${pathCteName2}(start_id, end_id, depth, edge_ids) AS (
   SELECT source_id, target_id, 1, json_array(json_object('id', id, 'type', type, 'source_id', source_id, 'target_id', target_id, 'properties', json(properties))) FROM edges
   UNION ALL
   SELECT p.start_id, e.target_id, p.depth + 1, json_insert(p.edge_ids, '$[#]', json_object('id', e.id, 'type', e.type, 'source_id', e.source_id, 'target_id', e.target_id, 'properties', json(e.properties)))
@@ -1988,7 +2077,8 @@ export class Translator {
   JOIN edges e ON p.end_id = e.source_id
   WHERE p.depth < ?
 )`;
-                        allParams.push(maxHops2);
+                            allParams.push(maxHops2);
+                        }
                     }
                 }
                 // Append second CTE to the first
@@ -2037,14 +2127,41 @@ export class Translator {
                     joinParts.push(`JOIN nodes ${pattern.sourceAlias} ON ${pattern.sourceAlias}.id = ${currentSourceAlias}.id`);
                     addedNodeAliases.add(pattern.sourceAlias);
                 }
-                joinParts.push(`JOIN edges ${pattern.edgeAlias} ON ${pattern.edgeAlias}.source_id = ${currentSourceAlias}.id`);
-                // Edge type filter - deferred until after all CTE params
-                if (pattern.edge.type) {
-                    whereParts.push(`${pattern.edgeAlias}.type = ?`);
-                    deferredWhereParams.push(pattern.edge.type);
+                // Add edge JOIN (only if not already added - handles bound relationships from earlier MATCH)
+                if (!addedEdgeAliases.has(pattern.edgeAlias)) {
+                    joinParts.push(`JOIN edges ${pattern.edgeAlias} ON ${pattern.edgeAlias}.source_id = ${currentSourceAlias}.id`);
+                    addedEdgeAliases.add(pattern.edgeAlias);
+                    // Edge type filter - deferred until after all CTE params
+                    if (pattern.edge.type) {
+                        whereParts.push(`${pattern.edgeAlias}.type = ?`);
+                        deferredWhereParams.push(pattern.edge.type);
+                    }
+                }
+                else {
+                    // Edge already joined - this is a bound relationship from an earlier MATCH
+                    // The current source and the target alias should be the edge's actual endpoints
+                    // Since the pattern is undirected ()-[r]-(), we don't know which endpoint is which,
+                    // so we use OR conditions and let the database figure out valid combinations
+                    if (pattern.boundEdgeOriginalPattern) {
+                        // Constrain the source to be one of the original endpoints
+                        const origPattern = pattern.boundEdgeOriginalPattern;
+                        whereParts.push(`(${currentSourceAlias}.id = ${origPattern.sourceAlias}.id OR ${currentSourceAlias}.id = ${origPattern.targetAlias}.id)`);
+                    }
+                    else {
+                        whereParts.push(`(${pattern.edgeAlias}.source_id = ${currentSourceAlias}.id OR ${pattern.edgeAlias}.target_id = ${currentSourceAlias}.id)`);
+                    }
                 }
                 if (!addedNodeAliases.has(pattern.targetAlias)) {
-                    joinParts.push(`JOIN nodes ${pattern.targetAlias} ON ${pattern.edgeAlias}.target_id = ${pattern.targetAlias}.id`);
+                    // For bound edges, the target should be the OTHER endpoint of the edge
+                    if (pattern.boundEdgeOriginalPattern) {
+                        const origPattern = pattern.boundEdgeOriginalPattern;
+                        // Target should be the opposite endpoint from source
+                        // Since source can be either original endpoint, we need an XOR-like condition
+                        joinParts.push(`JOIN nodes ${pattern.targetAlias} ON ((${currentSourceAlias}.id = ${origPattern.sourceAlias}.id AND ${pattern.targetAlias}.id = ${origPattern.targetAlias}.id) OR (${currentSourceAlias}.id = ${origPattern.targetAlias}.id AND ${pattern.targetAlias}.id = ${origPattern.sourceAlias}.id))`);
+                    }
+                    else {
+                        joinParts.push(`JOIN nodes ${pattern.targetAlias} ON ${pattern.edgeAlias}.target_id = ${pattern.targetAlias}.id`);
+                    }
                     addedNodeAliases.add(pattern.targetAlias);
                     // Target label/property filters - deferred until after all CTE params
                     const afterTargetPattern = this.ctx[`pattern_${pattern.targetAlias}`];
@@ -2520,6 +2637,27 @@ export class Translator {
                             const varInfo = this.ctx.variables.get(arg.variable);
                             if (!varInfo) {
                                 throw new Error(`Unknown variable: ${arg.variable}`);
+                            }
+                            // For path variables, count rows (each row is a distinct path)
+                            if (varInfo.type === "path") {
+                                // Find path info to get the first node alias to count by
+                                const pathExpressions = this.ctx.pathExpressions;
+                                if (pathExpressions) {
+                                    const pathInfo = pathExpressions.find(p => p.variable === arg.variable);
+                                    if (pathInfo && pathInfo.nodeAliases.length > 0) {
+                                        // Count by the first node's id to represent path count
+                                        const firstNodeAlias = pathInfo.nodeAliases[0];
+                                        tables.push(firstNodeAlias);
+                                        // Use COUNT(*) for paths - each row is a distinct path match
+                                        return {
+                                            sql: `COUNT(${distinctKeyword}*)`,
+                                            tables,
+                                            params,
+                                        };
+                                    }
+                                }
+                                // Fallback for paths without node info
+                                return { sql: `COUNT(${distinctKeyword}*)`, tables, params };
                             }
                             tables.push(varInfo.alias);
                             // For count(n) or count(DISTINCT n), count nodes by id

@@ -140,7 +140,8 @@ export const FAILING_TESTS = new Set([
   // Match6|15: Now works
   // "clauses/match > Match6 - Match named paths scenarios|15",
   // "clauses/match > Match6 - Match named paths scenarios|16",
-  "clauses/match > Match6 - Match named paths scenarios|17",
+  // Match6|17: Now works with second variable-length CTE undirected fix
+  // "clauses/match > Match6 - Match named paths scenarios|17",
   // "clauses/match > Match6 - Match named paths scenarios|18",
   // "clauses/match > Match6 - Match named paths scenarios|19",
   // Match6|20: Now works
