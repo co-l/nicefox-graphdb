@@ -295,17 +295,48 @@ for (const feature of allFeatures) {
   featuresByCategory.get(category)!.push(feature);
 }
 
-// Start with a subset of fundamental tests
+// Run all TCK categories
 const priorityCategories = [
+  // Core clauses
   "clauses/match",
+  "clauses/match-where",
   "clauses/create", 
   "clauses/return",
+  "clauses/return-orderby",
+  "clauses/return-skip-limit",
   "clauses/delete",
   "clauses/set",
+  "clauses/remove",
   "clauses/merge",
   "clauses/with",
+  "clauses/with-where",
+  "clauses/with-orderBy",
+  "clauses/with-skip-limit",
   "clauses/unwind",
+  "clauses/union",
+  "clauses/call",
+  // Expressions
   "expressions/aggregation",
+  "expressions/boolean",
+  "expressions/comparison",
+  "expressions/conditional",
+  "expressions/existentialSubqueries",
+  "expressions/graph",
+  "expressions/list",
+  "expressions/literals",
+  "expressions/map",
+  "expressions/mathematical",
+  "expressions/null",
+  "expressions/path",
+  "expressions/pattern",
+  "expressions/precedence",
+  "expressions/quantifier",
+  "expressions/string",
+  "expressions/temporal",
+  "expressions/typeConversion",
+  // Use cases
+  "useCases/countingSubgraphMatches",
+  "useCases/triadicSelection",
 ];
 
 describe("openCypher TCK", () => {
