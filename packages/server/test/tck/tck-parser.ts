@@ -13,6 +13,8 @@ export interface TCKScenario {
   featureFile: string;
   name: string;
   index: number;
+  /** For expanded outline scenarios, tracks the example row number */
+  exampleIndex?: number;
   given: "empty" | "any";
   setupQueries: string[];
   query: string;
@@ -37,6 +39,30 @@ export interface ParsedFeature {
   scenarios: TCKScenario[];
 }
 
+interface ScenarioOutlineTemplate {
+  feature: string;
+  featureFile: string;
+  name: string;
+  index: number;
+  given: "empty" | "any";
+  setupQueries: string[];
+  queryTemplate: string;
+  expectResultTemplate?: {
+    ordered: boolean;
+    columns: string[];
+    rowTemplates: string[][];
+  };
+  expectEmpty?: boolean;
+  expectErrorTemplate?: {
+    type: string;
+    phase: string;
+    detail?: string;
+  };
+  sideEffects?: Record<string, number>;
+  exampleColumns: string[];
+  exampleRows: string[][];
+}
+
 /**
  * Parse a single .feature file
  */
@@ -47,13 +73,17 @@ export function parseFeatureFile(filePath: string): ParsedFeature {
   let featureName = "";
   const scenarios: TCKScenario[] = [];
   let currentScenario: Partial<TCKScenario> | null = null;
+  let currentOutline: Partial<ScenarioOutlineTemplate> | null = null;
+  let isOutline = false;
   let inDocString = false;
   let docStringContent: string[] = [];
   let docStringContext: "setup" | "query" | "background" | null = null;
   let currentStep: string | null = null;
   let expectingTable = false;
+  let expectingExamples = false;
   let tableColumns: string[] = [];
   let tableRows: unknown[][] = [];
+  let tableRowsRaw: string[][] = [];
   let scenarioIndex = 0;
   // Background setup queries that apply to all scenarios
   let backgroundSetupQueries: string[] = [];
@@ -75,11 +105,20 @@ export function parseFeatureFile(filePath: string): ParsedFeature {
         const query = docStringContent.join("\n").trim();
         if (docStringContext === "background") {
           backgroundSetupQueries.push(query);
-        } else if (docStringContext === "setup" && currentScenario) {
-          currentScenario.setupQueries = currentScenario.setupQueries || [];
-          currentScenario.setupQueries.push(query);
-        } else if (docStringContext === "query" && currentScenario) {
-          currentScenario.query = query;
+        } else if (docStringContext === "setup") {
+          if (isOutline && currentOutline) {
+            currentOutline.setupQueries = currentOutline.setupQueries || [];
+            currentOutline.setupQueries.push(query);
+          } else if (currentScenario) {
+            currentScenario.setupQueries = currentScenario.setupQueries || [];
+            currentScenario.setupQueries.push(query);
+          }
+        } else if (docStringContext === "query") {
+          if (isOutline && currentOutline) {
+            currentOutline.queryTemplate = query;
+          } else if (currentScenario) {
+            currentScenario.query = query;
+          }
         }
         inDocString = false;
         docStringContent = [];
@@ -117,11 +156,12 @@ export function parseFeatureFile(filePath: string): ParsedFeature {
     if (trimmed.startsWith("Scenario:") || trimmed.startsWith("Scenario Outline:")) {
       // Exiting Background if we were in it
       inBackground = false;
-      // Save previous scenario
-      if (currentScenario && currentScenario.query) {
+      
+      // Save previous scenario (non-outline)
+      if (!isOutline && currentScenario && currentScenario.query) {
         if (expectingTable && tableColumns.length > 0) {
           currentScenario.expectResult = {
-            ordered: false,
+            ordered: currentScenario.expectResult?.ordered ?? false,
             columns: tableColumns,
             rows: tableRows,
           };
@@ -129,43 +169,88 @@ export function parseFeatureFile(filePath: string): ParsedFeature {
         scenarios.push(currentScenario as TCKScenario);
       }
       
+      // Expand and save previous outline
+      if (isOutline && currentOutline && currentOutline.queryTemplate) {
+        if (expectingTable && tableColumns.length > 0 && !expectingExamples) {
+          currentOutline.expectResultTemplate = {
+            ordered: currentOutline.expectResultTemplate?.ordered ?? false,
+            columns: tableColumns,
+            rowTemplates: tableRowsRaw,
+          };
+        }
+        const expanded = expandOutline(currentOutline as ScenarioOutlineTemplate);
+        scenarios.push(...expanded);
+      }
+      
       // Start new scenario
       scenarioIndex++;
-      const scenarioType = trimmed.startsWith("Scenario Outline:") ? "Scenario Outline:" : "Scenario:";
+      const isNewOutline = trimmed.startsWith("Scenario Outline:");
+      const scenarioType = isNewOutline ? "Scenario Outline:" : "Scenario:";
       const name = trimmed.substring(scenarioType.length).trim();
-      currentScenario = {
-        feature: featureName,
-        featureFile: path.basename(filePath),
-        name,
-        index: scenarioIndex,
-        given: "any",
-        // Include background setup queries first
-        setupQueries: [...backgroundSetupQueries],
-        query: "",
-      };
+      
+      if (isNewOutline) {
+        isOutline = true;
+        currentOutline = {
+          feature: featureName,
+          featureFile: path.basename(filePath),
+          name,
+          index: scenarioIndex,
+          given: "any",
+          setupQueries: [...backgroundSetupQueries],
+          queryTemplate: "",
+          exampleColumns: [],
+          exampleRows: [],
+        };
+        currentScenario = null;
+      } else {
+        isOutline = false;
+        currentScenario = {
+          feature: featureName,
+          featureFile: path.basename(filePath),
+          name,
+          index: scenarioIndex,
+          given: "any",
+          setupQueries: [...backgroundSetupQueries],
+          query: "",
+        };
+        currentOutline = null;
+      }
+      
       expectingTable = false;
+      expectingExamples = false;
       tableColumns = [];
       tableRows = [];
+      tableRowsRaw = [];
       currentStep = null;
       continue;
     }
     
-    // Skip Scenario Outline Examples for now (too complex)
+    // Examples section for Scenario Outline
     if (trimmed.startsWith("Examples:")) {
-      // Mark scenario as outline to skip
-      if (currentScenario) {
-        currentScenario.tags = currentScenario.tags || [];
-        currentScenario.tags.push("outline");
+      // Save result table before switching to examples
+      if (expectingTable && tableColumns.length > 0 && currentOutline) {
+        currentOutline.expectResultTemplate = {
+          ordered: currentOutline.expectResultTemplate?.ordered ?? false,
+          columns: tableColumns,
+          rowTemplates: tableRowsRaw,
+        };
       }
+      expectingTable = false;
+      expectingExamples = true;
+      tableColumns = [];
+      tableRows = [];
+      tableRowsRaw = [];
       continue;
     }
     
     // Given
     if (trimmed.startsWith("Given")) {
       if (trimmed.includes("an empty graph")) {
-        if (currentScenario) currentScenario.given = "empty";
+        if (isOutline && currentOutline) currentOutline.given = "empty";
+        else if (currentScenario) currentScenario.given = "empty";
       } else if (trimmed.includes("any graph")) {
-        if (currentScenario) currentScenario.given = "any";
+        if (isOutline && currentOutline) currentOutline.given = "any";
+        else if (currentScenario) currentScenario.given = "any";
       }
       continue;
     }
@@ -184,7 +269,9 @@ export function parseFeatureFile(filePath: string): ParsedFeature {
     
     // Then the result should be empty (check this BEFORE "Then the result should be")
     if (trimmed.startsWith("Then the result should be empty")) {
-      if (currentScenario) {
+      if (isOutline && currentOutline) {
+        currentOutline.expectEmpty = true;
+      } else if (currentScenario) {
         currentScenario.expectEmpty = true;
       }
       expectingTable = false;
@@ -194,26 +281,33 @@ export function parseFeatureFile(filePath: string): ParsedFeature {
     // Then the result should be
     if (trimmed.startsWith("Then the result should be")) {
       expectingTable = true;
+      expectingExamples = false;
       tableColumns = [];
       tableRows = [];
-      if (trimmed.includes("in order")) {
-        if (currentScenario) {
-          currentScenario.expectResult = currentScenario.expectResult || { ordered: true, columns: [], rows: [] };
-          currentScenario.expectResult.ordered = true;
-        }
+      tableRowsRaw = [];
+      const ordered = trimmed.includes("in order");
+      if (isOutline && currentOutline) {
+        currentOutline.expectResultTemplate = { ordered, columns: [], rowTemplates: [] };
+      } else if (currentScenario) {
+        currentScenario.expectResult = { ordered, columns: [], rows: [] };
       }
       continue;
     }
     
     // Error expectations
     if (trimmed.match(/Then a (\w+) should be raised/)) {
-      const match = trimmed.match(/Then a (\w+) should be raised at (\w+) time: (\w+)/);
-      if (match && currentScenario) {
-        currentScenario.expectError = {
+      const match = trimmed.match(/Then a (\w+) should be raised(?: at (\w+)(?: time)?)?(?: ?: ?(\w+))?/);
+      if (match) {
+        const errorInfo = {
           type: match[1],
-          phase: match[2],
+          phase: match[2] || "runtime",
           detail: match[3],
         };
+        if (isOutline && currentOutline) {
+          currentOutline.expectErrorTemplate = errorInfo;
+        } else if (currentScenario) {
+          currentScenario.expectError = errorInfo;
+        }
       }
       continue;
     }
@@ -221,21 +315,34 @@ export function parseFeatureFile(filePath: string): ParsedFeature {
     // Side effects - stop expecting result table and start expecting side effects table
     if (trimmed.startsWith("And the side effects should be:") || trimmed.startsWith("And no side effects")) {
       // First, save any pending result table
-      if (expectingTable && tableColumns.length > 0 && currentScenario) {
-        currentScenario.expectResult = {
-          ordered: currentScenario.expectResult?.ordered ?? false,
-          columns: tableColumns,
-          rows: tableRows,
-        };
+      if (expectingTable && tableColumns.length > 0) {
+        if (isOutline && currentOutline) {
+          currentOutline.expectResultTemplate = {
+            ordered: currentOutline.expectResultTemplate?.ordered ?? false,
+            columns: tableColumns,
+            rowTemplates: tableRowsRaw,
+          };
+        } else if (currentScenario) {
+          currentScenario.expectResult = {
+            ordered: currentScenario.expectResult?.ordered ?? false,
+            columns: tableColumns,
+            rows: tableRows,
+          };
+        }
       }
       expectingTable = false;
+      expectingExamples = false;
       tableColumns = [];
       tableRows = [];
+      tableRowsRaw = [];
       
-      if (trimmed.includes("no side effects") && currentScenario) {
-        currentScenario.sideEffects = {};
+      if (trimmed.includes("no side effects")) {
+        if (isOutline && currentOutline) {
+          currentOutline.sideEffects = {};
+        } else if (currentScenario) {
+          currentScenario.sideEffects = {};
+        }
       }
-      // Next lines will be the side effects table
       continue;
     }
     
@@ -246,22 +353,36 @@ export function parseFeatureFile(filePath: string): ParsedFeature {
         .split("|")
         .map(c => c.trim());
       
-      if (expectingTable) {
+      if (expectingExamples && currentOutline) {
+        if (currentOutline.exampleColumns!.length === 0) {
+          currentOutline.exampleColumns = cells;
+        } else {
+          currentOutline.exampleRows!.push(cells);
+        }
+      } else if (expectingTable) {
         if (tableColumns.length === 0) {
           // Header row
           tableColumns = cells;
         } else {
-          // Data row
+          // Data row - keep both raw and parsed
+          tableRowsRaw.push(cells);
           const row = cells.map(cell => parseCellValue(cell));
           tableRows.push(row);
         }
-      } else if (currentScenario && cells.length === 2) {
+      } else {
         // Side effects table
-        currentScenario.sideEffects = currentScenario.sideEffects || {};
-        const key = cells[0];
-        const value = parseInt(cells[1], 10);
-        if (!isNaN(value)) {
-          currentScenario.sideEffects[key] = value;
+        if (cells.length === 2) {
+          const key = cells[0];
+          const value = parseInt(cells[1], 10);
+          if (!isNaN(value)) {
+            if (isOutline && currentOutline) {
+              currentOutline.sideEffects = currentOutline.sideEffects || {};
+              currentOutline.sideEffects[key] = value;
+            } else if (currentScenario) {
+              currentScenario.sideEffects = currentScenario.sideEffects || {};
+              currentScenario.sideEffects[key] = value;
+            }
+          }
         }
       }
       continue;
@@ -269,7 +390,7 @@ export function parseFeatureFile(filePath: string): ParsedFeature {
   }
   
   // Save last scenario
-  if (currentScenario && currentScenario.query) {
+  if (!isOutline && currentScenario && currentScenario.query) {
     if (expectingTable && tableColumns.length > 0) {
       currentScenario.expectResult = {
         ordered: currentScenario.expectResult?.ordered ?? false,
@@ -280,11 +401,106 @@ export function parseFeatureFile(filePath: string): ParsedFeature {
     scenarios.push(currentScenario as TCKScenario);
   }
   
+  // Expand and save last outline
+  if (isOutline && currentOutline && currentOutline.queryTemplate) {
+    if (expectingTable && tableColumns.length > 0 && !expectingExamples) {
+      currentOutline.expectResultTemplate = {
+        ordered: currentOutline.expectResultTemplate?.ordered ?? false,
+        columns: tableColumns,
+        rowTemplates: tableRowsRaw,
+      };
+    }
+    const expanded = expandOutline(currentOutline as ScenarioOutlineTemplate);
+    scenarios.push(...expanded);
+  }
+  
   return {
     name: featureName,
     file: filePath,
     scenarios,
   };
+}
+
+/**
+ * Expand a Scenario Outline template into individual test scenarios
+ */
+function expandOutline(outline: ScenarioOutlineTemplate): TCKScenario[] {
+  const scenarios: TCKScenario[] = [];
+  
+  for (let rowIdx = 0; rowIdx < outline.exampleRows.length; rowIdx++) {
+    const exampleRow = outline.exampleRows[rowIdx];
+    const substitutions = new Map<string, string>();
+    
+    // Build substitution map
+    for (let colIdx = 0; colIdx < outline.exampleColumns.length; colIdx++) {
+      const colName = outline.exampleColumns[colIdx];
+      const value = exampleRow[colIdx];
+      substitutions.set(colName, value);
+    }
+    
+    // Substitute in query
+    const query = substituteTemplate(outline.queryTemplate, substitutions);
+    
+    // Substitute in setup queries
+    const setupQueries = outline.setupQueries.map(q => substituteTemplate(q, substitutions));
+    
+    // Substitute in expected result
+    let expectResult: TCKScenario["expectResult"];
+    if (outline.expectResultTemplate) {
+      const rows = outline.expectResultTemplate.rowTemplates.map(rowTemplate => 
+        rowTemplate.map(cell => {
+          const substituted = substituteTemplate(cell, substitutions);
+          return parseCellValue(substituted);
+        })
+      );
+      expectResult = {
+        ordered: outline.expectResultTemplate.ordered,
+        columns: outline.expectResultTemplate.columns,
+        rows,
+      };
+    }
+    
+    // Substitute in expected error detail if needed
+    let expectError: TCKScenario["expectError"];
+    if (outline.expectErrorTemplate) {
+      expectError = {
+        type: outline.expectErrorTemplate.type,
+        phase: outline.expectErrorTemplate.phase,
+        detail: outline.expectErrorTemplate.detail 
+          ? substituteTemplate(outline.expectErrorTemplate.detail, substitutions)
+          : undefined,
+      };
+    }
+    
+    scenarios.push({
+      feature: outline.feature,
+      featureFile: outline.featureFile,
+      name: outline.name,
+      index: outline.index,
+      exampleIndex: rowIdx + 1,
+      given: outline.given,
+      setupQueries,
+      query,
+      expectResult,
+      expectEmpty: outline.expectEmpty,
+      expectError,
+      sideEffects: outline.sideEffects,
+    });
+  }
+  
+  return scenarios;
+}
+
+/**
+ * Substitute <placeholder> values in a template string
+ */
+function substituteTemplate(template: string, substitutions: Map<string, string>): string {
+  let result = template;
+  for (const [key, value] of substitutions) {
+    const placeholder = new RegExp(`<${key}>`, 'g');
+    result = result.replace(placeholder, value);
+  }
+  return result;
 }
 
 /**
@@ -319,8 +535,8 @@ function parseCellValue(cell: string): unknown {
     return { _pathPattern: cell };
   }
   
-  // Relationship pattern
-  if (cell.startsWith("[") && cell.endsWith("]")) {
+  // Relationship pattern like [:TYPE]
+  if (cell.startsWith("[:") && cell.endsWith("]")) {
     return { _relPattern: cell };
   }
   
@@ -330,7 +546,8 @@ function parseCellValue(cell: string): unknown {
     try {
       return JSON.parse(cell.replace(/'/g, '"'));
     } catch {
-      return cell;
+      // If it looks like a list pattern for relationships, mark it as such
+      return { _relPattern: cell };
     }
   }
   
@@ -382,13 +599,13 @@ export function getStats(features: ParsedFeature[]): {
   withExpectedResults: number;
   withExpectedErrors: number;
   withExpectedEmpty: number;
-  outlineScenarios: number;
+  expandedFromOutlines: number;
 } {
   let totalScenarios = 0;
   let withExpectedResults = 0;
   let withExpectedErrors = 0;
   let withExpectedEmpty = 0;
-  let outlineScenarios = 0;
+  let expandedFromOutlines = 0;
   
   for (const feature of features) {
     for (const scenario of feature.scenarios) {
@@ -396,7 +613,7 @@ export function getStats(features: ParsedFeature[]): {
       if (scenario.expectResult) withExpectedResults++;
       if (scenario.expectError) withExpectedErrors++;
       if (scenario.expectEmpty) withExpectedEmpty++;
-      if (scenario.tags?.includes("outline")) outlineScenarios++;
+      if (scenario.exampleIndex !== undefined) expandedFromOutlines++;
     }
   }
   
@@ -406,6 +623,6 @@ export function getStats(features: ParsedFeature[]): {
     withExpectedResults,
     withExpectedErrors,
     withExpectedEmpty,
-    outlineScenarios,
+    expandedFromOutlines,
   };
 }

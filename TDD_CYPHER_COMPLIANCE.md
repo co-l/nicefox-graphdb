@@ -1,10 +1,14 @@
 # NiceFox GraphDB - TCK Compliance Guide
 
 ## Current Status
-- **Passing**: 1674 tests (64.2%)
-- **Failing**: 547 tests (skipped in test suite)
-- **Skipped**: 388 (outline scenarios + error expectation tests)
-- **Total**: 2609 tests
+- **Passing**: 2010 tests (41.2%)
+- **Failing**: 2870 tests (skipped in test suite)
+- **Total**: 4880 tests
+
+### Test Coverage
+- Scenario Outlines are now expanded (2558 tests from outlines)
+- Error expectation tests are now included (695 tests)
+- All TCK categories are covered except `clauses/call`
 
 ### Excluded Categories
 - `clauses/call` - CALL procedures not yet supported

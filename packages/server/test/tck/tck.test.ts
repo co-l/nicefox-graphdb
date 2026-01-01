@@ -24,7 +24,7 @@ console.log(`   Total scenarios: ${stats.totalScenarios}`);
 console.log(`   With expected results: ${stats.withExpectedResults}`);
 console.log(`   With expected errors: ${stats.withExpectedErrors}`);
 console.log(`   With expected empty: ${stats.withExpectedEmpty}`);
-console.log(`   Outline scenarios (skipped): ${stats.outlineScenarios}\n`);
+console.log(`   Expanded from outlines: ${stats.expandedFromOutlines}\n`);
 
 // Track results for summary
 const results = {
@@ -365,24 +365,19 @@ describe("openCypher TCK", () => {
         
         describe(feature.name, () => {
           for (const scenario of feature.scenarios) {
-            // Skip outline scenarios
-            if (scenario.tags?.includes("outline")) {
-              it.skip(`[${scenario.index}] ${scenario.name}`, () => {});
-              continue;
-            }
-            
-            // Skip error expectation scenarios for now (need better error handling)
-            if (scenario.expectError) {
-              it.skip(`[${scenario.index}] ${scenario.name} (expects error)`, () => {});
-              continue;
-            }
-
-            // Check if this test is known to fail
-            const testKey = `${category} > ${feature.name}|${scenario.index}`;
+            // Build test key - include example index for expanded outline scenarios
+            const testKey = scenario.exampleIndex !== undefined
+              ? `${category} > ${feature.name}|${scenario.index}:${scenario.exampleIndex}`
+              : `${category} > ${feature.name}|${scenario.index}`;
             const isKnownFailing = FAILING_TESTS.has(testKey);
             
+            // Build test name - include example index for expanded outlines
+            const testName = scenario.exampleIndex !== undefined
+              ? `[${scenario.index}:${scenario.exampleIndex}] ${scenario.name}`
+              : `[${scenario.index}] ${scenario.name}`;
+            
             const testFn = isKnownFailing ? it.skip : it;
-            testFn(`[${scenario.index}] ${scenario.name}`, () => {
+            testFn(testName, () => {
               // Fresh DB for each test
               db = new GraphDatabase(":memory:");
               db.initialize();

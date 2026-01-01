@@ -225,13 +225,17 @@ const matches: Array<{ scenario: TCKScenario; testKey: string }> = [];
 for (const feature of allFeatures) {
   for (const scenario of feature.scenarios) {
     // Build test key like "clauses/return > Return6 - Implicit grouping|11"
+    // For expanded outline scenarios, include example index: "|11:1", "|11:2", etc.
     const featurePath = feature.file.replace(TCK_PATH + "/", "").replace(".feature", "");
-    const testKey = `${featurePath} > ${feature.name}|${scenario.index}`;
-    const shortKey = `${feature.name}|${scenario.index}`;
+    const indexPart = scenario.exampleIndex !== undefined 
+      ? `${scenario.index}:${scenario.exampleIndex}`
+      : `${scenario.index}`;
+    const testKey = `${featurePath} > ${feature.name}|${indexPart}`;
+    const shortKey = `${feature.name}|${indexPart}`;
     
     // Extract feature base name (e.g., "Return6" from "Return6 - Implicit grouping...")
     const featureBaseName = feature.name.split(" - ")[0].split(" ")[0];
-    const tinyKey = `${featureBaseName}|${scenario.index}`;
+    const tinyKey = `${featureBaseName}|${indexPart}`;
     
     // Match against pattern (case insensitive)
     if (
