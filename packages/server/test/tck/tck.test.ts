@@ -5,7 +5,7 @@
  * This provides a comprehensive compliance test suite for Cypher support.
  */
 
-import { describe, it, expect, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, afterAll } from "vitest";
 import * as path from "path";
 import { GraphDatabase } from "../../src/db";
 import { Executor } from "../../src/executor";
@@ -15,12 +15,20 @@ import { NEO4J35_BASELINE } from "./neo4j35-baseline";
 
 const TCK_PATH = path.join(__dirname, "openCypher/tck/features");
 
+// Environment variable to run all tests including known failing ones
+// Usage: TCK_TEST_ALL=1 pnpm test -- --run
+const TCK_TEST_ALL = process.env.TCK_TEST_ALL === "1";
+
 // Parse all TCK features
 const allFeatures = parseAllFeatures(TCK_PATH);
 const stats = getStats(allFeatures);
 
 console.log(`\n📊 TCK Statistics (Neo4j 3.5 baseline):`);
-console.log(`   Target: ${NEO4J35_BASELINE.size} tests\n`);
+console.log(`   Target: ${NEO4J35_BASELINE.size} tests`);
+if (TCK_TEST_ALL) {
+  console.log(`   Mode: Testing ALL (including known failing tests)`);
+}
+console.log("");
 
 // Track results for summary
 const results = {
@@ -29,6 +37,9 @@ const results = {
   skipped: 0,
   errors: [] as { scenario: string; error: string }[],
 };
+
+// Track which tests from FAILING_TESTS actually passed (only when TCK_TEST_ALL is set)
+const unexpectedlyPassed: string[] = [];
 
 /**
  * Compare expected value with actual value
@@ -389,7 +400,8 @@ describe("openCypher TCK", () => {
               ? `[${scenario.index}:${scenario.exampleIndex}] ${scenario.name}`
               : `[${scenario.index}] ${scenario.name}`;
             
-            const testFn = isKnownFailing ? it.skip : it;
+            // Skip known failing tests unless TCK_TEST_ALL is set
+            const testFn = (isKnownFailing && !TCK_TEST_ALL) ? it.skip : it;
             testFn(testName, () => {
               // Fresh DB for each test
               db = new GraphDatabase(":memory:");
@@ -398,6 +410,10 @@ describe("openCypher TCK", () => {
               
               try {
                 runScenario(scenario, db, executor);
+                // If this test was in the failing list but passed, track it
+                if (TCK_TEST_ALL && isKnownFailing) {
+                  unexpectedlyPassed.push(testKey);
+                }
               } finally {
                 db.close();
               }
@@ -421,9 +437,14 @@ afterAll(() => {
       console.log(`   - ${err.scenario}: ${err.error.slice(0, 100)}`);
     }
   }
+  
+  // Report tests that were in FAILING_TESTS but actually passed
+  if (TCK_TEST_ALL && unexpectedlyPassed.length > 0) {
+    console.log(`\n🎉 Tests from FAILING_TESTS that now PASS (${unexpectedlyPassed.length}):`);
+    console.log(`   These can be removed from failing-tests.ts:\n`);
+    for (const testKey of unexpectedlyPassed) {
+      console.log(`   // "${testKey}",`);
+    }
+    console.log("");
+  }
 });
-
-function afterAll(fn: () => void) {
-  // This will be called after all tests complete
-  process.on("beforeExit", fn);
-}

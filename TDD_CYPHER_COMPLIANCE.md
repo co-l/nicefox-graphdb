@@ -19,8 +19,8 @@ The workflow is simple:
 1. **Unskip the first test** in `packages/server/test/tck/failing-tests.ts` (comment out the first uncommented line)
 2. **Run tests** - `pnpm test -- --run` - see it fail
 3. **Fix the code** until green
-4. **Uncomment all failing tests to see by chance if you didn't fix another one**
-5. **Comment actual failing tests**
+4. **Find other fixed tests** - Run `TCK_TEST_ALL=1 pnpm test -- --run` to check if your fix also fixed other tests
+5. **Update failing-tests.ts** - Comment out any tests that now pass (shown in the output)
 6. **Update this document**
 7. **Commit and push**
 
@@ -48,8 +48,12 @@ Then run `pnpm test -- --run`, fix code, commit, push.
 ## Quick Commands
 
 ```bash
-# Run all tests
+# Run all tests (skipping known failing)
 pnpm test -- --run
+
+# Run ALL tests including known failing ones
+# Shows which tests from failing-tests.ts now pass
+TCK_TEST_ALL=1 pnpm test -- --run
 
 # Test a specific TCK test with details
 pnpm tck 'Delete4|1' -v --sql -f
@@ -57,6 +61,27 @@ pnpm tck 'Delete4|1' -v --sql -f
 # See what error a test produces
 pnpm tck 'Delete4|1' -f
 ```
+
+### Finding Fixed Tests
+
+After implementing a fix, run with `TCK_TEST_ALL=1` to discover other tests that might have been fixed:
+
+```bash
+TCK_TEST_ALL=1 pnpm test -- --run
+```
+
+At the end of the test run, you'll see output like:
+
+```
+🎉 Tests from FAILING_TESTS that now PASS (3):
+   These can be removed from failing-tests.ts:
+
+   // "clauses/create > Create1 - Creating nodes|16",
+   // "clauses/create > Create1 - Creating nodes|17",
+   // "clauses/create > Create1 - Creating nodes|18",
+```
+
+Copy these commented lines to `failing-tests.ts` to mark them as passing.
 
 ## Key Files
 
