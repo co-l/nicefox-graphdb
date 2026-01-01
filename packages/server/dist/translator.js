@@ -730,6 +730,52 @@ export class Translator {
             const addedEdgeAliases = new Set();
             // Track which node aliases have had their filters added (to avoid duplicates)
             const filteredNodeAliases = new Set();
+            // IMPORTANT: Before processing relationship patterns, add all non-optional node
+            // patterns to FROM first. This ensures that bound variables from required MATCH
+            // clauses are in FROM before OPTIONAL MATCH relationship patterns try to reference them.
+            // Example: MATCH (a:A), (b:C) OPTIONAL MATCH (x)-->(b) - here b must be in FROM before
+            // we process the OPTIONAL MATCH relationship, even though b is used as a target in
+            // the OPTIONAL MATCH. We check the node's original optional flag, not whether it
+            // appears in an optional relationship pattern.
+            for (const [variable, info] of this.ctx.variables) {
+                if (info.type !== "node")
+                    continue;
+                const pattern = this.ctx[`pattern_${info.alias}`];
+                const isOptional = this.ctx[`optional_${info.alias}`] === true;
+                // Add non-optional nodes to FROM, regardless of whether they appear in a relationship pattern
+                // The key is checking the node's original optional flag, not where it's used
+                if (pattern && !isOptional) {
+                    // Check if this node is only used as source/target in a NON-optional relationship pattern
+                    // If so, the relationship loop will handle adding it to FROM
+                    const isSourceOrTargetOfNonOptionalRel = relPatterns.some(rp => !rp.optional && (rp.sourceAlias === info.alias || rp.targetAlias === info.alias));
+                    if (!isSourceOrTargetOfNonOptionalRel) {
+                        // This is a required node that either:
+                        // 1. Is not part of any relationship pattern (standalone), or
+                        // 2. Is only used in optional relationship patterns (but the node itself is required)
+                        // Add to FROM
+                        fromParts.push(`nodes ${info.alias}`);
+                        addedNodeAliases.add(info.alias);
+                        if (pattern.label) {
+                            const labelMatch = this.generateLabelMatchCondition(info.alias, pattern.label);
+                            whereParts.push(labelMatch.sql);
+                            whereParams.push(...labelMatch.params);
+                        }
+                        if (pattern.properties) {
+                            for (const [key, value] of Object.entries(pattern.properties)) {
+                                if (this.isParameterRef(value)) {
+                                    whereParts.push(`json_extract(${info.alias}.properties, '$.${key}') = ?`);
+                                    whereParams.push(this.ctx.paramValues[value.name]);
+                                }
+                                else {
+                                    whereParts.push(`json_extract(${info.alias}.properties, '$.${key}') = ?`);
+                                    whereParams.push(value);
+                                }
+                            }
+                        }
+                        filteredNodeAliases.add(info.alias);
+                    }
+                }
+            }
             // Relationship query - handle multi-hop patterns
             for (let i = 0; i < relPatterns.length; i++) {
                 const relPattern = relPatterns[i];
@@ -737,6 +783,9 @@ export class Translator {
                 const joinType = isOptional ? "LEFT JOIN" : "JOIN";
                 // Check if source was from a previous optional MATCH
                 const sourceIsOptional = this.ctx[`optional_${relPattern.sourceAlias}`] === true;
+                // Record whether source was already added BEFORE we potentially add it
+                // This is needed for edge join direction logic later
+                const sourceWasAlreadyAdded = addedNodeAliases.has(relPattern.sourceAlias);
                 if (i === 0 && !isOptional) {
                     // First non-optional relationship: add source node to FROM
                     // If source was optional, use LEFT JOIN to allow NULL values, then filter them out
@@ -768,7 +817,16 @@ export class Translator {
                 else if (!addedNodeAliases.has(relPattern.sourceAlias)) {
                     // For subsequent patterns, if source is not already added, we need to JOIN it
                     // For optional patterns, use LEFT JOIN
-                    if (isOptional && relPattern.sourceIsNew) {
+                    if (isOptional && relPattern.sourceIsNew && addedNodeAliases.has(relPattern.targetAlias)) {
+                        // Special case: OPTIONAL MATCH with new source but bound target
+                        // Example: MATCH (b:C) OPTIONAL MATCH (x)-->(b)
+                        // We need to join edge first (on target), then source (on edge.source)
+                        // So we SKIP adding source here - it will be added after the edge join below
+                        // Set a flag to indicate this deferred source join
+                        relPattern.deferSourceJoin = true;
+                    }
+                    else if (isOptional && relPattern.sourceIsNew) {
+                        // Optional pattern with new source but target not bound
                         // This shouldn't happen often - optional patterns usually reference existing nodes
                         joinParts.push(`${joinType} nodes ${relPattern.sourceAlias} ON 1=1`);
                     }
@@ -796,7 +854,10 @@ export class Translator {
                             joinParts.push(`JOIN nodes ${relPattern.sourceAlias} ON 1=1`);
                         }
                     }
-                    addedNodeAliases.add(relPattern.sourceAlias);
+                    // Only add to addedNodeAliases if we actually added a join (not deferred)
+                    if (!relPattern.deferSourceJoin) {
+                        addedNodeAliases.add(relPattern.sourceAlias);
+                    }
                 }
                 // Build ON conditions for the edge join
                 let edgeOnConditions = [];
@@ -804,11 +865,15 @@ export class Translator {
                 // Check if this is an undirected/bidirectional pattern (direction: "none")
                 const isUndirected = relPattern.edge.direction === "none";
                 // Add edge join - need to determine direction based on whether source/target already exist
+                // Use sourceWasAlreadyAdded (recorded before adding source) for accurate check
                 if (isUndirected) {
                     // For undirected patterns, match edges in either direction
                     edgeOnConditions.push(`(${relPattern.edgeAlias}.source_id = ${relPattern.sourceAlias}.id OR ${relPattern.edgeAlias}.target_id = ${relPattern.sourceAlias}.id)`);
                 }
-                else if (addedNodeAliases.has(relPattern.targetAlias) && !addedNodeAliases.has(relPattern.sourceAlias)) {
+                else if (isOptional && addedNodeAliases.has(relPattern.targetAlias) && !sourceWasAlreadyAdded) {
+                    // OPTIONAL MATCH special case: target was already added (bound from previous MATCH) 
+                    // but source was not. Join edge on target side: edge.target_id = bound_target.id
+                    // This allows us to find all source nodes that connect to the bound target.
                     edgeOnConditions.push(`${relPattern.edgeAlias}.target_id = ${relPattern.targetAlias}.id`);
                 }
                 else if (relPattern.edge.direction === "left") {
@@ -876,6 +941,32 @@ export class Translator {
                     // Edge already joined - just add any additional type/property filters to WHERE
                     // (The ON conditions would be redundant but filters might differ)
                     // Note: edgeOnParams were already added when the edge was first joined
+                }
+                // Handle deferred source join (when target was bound but source was new)
+                // This joins the source node based on the edge's source_id
+                if (relPattern.deferSourceJoin && !addedNodeAliases.has(relPattern.sourceAlias)) {
+                    // Join source on edge.source_id (since edge was joined on target)
+                    const sourceOnConditions = [];
+                    if (relPattern.edge.direction === "left") {
+                        // Left-directed: source is at target_id side of edge
+                        sourceOnConditions.push(`${relPattern.sourceAlias}.id = ${relPattern.edgeAlias}.target_id`);
+                    }
+                    else {
+                        // Right-directed or undirected: source is at source_id side
+                        sourceOnConditions.push(`${relPattern.sourceAlias}.id = ${relPattern.edgeAlias}.source_id`);
+                    }
+                    // Add label filter if source has one
+                    const sourcePattern = this.ctx[`pattern_${relPattern.sourceAlias}`];
+                    const sourceOnParams = [];
+                    if (sourcePattern?.label) {
+                        const labelMatch = this.generateLabelMatchCondition(relPattern.sourceAlias, sourcePattern.label);
+                        sourceOnConditions.push(labelMatch.sql);
+                        sourceOnParams.push(...labelMatch.params);
+                        filteredNodeAliases.add(relPattern.sourceAlias);
+                    }
+                    joinParts.push(`${joinType} nodes ${relPattern.sourceAlias} ON ${sourceOnConditions.join(" AND ")}`);
+                    joinParams.push(...sourceOnParams);
+                    addedNodeAliases.add(relPattern.sourceAlias);
                 }
                 // Build ON conditions for the target node join
                 let targetOnConditions = [];

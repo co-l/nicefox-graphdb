@@ -145,7 +145,7 @@ export const FAILING_TESTS = new Set([
   // "clauses/match > Match6 - Match named paths scenarios|19",
   // Match6|20: Now works
   // "clauses/match > Match6 - Match named paths scenarios|20",
-  "clauses/match > Match7 - Optional match|3",
+  // "clauses/match > Match7 - Optional match|3",
   // Match7|4,8: value mismatches
   "clauses/match > Match7 - Optional match|4",
   "clauses/match > Match7 - Optional match|8",
