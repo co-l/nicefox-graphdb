@@ -205,14 +205,24 @@ export class Translator {
         const nodeAliases = [];
         const edgeAliases = [];
         let isVariableLength = false;
+        let previousTargetAlias = undefined;
         // Register all patterns within the path
         for (const pattern of pathExpr.patterns) {
             if (this.isRelationshipPattern(pattern)) {
                 const relPattern = pattern;
                 // Check if source is first in chain - if so, record it before registering relationship
                 const isFirstInChain = nodeAliases.length === 0;
+                // For chained patterns in a path, set the previous target as the source to reuse
+                // This handles cases like p = (a:Label1)<--(:Label2)--() where the middle node
+                // should be shared between both relationship patterns
+                if (previousTargetAlias && !relPattern.source.variable) {
+                    // Set this so registerRelationshipPattern can reuse the alias
+                    this.ctx.pathChainSourceAlias = previousTargetAlias;
+                }
                 // Register the relationship pattern - this will handle node and edge registration
                 this.registerRelationshipPattern(pattern, optional);
+                // Clear the chain source alias after use
+                this.ctx.pathChainSourceAlias = undefined;
                 // Now extract the aliases that were created
                 const relPatternInfo = this.ctx.relationshipPatterns[this.ctx.relationshipPatterns.length - 1];
                 // Track if this path contains a variable-length pattern
@@ -227,11 +237,14 @@ export class Translator {
                 edgeAliases.push(relPatternInfo.edgeAlias);
                 // Add target node alias
                 nodeAliases.push(relPatternInfo.targetAlias);
+                // Remember this target for the next iteration
+                previousTargetAlias = relPatternInfo.targetAlias;
             }
             else {
                 // Single node pattern in path
                 const nodeAlias = this.registerNodePattern(pattern, optional);
                 nodeAliases.push(nodeAlias);
+                previousTargetAlias = nodeAlias;
             }
         }
         // For variable-length paths, pre-allocate a CTE name so that length(p) can reference it
@@ -275,6 +288,23 @@ export class Translator {
         if (rel.source.variable && this.ctx.variables.has(rel.source.variable)) {
             sourceAlias = this.ctx.variables.get(rel.source.variable).alias;
             // If the new pattern has a label constraint, track it as an additional constraint
+            if (rel.source.label) {
+                if (!this.ctx.additionalLabelConstraints) {
+                    this.ctx.additionalLabelConstraints = [];
+                }
+                this.ctx.additionalLabelConstraints.push({
+                    alias: sourceAlias,
+                    label: rel.source.label,
+                    optional
+                });
+            }
+        }
+        else if (this.ctx.pathChainSourceAlias) {
+            // Path chaining: reuse the previous target alias as this source
+            // This handles patterns like p = (a:Label1)<--(:Label2)--() where (:Label2) is shared
+            sourceAlias = this.ctx.pathChainSourceAlias;
+            sourceIsNew = false;
+            // If the source has a label constraint, add it to the reused alias
             if (rel.source.label) {
                 if (!this.ctx.additionalLabelConstraints) {
                     this.ctx.additionalLabelConstraints = [];

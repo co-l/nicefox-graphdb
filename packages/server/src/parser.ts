@@ -603,6 +603,7 @@ class Tokenizer {
 export class Parser {
   private tokens: Token[] = [];
   private pos: number = 0;
+  private anonVarCounter: number = 0;
 
   parse(input: string): ParseResult {
     try {
@@ -1267,6 +1268,17 @@ export class Parser {
     while (this.check("DASH") || this.check("ARROW_LEFT")) {
       const edge = this.parseEdgePattern();
       const targetNode = this.parseNodePattern();
+
+      // Check if there's another relationship pattern coming after this one
+      const hasMoreRelationships = this.check("DASH") || this.check("ARROW_LEFT");
+
+      // If target is anonymous (no variable) AND there's more patterns coming,
+      // assign a synthetic variable for chaining.
+      // This ensures patterns like (:A)<-[:R]-(:B)-[:S]->(:C) share the (:B) node
+      // But don't do this for standalone patterns like CREATE ()-[:R]->()
+      if (!targetNode.variable && hasMoreRelationships) {
+        targetNode.variable = `_anon${this.anonVarCounter++}`;
+      }
 
       patterns.push({
         source: currentSource,

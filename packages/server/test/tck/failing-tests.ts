@@ -130,7 +130,8 @@ export const FAILING_TESTS = new Set([
   // "clauses/match > Match6 - Match named paths scenarios|5",
   // "clauses/match > Match6 - Match named paths scenarios|6",
   // "clauses/match > Match6 - Match named paths scenarios|7",
-  "clauses/match > Match6 - Match named paths scenarios|9",
+  // Match6|9: Now works with path chaining fix and synthetic anonymous variable
+  // "clauses/match > Match6 - Match named paths scenarios|9",
   // "clauses/match > Match6 - Match named paths scenarios|10",
   // "clauses/match > Match6 - Match named paths scenarios|11",
   // "clauses/match > Match6 - Match named paths scenarios|12",

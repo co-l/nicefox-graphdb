@@ -195,6 +195,7 @@ export type ParseResult = {
 export declare class Parser {
     private tokens;
     private pos;
+    private anonVarCounter;
     parse(input: string): ParseResult;
     private parseQuery;
     private error;
