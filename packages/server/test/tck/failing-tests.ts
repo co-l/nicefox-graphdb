@@ -179,7 +179,8 @@ export const FAILING_TESTS = new Set([
   "clauses/match > Match8 - Match clause interoperation with other clauses|2",
   // Match8|3: value mismatch
   "clauses/match > Match8 - Match clause interoperation with other clauses|3",
-  "clauses/match > Match9 - Match deprecated scenarios|1",
+  // Match9|1: Now works with varLengthEdge handling in translateFunctionArg
+  // "clauses/match > Match9 - Match deprecated scenarios|1",
   // Match9|2: Now works with variable-length edge tracking
   // "clauses/match > Match9 - Match deprecated scenarios|2",
   "clauses/match > Match9 - Match deprecated scenarios|3",

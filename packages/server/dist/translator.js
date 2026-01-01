@@ -4376,6 +4376,12 @@ END FROM (SELECT json_group_array(${valueExpr}) as sv))`,
                 if (!varInfo) {
                     throw new Error(`Unknown variable: ${expr.variable}`);
                 }
+                // For variable-length edge variables, return the edge_ids array from the CTE
+                if (varInfo.type === "varLengthEdge") {
+                    const pathCteName = varInfo.pathCteName || "path_cte";
+                    tables.push(pathCteName);
+                    return { sql: `${pathCteName}.edge_ids`, tables, params };
+                }
                 tables.push(varInfo.alias);
                 return { sql: `${varInfo.alias}.id`, tables, params };
             }
