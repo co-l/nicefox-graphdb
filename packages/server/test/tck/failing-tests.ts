@@ -259,8 +259,8 @@ export const FAILING_TESTS = new Set([
   // "clauses/return > Return2 - Return single expression (correctly projecting an expression)|12",
   // Return2|13: Now works with map pattern matching
   // "clauses/return > Return2 - Return single expression (correctly projecting an expression)|13",
-  // Return2|14: type of deleted relationship - needs DETACH DELETE return
-  "clauses/return > Return2 - Return single expression (correctly projecting an expression)|14",
+  // Return2|14: Now works with captured edge type before DELETE
+  // "clauses/return > Return2 - Return single expression (correctly projecting an expression)|14",
 
   // Return4|4: Now works
   // "clauses/return > Return4 - Column renaming|4",

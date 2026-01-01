@@ -2883,6 +2883,34 @@ export class Executor {
       }
     }
     
+    // Collect deleted variables for edge type capture
+    const deletedVars = new Set<string>();
+    for (const deleteClause of deleteClauses) {
+      for (const variable of deleteClause.variables) {
+        deletedVars.add(variable);
+        // Also add alias resolution
+        if (aliasMap.has(variable)) {
+          deletedVars.add(aliasMap.get(variable)!);
+        }
+      }
+    }
+    
+    // Detect type(r) in RETURN where r is a deleted variable - need to capture edge type before deletion
+    const edgeTypesToCapture = new Set<string>();
+    if (returnClause && deletedVars.size > 0) {
+      for (const item of returnClause.items) {
+        if (item.expression.type === "function" && 
+            item.expression.functionName?.toUpperCase() === "TYPE" &&
+            item.expression.args?.length === 1 &&
+            item.expression.args[0].type === "variable") {
+          const varName = item.expression.args[0].variable!;
+          if (deletedVars.has(varName)) {
+            edgeTypesToCapture.add(varName);
+          }
+        }
+      }
+    }
+    
     // Build RETURN items: IDs for all variables + property values for property aliases
     const returnItems: { expression: Expression; alias: string }[] = [];
     
@@ -2899,6 +2927,14 @@ export class Executor {
       returnItems.push({
         expression: { type: "property" as const, variable: propInfo.variable, property: propInfo.property },
         alias: `_prop_${alias}`,
+      });
+    }
+    
+    // Add edge type lookups for deleted edges used in type() function
+    for (const v of edgeTypesToCapture) {
+      returnItems.push({
+        expression: { type: "function" as const, functionName: "TYPE", args: [{ type: "variable" as const, variable: v }] },
+        alias: `_type_${v}`,
       });
     }
     
@@ -2933,6 +2969,8 @@ export class Executor {
     const allResolvedIds: Record<string, string>[] = [];
     // Also keep track of captured property values (before nodes are deleted)
     const allCapturedPropertyValues: Record<string, unknown>[] = [];
+    // Keep track of captured edge types (before edges are deleted)
+    const allCapturedEdgeTypes: Record<string, string>[] = [];
     
     this.db.transaction(() => {
       for (const row of matchedRows) {
@@ -2958,6 +2996,15 @@ export class Executor {
           // Parse JSON values if they're strings (SQLite returns JSON as strings)
           capturedPropertyValues[alias] = this.deepParseJson(rawValue);
         }
+        
+        // Capture edge types BEFORE DELETE for type() function on deleted edges
+        const capturedEdgeTypes: Record<string, string> = {};
+        for (const v of edgeTypesToCapture) {
+          const edgeType = row[`_type_${v}`];
+          if (typeof edgeType === "string") {
+            capturedEdgeTypes[v] = edgeType;
+          }
+        }
 
         // Execute CREATE with resolved IDs (this mutates resolvedIds to include new node IDs)
         for (const createClause of createClauses) {
@@ -2978,6 +3025,8 @@ export class Executor {
         allResolvedIds.push({ ...resolvedIds });
         // Save the captured property values
         allCapturedPropertyValues.push(capturedPropertyValues);
+        // Save the captured edge types
+        allCapturedEdgeTypes.push(capturedEdgeTypes);
       }
     });
 
@@ -3000,15 +3049,17 @@ export class Executor {
         // This handles patterns like: WITH n.num AS num ... DELETE n ... WITH num WHERE num % 2 = 0 ... RETURN num
         let filteredResolvedIds = allResolvedIds;
         let filteredPropertyValues = allCapturedPropertyValues;
+        let filteredEdgeTypes = allCapturedEdgeTypes;
         
         for (const withClause of withClauses) {
           if (withClause.where) {
             // Filter the captured values based on the WITH WHERE condition
-            const filteredPairs: { resolvedIds: Record<string, string>; propertyValues: Record<string, unknown> }[] = [];
+            const filteredPairs: { resolvedIds: Record<string, string>; propertyValues: Record<string, unknown>; edgeTypes: Record<string, string> }[] = [];
             
             for (let i = 0; i < filteredResolvedIds.length; i++) {
               const resolvedIds = filteredResolvedIds[i];
               const propertyValues = filteredPropertyValues[i] || {};
+              const edgeTypes = filteredEdgeTypes[i] || {};
               
               // Check if this row passes the WITH WHERE filter
               const passes = this.evaluateWithWhereConditionWithPropertyAliases(
@@ -3020,17 +3071,18 @@ export class Executor {
               );
               
               if (passes) {
-                filteredPairs.push({ resolvedIds, propertyValues });
+                filteredPairs.push({ resolvedIds, propertyValues, edgeTypes });
               }
             }
             
             filteredResolvedIds = filteredPairs.map(p => p.resolvedIds);
             filteredPropertyValues = filteredPairs.map(p => p.propertyValues);
+            filteredEdgeTypes = filteredPairs.map(p => p.edgeTypes);
           }
         }
         
         // RETURN references created nodes, aliased vars, property aliases, or data was modified - use buildReturnResults with resolved IDs
-        return this.buildReturnResults(returnClause, filteredResolvedIds, filteredPropertyValues, propertyAliasMap, withAggregateMap);
+        return this.buildReturnResults(returnClause, filteredResolvedIds, filteredPropertyValues, propertyAliasMap, withAggregateMap, filteredEdgeTypes);
       } else {
         // RETURN only references matched nodes and no mutations - use translator-based approach
         const fullQuery: Query = {
@@ -3089,7 +3141,8 @@ export class Executor {
     allResolvedIds: Record<string, string>[],
     allCapturedPropertyValues: Record<string, unknown>[] = [],
     propertyAliasMap: Map<string, { variable: string; property: string }> = new Map(),
-    withAggregateMap: Map<string, { functionName: string; argVariable: string }> = new Map()
+    withAggregateMap: Map<string, { functionName: string; argVariable: string }> = new Map(),
+    allCapturedEdgeTypes: Record<string, string>[] = []
   ): Record<string, unknown>[] {
     // Check if all return items are aggregates (like count(*))
     // If so, we should return a single aggregated row instead of per-row results
@@ -3345,6 +3398,7 @@ export class Executor {
     for (let i = 0; i < allResolvedIds.length; i++) {
       const resolvedIds = allResolvedIds[i];
       const capturedValues = allCapturedPropertyValues[i] || {};
+      const capturedEdgeTypes = allCapturedEdgeTypes[i] || {};
       const resultRow: Record<string, unknown> = {};
       
       for (const item of returnClause.items) {
@@ -3466,14 +3520,21 @@ export class Executor {
           const args = item.expression.args;
           if (args && args.length > 0 && args[0].type === "variable") {
             const variable = args[0].variable!;
-            const edgeId = resolvedIds[variable];
-            if (edgeId) {
-              const edgeResult = this.db.execute(
-                "SELECT type FROM edges WHERE id = ?",
-                [edgeId]
-              );
-              if (edgeResult.rows.length > 0) {
-                resultRow[alias] = edgeResult.rows[0].type;
+            
+            // First check if we have a captured edge type (for deleted edges)
+            if (capturedEdgeTypes[variable]) {
+              resultRow[alias] = capturedEdgeTypes[variable];
+            } else {
+              // Fall back to querying the database
+              const edgeId = resolvedIds[variable];
+              if (edgeId) {
+                const edgeResult = this.db.execute(
+                  "SELECT type FROM edges WHERE id = ?",
+                  [edgeId]
+                );
+                if (edgeResult.rows.length > 0) {
+                  resultRow[alias] = edgeResult.rows[0].type;
+                }
               }
             }
           }
