@@ -264,18 +264,19 @@ export class Translator {
     // MATCH doesn't produce standalone statements - it sets up context for RETURN/SET/DELETE
     // The actual SELECT is generated when we encounter RETURN
 
+    // Handle path expressions FIRST (e.g., p = (a)-[r]->(b))
+    // This ensures path variables are registered before we check for conflicts with node patterns
+    if (clause.pathExpressions) {
+      for (const pathExpr of clause.pathExpressions) {
+        this.registerPathExpression(pathExpr, optional);
+      }
+    }
+
     for (const pattern of clause.patterns) {
       if (this.isRelationshipPattern(pattern)) {
         this.registerRelationshipPattern(pattern, optional);
       } else {
         this.registerNodePattern(pattern, optional);
-      }
-    }
-
-    // Handle path expressions (e.g., p = (a)-[r]->(b))
-    if (clause.pathExpressions) {
-      for (const pathExpr of clause.pathExpressions) {
-        this.registerPathExpression(pathExpr, optional);
       }
     }
 
@@ -383,6 +384,11 @@ export class Translator {
   private registerNodePattern(node: NodePattern, optional: boolean = false): string {
     const alias = `n${this.ctx.aliasCounter++}`;
     if (node.variable) {
+      // Check if variable is already registered as a path variable
+      const existingVar = this.ctx.variables.get(node.variable);
+      if (existingVar && existingVar.type === "path") {
+        throw new Error(`VariableAlreadyBound: Variable \`${node.variable}\` already declared as a path`);
+      }
       this.ctx.variables.set(node.variable, { type: "node", alias });
     } else {
       // Track anonymous node patterns so they can be included in FROM clause
