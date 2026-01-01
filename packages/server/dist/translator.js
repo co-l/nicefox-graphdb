@@ -307,7 +307,12 @@ export class Translator {
         let sourceAlias;
         let sourceIsNew = false;
         if (rel.source.variable && this.ctx.variables.has(rel.source.variable)) {
-            sourceAlias = this.ctx.variables.get(rel.source.variable).alias;
+            const existingVar = this.ctx.variables.get(rel.source.variable);
+            // Check if variable is a path - cannot use path variable as a node
+            if (existingVar.type === "path") {
+                throw new Error(`VariableAlreadyBound: Variable \`${rel.source.variable}\` already declared as a path`);
+            }
+            sourceAlias = existingVar.alias;
             // If the new pattern has a label constraint, track it as an additional constraint
             if (rel.source.label) {
                 if (!this.ctx.additionalLabelConstraints) {
@@ -350,7 +355,12 @@ export class Translator {
         let targetAlias;
         let targetIsNew = false;
         if (rel.target.variable && this.ctx.variables.has(rel.target.variable)) {
-            targetAlias = this.ctx.variables.get(rel.target.variable).alias;
+            const existingVar = this.ctx.variables.get(rel.target.variable);
+            // Check if variable is a path - cannot use path variable as a node
+            if (existingVar.type === "path") {
+                throw new Error(`VariableAlreadyBound: Variable \`${rel.target.variable}\` already declared as a path`);
+            }
+            targetAlias = existingVar.alias;
             // If the new pattern has a label constraint, track it as an additional constraint
             if (rel.target.label) {
                 if (!this.ctx.additionalLabelConstraints) {
@@ -372,7 +382,12 @@ export class Translator {
         let edgeIsNew = false;
         let boundEdgeOriginalPattern;
         if (rel.edge.variable && this.ctx.variables.has(rel.edge.variable)) {
-            edgeAlias = this.ctx.variables.get(rel.edge.variable).alias;
+            const existingVar = this.ctx.variables.get(rel.edge.variable);
+            // Check if variable is a path - cannot use path variable as an edge
+            if (existingVar.type === "path") {
+                throw new Error(`VariableAlreadyBound: Variable \`${rel.edge.variable}\` already declared as a path`);
+            }
+            edgeAlias = existingVar.alias;
             // Find the original relationship pattern for this bound edge
             const relPatterns = this.ctx.relationshipPatterns;
             if (relPatterns) {
