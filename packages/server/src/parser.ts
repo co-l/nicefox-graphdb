@@ -740,6 +740,14 @@ export class Parser {
         if (pattern.edge.direction === "none") {
           throw new Error("Only directed relationships are supported in CREATE");
         }
+        // Multiple relationship types are not allowed in CREATE
+        if (pattern.edge.types && pattern.edge.types.length > 1) {
+          throw new Error("A single relationship type must be specified for CREATE");
+        }
+        // Variable-length patterns are not allowed in CREATE
+        if (pattern.edge.minHops !== undefined || pattern.edge.maxHops !== undefined) {
+          throw new Error("Variable length relationship patterns are not supported in CREATE");
+        }
       }
     }
 
