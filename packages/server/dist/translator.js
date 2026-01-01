@@ -4759,7 +4759,15 @@ END FROM (SELECT json_group_array(${valueExpr}) as sv))`,
                     }
                 }
                 else {
-                    resolved[key] = value;
+                    // Check if it's a known variable in context
+                    if (this.ctx.variables.has(varName)) {
+                        // Variable is bound - this is valid (executor will resolve it)
+                        resolved[key] = value;
+                    }
+                    else {
+                        // Undefined variable - throw error
+                        throw new Error(`Variable \`${varName}\` not defined`);
+                    }
                 }
             }
             else {

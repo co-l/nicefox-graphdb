@@ -1395,6 +1395,9 @@ export class Executor {
         return params[typedValue.name];
       } else if (typedValue.type === "variable" && typedValue.name) {
         // This is an unwind variable reference
+        if (!(typedValue.name in unwindContext)) {
+          throw new Error(`Variable \`${typedValue.name}\` not defined`);
+        }
         return unwindContext[typedValue.name];
       } else if (typedValue.type === "property" && typedValue.variable && typedValue.property) {
         // Property access: x.prop - look up variable value and get property

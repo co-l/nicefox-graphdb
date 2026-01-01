@@ -6,7 +6,7 @@ export const FAILING_TESTS = new Set<string>([
   // "clauses/create > Create1 - Creating nodes|17",
   // "clauses/create > Create1 - Creating nodes|18",
   // "clauses/create > Create1 - Creating nodes|19",
-  "clauses/create > Create1 - Creating nodes|20",
+  // "clauses/create > Create1 - Creating nodes|20",
   "clauses/create > Create2 - Creating relationships|18",
   "clauses/create > Create2 - Creating relationships|19",
   "clauses/create > Create2 - Creating relationships|20",
