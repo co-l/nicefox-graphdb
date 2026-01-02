@@ -11,8 +11,8 @@
     "dev": "pnpm --filter nicefox-graphdb-server dev",
     "build": "pnpm -r build",
     "tck": "npx tsx packages/server/test/tck/run-test.ts",
-    "publish:npm": "pnpm --filter nicefox-graphdb run build && cd packages/nicefox-graphdb && npm publish --access public",
-    "publish:npm:dry": "pnpm --filter nicefox-graphdb run build && cd packages/nicefox-graphdb && npm pack --dry-run"
+    "publish:npm": "pnpm --filter nicefox-graphdb run build && (cd packages/nicefox-graphdb && npm publish --access public)",
+    "publish:npm:dry": "pnpm --filter nicefox-graphdb run build && (cd packages/nicefox-graphdb && npm pack --dry-run)"
   },
   "devDependencies": {
     "@types/node": "^22.0.0",
