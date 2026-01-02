@@ -15,16 +15,28 @@
       "default": "./dist/index.js"
     }
   },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
   "scripts": {
     "build": "tsc",
-    "prepublishOnly": "npm run build"
+    "prepublishOnly": "npm run build",
+    "test": "vitest run",
+    "test:watch": "vitest"
   },
   "dependencies": {
-    "nicefox-graphdb-server": "workspace:*",
-    "nicefox-graphdb-client": "workspace:*",
-    "nicefox-graphdb-cli": "workspace:*",
+    "better-sqlite3": "^11.0.0",
+    "hono": "^4.0.0",
     "@hono/node-server": "^1.13.0",
     "commander": "^12.0.0"
+  },
+  "devDependencies": {
+    "@types/better-sqlite3": "^7.6.0",
+    "@types/node": "^22.0.0",
+    "typescript": "^5.3.0",
+    "vitest": "^2.0.0"
   },
   "keywords": [
     "graph",
@@ -48,8 +60,5 @@
   },
   "engines": {
     "node": ">=18.0.0"
-  },
-  "devDependencies": {
-    "typescript": "^5.3.0"
   }
 }

@@ -1,96 +1,130 @@
 // NiceFox GraphDB - Unified Package
-// Re-exports everything from client and server packages
+// A lightweight graph database with Cypher query support, powered by SQLite.
+
+import { createLocalClient } from "./local.js";
+import { createRemoteClient } from "./remote.js";
+import type { GraphDBOptions, GraphDBClient } from "./types.js";
 
 // ============================================================================
-// Client exports
+// Re-export Types
 // ============================================================================
 
-export {
-  // Main client class
-  NiceFoxGraphDB,
-  // Test client factory
-  createTestClient,
-  // Error class
-  GraphDBError,
-  // Types
-  type ClientOptions,
-  type TestClient,
-  type TestClientOptions,
-  type QueryResponse,
-  type HealthResponse,
-  type NodeResult,
-} from "nicefox-graphdb-client";
+export type {
+  GraphDBOptions,
+  GraphDBClient,
+  QueryResponse,
+  HealthResponse,
+  NodeResult,
+} from "./types.js";
 
-// Default export (client class)
-export { default } from "nicefox-graphdb-client";
+export { GraphDBError } from "./types.js";
 
 // ============================================================================
-// Server exports
+// Re-export Server Components (for advanced usage)
 // ============================================================================
 
-export {
-  // Parser
-  parse,
-  type Query,
-  type Clause,
-  type CreateClause,
-  type MatchClause,
-  type MergeClause,
-  type SetClause,
-  type DeleteClause,
-  type ReturnClause,
-  type NodePattern,
-  type RelationshipPattern,
-  type EdgePattern,
-  type WhereCondition,
-  type Expression,
-  type PropertyValue,
-  type ParameterRef,
-  type ParseResult,
-  type ParseError,
+// Parser
+export { parse } from "./parser.js";
+export type {
+  Query,
+  Clause,
+  CreateClause,
+  MatchClause,
+  MergeClause,
+  SetClause,
+  DeleteClause,
+  ReturnClause,
+  NodePattern,
+  RelationshipPattern,
+  EdgePattern,
+  WhereCondition,
+  Expression,
+  PropertyValue,
+  ParameterRef,
+  ParseResult,
+  ParseError,
+} from "./parser.js";
 
-  // Translator
-  translate,
-  Translator,
-  type SqlStatement,
-  type TranslationResult,
+// Translator
+export { translate, Translator } from "./translator.js";
+export type { SqlStatement, TranslationResult } from "./translator.js";
 
-  // Database
-  GraphDatabase,
-  DatabaseManager,
-  type Node,
-  type Edge,
-  type NodeRow,
-  type EdgeRow,
-  type QueryResult,
+// Database
+export { GraphDatabase, DatabaseManager } from "./db.js";
+export type { Node, Edge, NodeRow, EdgeRow, QueryResult } from "./db.js";
 
-  // Executor
-  Executor,
-  executeQuery,
-  type ExecutionResult,
-  type ExecutionError,
-  type QueryResponse as ServerQueryResponse,
+// Executor
+export { Executor, executeQuery } from "./executor.js";
+export type {
+  ExecutionResult,
+  ExecutionError,
+  QueryResponse as ServerQueryResponse,
+} from "./executor.js";
 
-  // Routes / Server
-  createApp,
-  createServer,
-  type QueryRequest,
-  type ServerOptions,
+// Routes / Server
+export { createApp, createServer } from "./routes.js";
+export type { QueryRequest, ServerOptions } from "./routes.js";
 
-  // Backup
-  BackupManager,
-  type BackupResult,
-  type BackupStatus,
-  type BackupAllOptions,
+// Backup
+export { BackupManager } from "./backup.js";
+export type { BackupResult, BackupStatus, BackupAllOptions } from "./backup.js";
 
-  // Auth
-  ApiKeyStore,
-  authMiddleware,
-  generateApiKey,
-  type ApiKeyConfig,
-  type ValidationResult,
-  type KeyInfo,
+// Auth
+export { ApiKeyStore, authMiddleware, generateApiKey } from "./auth.js";
+export type { ApiKeyConfig, ValidationResult, KeyInfo } from "./auth.js";
 
-  // Version
-  VERSION,
-} from "nicefox-graphdb-server";
+// ============================================================================
+// Version
+// ============================================================================
+
+export const VERSION = "0.1.0";
+
+// ============================================================================
+// Main Factory Function
+// ============================================================================
+
+/**
+ * Create a GraphDB client.
+ *
+ * **Development Mode** (NODE_ENV=development):
+ * - Uses a local SQLite database
+ * - `url` and `apiKey` are ignored
+ * - Data is stored at `dataPath/{env}/{project}.db`
+ *
+ * **Production Mode** (NODE_ENV=production or unset):
+ * - Connects to a remote server via HTTP
+ * - `url` and `apiKey` are required
+ *
+ * @example
+ * ```typescript
+ * import { GraphDB } from 'nicefox-graphdb';
+ *
+ * // Same code works in both development and production!
+ * const db = await GraphDB({
+ *   url: 'https://my-graphdb.example.com',
+ *   project: 'myapp',
+ *   apiKey: process.env.GRAPHDB_API_KEY,
+ * });
+ *
+ * // Create nodes
+ * await db.execute('CREATE (n:User {name: "Alice"})');
+ *
+ * // Query
+ * const users = await db.query('MATCH (n:User) RETURN n');
+ *
+ * // Always close when done
+ * db.close();
+ * ```
+ */
+export async function GraphDB(options: GraphDBOptions): Promise<GraphDBClient> {
+  const isDevelopment = process.env.NODE_ENV === "development";
+
+  if (isDevelopment) {
+    return createLocalClient(options);
+  } else {
+    return createRemoteClient(options);
+  }
+}
+
+// Default export
+export default GraphDB;

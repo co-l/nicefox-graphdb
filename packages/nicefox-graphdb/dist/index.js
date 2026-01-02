@@ -1,35 +1,74 @@
 // NiceFox GraphDB - Unified Package
-// Re-exports everything from client and server packages
+// A lightweight graph database with Cypher query support, powered by SQLite.
+import { createLocalClient } from "./local.js";
+import { createRemoteClient } from "./remote.js";
+export { GraphDBError } from "./types.js";
 // ============================================================================
-// Client exports
+// Re-export Server Components (for advanced usage)
 // ============================================================================
-export { 
-// Main client class
-NiceFoxGraphDB, 
-// Test client factory
-createTestClient, 
-// Error class
-GraphDBError, } from "nicefox-graphdb-client";
-// Default export (client class)
-export { default } from "nicefox-graphdb-client";
-// ============================================================================
-// Server exports
-// ============================================================================
-export { 
 // Parser
-parse, 
+export { parse } from "./parser.js";
 // Translator
-translate, Translator, 
+export { translate, Translator } from "./translator.js";
 // Database
-GraphDatabase, DatabaseManager, 
+export { GraphDatabase, DatabaseManager } from "./db.js";
 // Executor
-Executor, executeQuery, 
+export { Executor, executeQuery } from "./executor.js";
 // Routes / Server
-createApp, createServer, 
+export { createApp, createServer } from "./routes.js";
 // Backup
-BackupManager, 
+export { BackupManager } from "./backup.js";
 // Auth
-ApiKeyStore, authMiddleware, generateApiKey, 
+export { ApiKeyStore, authMiddleware, generateApiKey } from "./auth.js";
+// ============================================================================
 // Version
-VERSION, } from "nicefox-graphdb-server";
+// ============================================================================
+export const VERSION = "0.1.0";
+// ============================================================================
+// Main Factory Function
+// ============================================================================
+/**
+ * Create a GraphDB client.
+ *
+ * **Development Mode** (NODE_ENV=development):
+ * - Uses a local SQLite database
+ * - `url` and `apiKey` are ignored
+ * - Data is stored at `dataPath/{env}/{project}.db`
+ *
+ * **Production Mode** (NODE_ENV=production or unset):
+ * - Connects to a remote server via HTTP
+ * - `url` and `apiKey` are required
+ *
+ * @example
+ * ```typescript
+ * import { GraphDB } from 'nicefox-graphdb';
+ *
+ * // Same code works in both development and production!
+ * const db = await GraphDB({
+ *   url: 'https://my-graphdb.example.com',
+ *   project: 'myapp',
+ *   apiKey: process.env.GRAPHDB_API_KEY,
+ * });
+ *
+ * // Create nodes
+ * await db.execute('CREATE (n:User {name: "Alice"})');
+ *
+ * // Query
+ * const users = await db.query('MATCH (n:User) RETURN n');
+ *
+ * // Always close when done
+ * db.close();
+ * ```
+ */
+export async function GraphDB(options) {
+    const isDevelopment = process.env.NODE_ENV === "development";
+    if (isDevelopment) {
+        return createLocalClient(options);
+    }
+    else {
+        return createRemoteClient(options);
+    }
+}
+// Default export
+export default GraphDB;
 //# sourceMappingURL=index.js.map

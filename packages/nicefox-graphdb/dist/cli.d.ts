@@ -1,3 +1,3 @@
 #!/usr/bin/env node
-import "nicefox-graphdb-cli";
+export {};
 //# sourceMappingURL=cli.d.ts.map
