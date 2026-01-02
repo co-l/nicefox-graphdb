@@ -36,10 +36,8 @@ describe("Integration Tests", () => {
       );
 
       expect(matchResult.data).toHaveLength(1);
-      expect(matchResult.data[0].n).toMatchObject({
-        label: "Person",
-        properties: { name: "Alice", age: 30 },
-      });
+      // Neo4j 3.5 format: properties are returned directly
+      expect(matchResult.data[0].n).toMatchObject({ name: "Alice", age: 30 });
     });
 
     it("creates multiple nodes and retrieves them", () => {
@@ -63,9 +61,8 @@ describe("Integration Tests", () => {
       );
 
       expect(result.data).toHaveLength(1);
-      expect(result.data[0].n).toMatchObject({
-        properties: { name: "Alice", age: 30 },
-      });
+      // Neo4j 3.5 format: properties are returned directly
+      expect(result.data[0].n).toMatchObject({ name: "Alice", age: 30 });
     });
 
     it("returns specific properties", () => {
@@ -254,12 +251,9 @@ describe("Integration Tests", () => {
       );
 
       expect(result.data).toHaveLength(1);
-      expect(result.data[0].a).toMatchObject({
-        properties: { name: "Alice" },
-      });
-      expect(result.data[0].b).toMatchObject({
-        properties: { name: "Bob" },
-      });
+      // Neo4j 3.5 format: properties are returned directly
+      expect(result.data[0].a).toMatchObject({ name: "Alice" });
+      expect(result.data[0].b).toMatchObject({ name: "Bob" });
     });
 
     it("filters by source node properties in relationships", () => {
@@ -386,9 +380,8 @@ describe("Integration Tests", () => {
         )
       );
       expect(result.data).toHaveLength(1);
-      expect(result.data[0].n).toMatchObject({
-        properties: { name: "Alice" },
-      });
+      // Neo4j 3.5 format: properties are returned directly
+      expect(result.data[0].n).toMatchObject({ name: "Alice" });
     });
 
     it("filters with OR", () => {
@@ -481,9 +474,8 @@ describe("Integration Tests", () => {
       const result = expectSuccess(
         executor.execute("MATCH (n:Person) RETURN n")
       );
-      expect(result.data[0].n).toMatchObject({
-        properties: { name: "Alice", age: 30 },
-      });
+      // Neo4j 3.5 format: properties are returned directly
+      expect(result.data[0].n).toMatchObject({ name: "Alice", age: 30 });
     });
 
     it("uses parameters in MATCH", () => {
@@ -575,13 +567,12 @@ describe("Integration Tests", () => {
       expect(result.success).toBe(true);
       if (result.success) {
         expect(result.data).toHaveLength(1);
+        // Neo4j 3.5 format: properties are returned directly
         expect(result.data[0].u).toMatchObject({
-          properties: {
-            id: "user-123",
-            email: "test@example.com",
-            passwordHash: "",
-            createdAt: "2025-01-01T00:00:00.000Z"
-          }
+          id: "user-123",
+          email: "test@example.com",
+          passwordHash: "",
+          createdAt: "2025-01-01T00:00:00.000Z"
         });
       }
     });
@@ -608,12 +599,11 @@ describe("Integration Tests", () => {
       expect(result.success).toBe(true);
       if (result.success) {
         expect(result.data).toHaveLength(1);
+        // Neo4j 3.5 format: properties are returned directly
         expect(result.data[0].u).toMatchObject({
-          properties: {
-            id: "user-456",
-            email: "new@example.com",
-            createdAt: "2024-01-01" // Original createdAt should be preserved
-          }
+          id: "user-456",
+          email: "new@example.com",
+          createdAt: "2024-01-01" // Original createdAt should be preserved
         });
       }
     });
@@ -844,13 +834,12 @@ describe("Integration Tests", () => {
         executor.execute("MATCH (r:CC_MonthlyReport) RETURN r")
       );
       expect(reportResult.data).toHaveLength(1);
+      // Neo4j 3.5 format: properties are returned directly
       expect(reportResult.data[0].r).toMatchObject({
-        properties: {
-          id: "report-456",
-          year: 2024,
-          month: 12,
-          status: "pending"
-        }
+        id: "report-456",
+        year: 2024,
+        month: 12,
+        status: "pending"
       });
 
       // Verify the relationship was created
@@ -940,13 +929,11 @@ describe("Integration Tests", () => {
       expect(result.success).toBe(true);
       if (result.success) {
         expect(result.data).toHaveLength(1);
+        // Neo4j 3.5 format: properties are returned directly
         expect(result.data[0].b).toMatchObject({
-          label: "CC_Business",
-          properties: {
-            id: "biz-123",
-            name: "Test Business",
-            paymentTermDays: 30
-          }
+          id: "biz-123",
+          name: "Test Business",
+          paymentTermDays: 30
         });
       }
     });
@@ -970,14 +957,9 @@ describe("Integration Tests", () => {
       expect(result.success).toBe(true);
       if (result.success) {
         expect(result.data).toHaveLength(1);
-        expect(result.data[0].u).toMatchObject({
-          label: "CC_User",
-          properties: { id: "user-abc", name: "Dave" }
-        });
-        expect(result.data[0].p).toMatchObject({
-          label: "Project",
-          properties: { id: "proj-1", name: "My Project" }
-        });
+        // Neo4j 3.5 format: properties are returned directly
+        expect(result.data[0].u).toMatchObject({ id: "user-abc", name: "Dave" });
+        expect(result.data[0].p).toMatchObject({ id: "proj-1", name: "My Project" });
       }
     });
   });
@@ -1116,9 +1098,8 @@ describe("Integration Tests", () => {
 
       expect(result.data).toHaveLength(1);
       expect(result.data[0].bankStatementId).toBe("bs-1");
-      expect(result.data[0].t).toMatchObject({
-        properties: { id: "tx-1", amount: 100 }
-      });
+      // Neo4j 3.5 format: properties are returned directly
+      expect(result.data[0].t).toMatchObject({ id: "tx-1", amount: 100 });
     });
 
     it("handles multiple MATCH with multiple results", () => {
@@ -1343,10 +1324,8 @@ describe("Integration Tests", () => {
       expect(result.success).toBe(true);
       if (result.success) {
         expect(result.data).toHaveLength(1);
-        expect(result.data[0].t).toMatchObject({
-          label: "Topic",
-          properties: { name: "GraphDB" }
-        });
+        // Neo4j 3.5 format: properties are returned directly
+        expect(result.data[0].t).toMatchObject({ name: "GraphDB" });
       }
 
       // Verify the relationship was created with properties
@@ -1405,15 +1384,13 @@ describe("Integration Tests", () => {
       );
 
       expect(createResult.data).toHaveLength(1);
+      // Neo4j 3.5 format: properties are returned directly
       expect(createResult.data[0].p).toMatchObject({
-        label: "Product",
-        properties: {
-          id: "prod-001",
-          name: "Widget Pro",
-          price: 29.99,
-          stock: 100,
-          active: true
-        }
+        id: "prod-001",
+        name: "Widget Pro",
+        price: 29.99,
+        stock: 100,
+        active: true
       });
 
       // === READ ===
@@ -1444,13 +1421,12 @@ describe("Integration Tests", () => {
       );
 
       expect(updateResult.data).toHaveLength(1);
+      // Neo4j 3.5 format: properties are returned directly
       expect(updateResult.data[0].p).toMatchObject({
-        properties: {
-          id: "prod-001",
-          name: "Widget Pro",
-          price: 24.99,
-          stock: 85
-        }
+        id: "prod-001",
+        name: "Widget Pro",
+        price: 24.99,
+        stock: 85
       });
 
       // Verify update persisted
@@ -1808,9 +1784,10 @@ describe("Integration Tests", () => {
       );
 
       expect(result.data).toHaveLength(1);
-      const orders = result.data[0].orders as Array<{id: string; label: string; properties: Record<string, unknown>}>;
+      // Neo4j 3.5 format: collected nodes are just their properties
+      const orders = result.data[0].orders as Array<Record<string, unknown>>;
       expect(orders).toHaveLength(1);
-      expect(orders[0].properties.id).toBe("o3");
+      expect(orders[0].id).toBe("o3");
     });
 
     it("handles aggregation with LIMIT", () => {

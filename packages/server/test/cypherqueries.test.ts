@@ -50,7 +50,7 @@ describe("CypherQueries.json Patterns", () => {
       expect(result.data).toHaveLength(1);
       expect(result.data[0].u).toBeDefined();
       const user = result.data[0].u as Record<string, unknown>;
-      expect((user.properties as Record<string, unknown>).email).toBe("test@example.com");
+      expect(user.email).toBe("test@example.com");
     });
 
     it("finds a user by email", () => {
@@ -67,7 +67,7 @@ describe("CypherQueries.json Patterns", () => {
 
       expect(result.data).toHaveLength(1);
       const user = result.data[0].u as Record<string, unknown>;
-      expect((user.properties as Record<string, unknown>).email).toBe("alice@example.com");
+      expect(user.email).toBe("alice@example.com");
     });
 
     it("finds a user by id", () => {
@@ -81,7 +81,7 @@ describe("CypherQueries.json Patterns", () => {
 
       expect(result.data).toHaveLength(1);
       const user = result.data[0].u as Record<string, unknown>;
-      expect((user.properties as Record<string, unknown>).id).toBe("user-123");
+      expect(user.id).toBe("user-123");
     });
   });
 
@@ -112,7 +112,7 @@ describe("CypherQueries.json Patterns", () => {
 
       expect(result.data).toHaveLength(1);
       const biz = result.data[0].b as Record<string, unknown>;
-      expect((biz.properties as Record<string, unknown>).name).toBe("Acme Inc");
+      expect(biz.name).toBe("Acme Inc");
     });
 
     it("updates business properties and returns updated business", () => {
@@ -142,8 +142,8 @@ describe("CypherQueries.json Patterns", () => {
       );
 
       const biz = result.data[0].b as Record<string, unknown>;
-      expect((biz.properties as Record<string, unknown>).name).toBe("New Name");
-      expect((biz.properties as Record<string, unknown>).address).toBe("New Address");
+      expect(biz.name).toBe("New Name");
+      expect(biz.address).toBe("New Address");
     });
   });
 
@@ -179,7 +179,7 @@ describe("CypherQueries.json Patterns", () => {
 
       expect(result.data).toHaveLength(1);
       const customer = result.data[0].c as Record<string, unknown>;
-      expect((customer.properties as Record<string, unknown>).name).toBe("Customer Inc");
+      expect(customer.name).toBe("Customer Inc");
     });
 
     it("gets customer with sequence through USES_SEQUENCE relationship", () => {
@@ -275,7 +275,7 @@ describe("CypherQueries.json Patterns", () => {
         { userId: "user-1", customerId: "cust-1" }
       );
       let customer = result.data[0].c as Record<string, unknown>;
-      expect((customer.properties as Record<string, unknown>).archived).toBe(true);
+      expect(customer.archived).toBe(true);
 
       // Unarchive customer
       exec(
@@ -290,7 +290,7 @@ describe("CypherQueries.json Patterns", () => {
         { userId: "user-1", customerId: "cust-1" }
       );
       customer = result.data[0].c as Record<string, unknown>;
-      expect((customer.properties as Record<string, unknown>).archived).toBe(false);
+      expect(customer.archived).toBe(false);
     });
 
     it("detach deletes customer", () => {
@@ -394,7 +394,7 @@ describe("CypherQueries.json Patterns", () => {
 
       expect(result.data).toHaveLength(1);
       const report = result.data[0].r as Record<string, unknown>;
-      expect((report.properties as Record<string, unknown>).id).toBe("report-jan");
+      expect(report.id).toBe("report-jan");
     });
 
     it("updates report status", () => {
@@ -413,7 +413,7 @@ describe("CypherQueries.json Patterns", () => {
         reportId: "report-1",
       });
       const report = result.data[0].r as Record<string, unknown>;
-      expect((report.properties as Record<string, unknown>).status).toBe("complete");
+      expect(report.status).toBe("complete");
     });
   });
 
@@ -452,7 +452,7 @@ describe("CypherQueries.json Patterns", () => {
 
       expect(result.data).toHaveLength(1);
       const stmt = result.data[0].bs as Record<string, unknown>;
-      expect((stmt.properties as Record<string, unknown>).bank).toBe("ING");
+      expect(stmt.bank).toBe("ING");
     });
 
     it("counts transactions in bank statement", () => {
@@ -566,7 +566,7 @@ describe("CypherQueries.json Patterns", () => {
 
       const result = exec(`MATCH (t:CC_Transaction {id: $id}) RETURN t`, { id: "tx-1" });
       const tx = result.data[0].t as Record<string, unknown>;
-      expect((tx.properties as Record<string, unknown>).amount).toBe(1500.0);
+      expect(tx.amount).toBe(1500.0);
     });
 
     it("updates transaction status", () => {
@@ -583,7 +583,7 @@ describe("CypherQueries.json Patterns", () => {
 
       const result = exec(`MATCH (t:CC_Transaction {id: $id}) RETURN t`, { id: "tx-1" });
       const tx = result.data[0].t as Record<string, unknown>;
-      expect((tx.properties as Record<string, unknown>).status).toBe("matched");
+      expect(tx.status).toBe("matched");
     });
 
     it("links transaction to invoice", () => {
@@ -740,7 +740,7 @@ describe("CypherQueries.json Patterns", () => {
         invoiceId: "inv-1",
       });
       const invoice = result.data[0].i as Record<string, unknown>;
-      expect((invoice.properties as Record<string, unknown>).pdfPath).toBe("/invoices/INV-001.pdf");
+      expect(invoice.pdfPath).toBe("/invoices/INV-001.pdf");
     });
 
     it("updates invoice status through user relationship", () => {
@@ -765,7 +765,7 @@ describe("CypherQueries.json Patterns", () => {
         { userId: "user-1", invoiceId: "inv-1" }
       );
       const invoice = result.data[0].i as Record<string, unknown>;
-      expect((invoice.properties as Record<string, unknown>).status).toBe("sent");
+      expect(invoice.status).toBe("sent");
     });
 
     it("deletes invoice with items", () => {
@@ -852,7 +852,7 @@ describe("CypherQueries.json Patterns", () => {
 
       expect(result.data).toHaveLength(1);
       const seq = result.data[0].s as Record<string, unknown>;
-      expect((seq.properties as Record<string, unknown>).prefix).toBe("INV");
+      expect(seq.prefix).toBe("INV");
     });
 
     it("updates sequence", () => {
@@ -876,8 +876,8 @@ describe("CypherQueries.json Patterns", () => {
         { sequenceId: "seq-1" }
       );
       const seq = result.data[0].s as Record<string, unknown>;
-      expect((seq.properties as Record<string, unknown>).prefix).toBe("NEW");
-      expect((seq.properties as Record<string, unknown>).lastNumber).toBe(10);
+      expect(seq.prefix).toBe("NEW");
+      expect(seq.lastNumber).toBe(10);
     });
 
     it("increments sequence", () => {
@@ -963,7 +963,7 @@ describe("CypherQueries.json Patterns", () => {
       expect(result.data).toHaveLength(1);
       expect(result.data[0].bankStatementId).toBe("bs-1");
       const tx = result.data[0].t as Record<string, unknown>;
-      expect((tx.properties as Record<string, unknown>).amount).toBe(500);
+      expect(tx.amount).toBe(500);
     });
 
     it("handles three-hop pattern (User -> Invoice -> Customer)", () => {
@@ -1401,10 +1401,10 @@ describe("CypherQueries.json Patterns", () => {
         expect(result.data).toHaveLength(3);
         
         // Verify order is descending by created_at
+        // Neo4j 3.5 format: properties are directly on the node object
         const flashcards = result.data.map(r => {
           const f = r.f as Record<string, unknown>;
-          const props = f.properties as Record<string, unknown>;
-          return { id: props.id, created_at: props.created_at };
+          return { id: f.id, created_at: f.created_at };
         });
         
         // Should be ordered: 2024-01-16, 2024-01-15, 2024-01-14
@@ -1461,10 +1461,10 @@ describe("CypherQueries.json Patterns", () => {
         expect(result.data).toHaveLength(5);
         
         // Verify order is descending by updated_at
+        // Neo4j 3.5 format: properties are directly on the node object
         const chats = result.data.map(r => {
           const chat = r.c as Record<string, unknown>;
-          const props = chat.properties as Record<string, unknown>;
-          return { id: props.id, updated_at: props.updated_at };
+          return { id: chat.id, updated_at: chat.updated_at };
         });
         
         // Should be ordered: 2024-01-17, 2024-01-16, 2024-01-15, 2024-01-14, 2024-01-13
@@ -1836,17 +1836,20 @@ describe("CypherQueries.json Patterns", () => {
   describe("Multiple Labels", () => {
     it("creates node with multiple labels", () => {
       // Pattern: CREATE (n:A:B:C {name: 'test'})
+      // Neo4j 3.5 format: RETURN n returns just properties
+      // Use labels(n) function to get labels
       const result = exec(`
         CREATE (n:Person:Employee:Manager {name: 'Alice', level: 5})
-        RETURN n
+        RETURN n, labels(n) as nodeLabels
       `);
 
       expect(result.success).toBe(true);
       expect(result.data).toHaveLength(1);
       
-      const node = result.data[0].n as Record<string, unknown>;
-      expect(node.label).toEqual(["Person", "Employee", "Manager"]);
-      expect((node.properties as Record<string, unknown>).name).toBe("Alice");
+      const row = result.data[0] as Record<string, unknown>;
+      const node = row.n as Record<string, unknown>;
+      expect(node.name).toBe("Alice");
+      expect(row.nodeLabels).toEqual(["Person", "Employee", "Manager"]);
     });
 
     it("matches node by single label when node has multiple labels", () => {
@@ -2251,13 +2254,13 @@ describe("CypherQueries.json Patterns", () => {
       expect(result.data).toHaveLength(1);
       const nodes = result.data[0].pathNodes as Array<Record<string, unknown>>;
       expect(nodes).toHaveLength(2); // Alice and Bob
-      expect((nodes[0].properties as Record<string, unknown>).name).toBe("Alice");
-      expect((nodes[1].properties as Record<string, unknown>).name).toBe("Bob");
+      expect(nodes[0].name).toBe("Alice");
+      expect(nodes[1].name).toBe("Bob");
     });
 
     it("returns relationships in path with relationships() function", () => {
       // Pattern: MATCH p = (a)-[r]->(b) RETURN relationships(p)
-      exec("CREATE (a:Person {name: 'Alice'})-[:KNOWS]->(b:Person {name: 'Bob'})");
+      exec("CREATE (a:Person {name: 'Alice'})-[:KNOWS {since: 2020}]->(b:Person {name: 'Bob'})");
 
       const result = exec(`
         MATCH p = (a:Person {name: 'Alice'})-[r:KNOWS]->(b:Person {name: 'Bob'})
@@ -2265,9 +2268,11 @@ describe("CypherQueries.json Patterns", () => {
       `);
 
       expect(result.data).toHaveLength(1);
+      // Neo4j 3.5 format: relationships() returns properties only
+      // Use type() function to get the relationship type
       const rels = result.data[0].pathRels as Array<Record<string, unknown>>;
       expect(rels).toHaveLength(1);
-      expect(rels[0].type).toBe("KNOWS");
+      expect(rels[0].since).toBe(2020);
     });
 
     it("returns path with multiple relationships", () => {
@@ -2461,15 +2466,17 @@ describe("CypherQueries.json Patterns", () => {
       exec("CREATE (a:Person {name: 'Alice'})");
       exec("CREATE (b:Person {name: 'Bob'})");
 
+      // Neo4j 3.5 format: RETURN r returns just properties, use type(r) for type
       const result = exec(`
         MATCH (a:Person {name: 'Alice'}), (b:Person {name: 'Bob'})
-        MERGE (a)-[r:KNOWS]->(b)
-        RETURN r
+        MERGE (a)-[r:KNOWS {since: 2024}]->(b)
+        RETURN r, type(r) as relType
       `);
 
       expect(result.data).toHaveLength(1);
       expect(result.data[0].r).toBeDefined();
-      expect((result.data[0].r as Record<string, unknown>).type).toBe("KNOWS");
+      expect((result.data[0].r as Record<string, unknown>).since).toBe(2024);
+      expect(result.data[0].relType).toBe("KNOWS");
     });
 
     it("matches existing pattern instead of creating duplicate", () => {
@@ -3765,7 +3772,7 @@ describe("CypherQueries.json Patterns", () => {
       
       expect(result.data).toHaveLength(1);
       const node = result.data[0].n as Record<string, unknown>;
-      expect((node.properties as Record<string, unknown>).createdAt).toBeDefined();
+      expect(node.createdAt).toBeDefined();
     });
 
     it("supporte datetime() dans SET", () => {
@@ -3775,10 +3782,11 @@ describe("CypherQueries.json Patterns", () => {
       
       expect(result.data).toHaveLength(1);
       const node = result.data[0].n as Record<string, unknown>;
-      expect((node.properties as Record<string, unknown>).updatedAt).toBeDefined();
+      expect(node.updatedAt).toBeDefined();
     });
 
     // ORDER BY on node property
+    // Neo4j 3.5 format: properties are directly on the node object
     it("supporte ORDER BY sur propriété de noeud ASC", () => {
       exec(`CREATE (n:Item {name: 'C', order: 3})`);
       exec(`CREATE (n:Item {name: 'A', order: 1})`);
@@ -3787,9 +3795,9 @@ describe("CypherQueries.json Patterns", () => {
       const result = exec(`MATCH (n:Item) RETURN n ORDER BY n.order`);
       
       expect(result.data).toHaveLength(3);
-      expect(((result.data[0].n as Record<string, unknown>).properties as Record<string, unknown>).name).toBe('A');
-      expect(((result.data[1].n as Record<string, unknown>).properties as Record<string, unknown>).name).toBe('B');
-      expect(((result.data[2].n as Record<string, unknown>).properties as Record<string, unknown>).name).toBe('C');
+      expect((result.data[0].n as Record<string, unknown>).name).toBe('A');
+      expect((result.data[1].n as Record<string, unknown>).name).toBe('B');
+      expect((result.data[2].n as Record<string, unknown>).name).toBe('C');
     });
 
     it("supporte ORDER BY sur propriété de noeud DESC", () => {
@@ -3800,9 +3808,9 @@ describe("CypherQueries.json Patterns", () => {
       const result = exec(`MATCH (n:Item) RETURN n ORDER BY n.order DESC`);
       
       expect(result.data).toHaveLength(3);
-      expect(((result.data[0].n as Record<string, unknown>).properties as Record<string, unknown>).name).toBe('C');
-      expect(((result.data[1].n as Record<string, unknown>).properties as Record<string, unknown>).name).toBe('B');
-      expect(((result.data[2].n as Record<string, unknown>).properties as Record<string, unknown>).name).toBe('A');
+      expect((result.data[0].n as Record<string, unknown>).name).toBe('C');
+      expect((result.data[1].n as Record<string, unknown>).name).toBe('B');
+      expect((result.data[2].n as Record<string, unknown>).name).toBe('A');
     });
 
     it("supporte ORDER BY avec LIMIT", () => {
@@ -3813,7 +3821,7 @@ describe("CypherQueries.json Patterns", () => {
       const result = exec(`MATCH (n:Item) RETURN n ORDER BY n.order DESC LIMIT 1`);
       
       expect(result.data).toHaveLength(1);
-      expect(((result.data[0].n as Record<string, unknown>).properties as Record<string, unknown>).name).toBe('C');
+      expect((result.data[0].n as Record<string, unknown>).name).toBe('C');
     });
 
     // WHERE with property comparison
@@ -3825,7 +3833,7 @@ describe("CypherQueries.json Patterns", () => {
       const result = exec(`MATCH (n:Session) WHERE n.status <> 'completed' RETURN n`);
       
       expect(result.data).toHaveLength(2);
-      const statuses = result.data.map(r => ((r.n as Record<string, unknown>).properties as Record<string, unknown>).status);
+      const statuses = result.data.map(r => (r.n as Record<string, unknown>).status);
       expect(statuses).toContain('active');
       expect(statuses).toContain('pending');
       expect(statuses).not.toContain('completed');
@@ -3838,7 +3846,7 @@ describe("CypherQueries.json Patterns", () => {
       const result = exec(`MATCH (n:Session) WHERE n.status = 'active' RETURN n`);
       
       expect(result.data).toHaveLength(1);
-      expect(((result.data[0].n as Record<string, unknown>).properties as Record<string, unknown>).status).toBe('active');
+      expect((result.data[0].n as Record<string, unknown>).status).toBe('active');
     });
 
     it("supporte WHERE avec comparaison numérique (>)", () => {
@@ -3849,7 +3857,7 @@ describe("CypherQueries.json Patterns", () => {
       const result = exec(`MATCH (n:Item) WHERE n.quantity > 0 RETURN n`);
       
       expect(result.data).toHaveLength(2);
-      const names = result.data.map(r => ((r.n as Record<string, unknown>).properties as Record<string, unknown>).name);
+      const names = result.data.map(r => (r.n as Record<string, unknown>).name);
       expect(names).toContain('A');
       expect(names).toContain('B');
     });
@@ -3862,9 +3870,9 @@ describe("CypherQueries.json Patterns", () => {
       const result = exec(`MATCH (n:SessionItem) WHERE n.purchased = true AND n.toBuy > 0 RETURN n`);
       
       expect(result.data).toHaveLength(1);
-      const props = (result.data[0].n as Record<string, unknown>).properties as Record<string, unknown>;
-      expect(props.purchased).toBe(true);
-      expect(props.toBuy).toBe(5);
+      const n = result.data[0].n as Record<string, unknown>;
+      expect(n.purchased).toBe(true);
+      expect(n.toBuy).toBe(5);
     });
 
     it("supporte WHERE avec conditions multiples (OR)", () => {
@@ -3913,7 +3921,7 @@ describe("CypherQueries.json Patterns", () => {
       // Verify deletion
       const remaining = exec(`MATCH (n:Item) RETURN n`);
       expect(remaining.data).toHaveLength(1);
-      expect(((remaining.data[0].n as Record<string, unknown>).properties as Record<string, unknown>).id).toBe('item2');
+      expect((remaining.data[0].n as Record<string, unknown>).id).toBe('item2');
     });
 
     // Multi-line queries
@@ -3926,7 +3934,7 @@ describe("CypherQueries.json Patterns", () => {
       `);
       
       expect(result.data).toHaveLength(1);
-      expect(((result.data[0].n as Record<string, unknown>).properties as Record<string, unknown>).name).toBe('Alice');
+      expect((result.data[0].n as Record<string, unknown>).name).toBe('Alice');
     });
 
     it("supporte les requêtes multi-lignes avec SET", () => {
@@ -3940,9 +3948,9 @@ describe("CypherQueries.json Patterns", () => {
       `);
       
       expect(result.data).toHaveLength(1);
-      const props = (result.data[0].n as Record<string, unknown>).properties as Record<string, unknown>;
-      expect(props.age).toBe(26);
-      expect(props.updated).toBe(true);
+      const n = result.data[0].n as Record<string, unknown>;
+      expect(n.age).toBe(26);
+      expect(n.updated).toBe(true);
     });
 
     // Arithmetic in SET (i.currentQuantity + $toBuy)
@@ -3952,7 +3960,7 @@ describe("CypherQueries.json Patterns", () => {
       const result = exec(`MATCH (n:Item {name: 'Apples'}) SET n.quantity = n.quantity + 3 RETURN n`);
       
       expect(result.data).toHaveLength(1);
-      expect(((result.data[0].n as Record<string, unknown>).properties as Record<string, unknown>).quantity).toBe(8);
+      expect((result.data[0].n as Record<string, unknown>).quantity).toBe(8);
     });
 
     it("supporte l'arithmétique dans SET avec paramètre", () => {
@@ -3961,7 +3969,7 @@ describe("CypherQueries.json Patterns", () => {
       const result = exec(`MATCH (n:Item {name: 'Apples'}) SET n.quantity = n.quantity + $amount RETURN n`, { amount: 10 });
       
       expect(result.data).toHaveLength(1);
-      expect(((result.data[0].n as Record<string, unknown>).properties as Record<string, unknown>).quantity).toBe(15);
+      expect((result.data[0].n as Record<string, unknown>).quantity).toBe(15);
     });
 
     // max() aggregation for getNextOrders pattern

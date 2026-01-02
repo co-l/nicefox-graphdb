@@ -431,12 +431,13 @@ describe("createTestClient()", () => {
     client = await createTestClient();
 
     // CREATE with RETURN
-    const results = await client.query<{ n: { label: string } }>(
+    // Neo4j 3.5 format: returns properties directly, use labels() function to get labels
+    const results = await client.query<{ n: { name: string } }>(
       "CREATE (n:Person {name: 'Alice'}) RETURN n"
     );
 
     expect(results).toHaveLength(1);
-    expect(results[0].n.label).toBe("Person");
+    expect(results[0].n.name).toBe("Alice");
   });
 
   it("should create and query nodes", async () => {

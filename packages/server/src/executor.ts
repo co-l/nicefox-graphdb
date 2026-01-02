@@ -480,13 +480,10 @@ export class Executor {
                   
                   if (nodeResult.rows.length > 0) {
                     const row = nodeResult.rows[0];
-                    resultRow[alias] = {
-                      id: row.id,
-                      label: this.normalizeLabelForOutput(row.label),
-                      properties: typeof row.properties === "string"
-                        ? JSON.parse(row.properties)
-                        : row.properties,
-                    };
+                    // Neo4j 3.5 format: return properties directly
+                    resultRow[alias] = typeof row.properties === "string"
+                      ? JSON.parse(row.properties)
+                      : row.properties;
                   }
                 }
               } else if (item.expression.type === "property") {
@@ -1651,13 +1648,10 @@ export class Executor {
           
           if (nodeResult.rows.length > 0) {
             const row = nodeResult.rows[0];
-            resultRow[alias] = {
-              id: row.id,
-              label: this.normalizeLabelForOutput(row.label),
-              properties: typeof row.properties === "string" 
-                ? JSON.parse(row.properties) 
-                : row.properties,
-            };
+            // Neo4j 3.5 format: return properties directly
+            resultRow[alias] = typeof row.properties === "string" 
+              ? JSON.parse(row.properties) 
+              : row.properties;
           }
         }
       } else if (item.expression.type === "property") {
@@ -1694,6 +1688,24 @@ export class Executor {
           const id = createdIds.get(variable);
           if (id) {
             resultRow[alias] = id;
+          }
+        }
+      } else if (item.expression.type === "function" && item.expression.functionName?.toUpperCase() === "LABELS") {
+        // Handle labels(n) function
+        const args = item.expression.args;
+        if (args && args.length > 0 && args[0].type === "variable") {
+          const variable = args[0].variable!;
+          const id = createdIds.get(variable);
+          if (id) {
+            const nodeResult = this.db.execute(
+              "SELECT label FROM nodes WHERE id = ?",
+              [id]
+            );
+            if (nodeResult.rows.length > 0) {
+              const label = nodeResult.rows[0].label;
+              const parsed = typeof label === "string" ? JSON.parse(label) : label;
+              resultRow[alias] = Array.isArray(parsed) ? parsed : [parsed];
+            }
           }
         }
       }
@@ -2276,24 +2288,16 @@ export class Executor {
         // Check if it's a node
         const node = matchedNodes.get(varName);
         if (node) {
-          resultRow[alias] = {
-            id: node.id,
-            label: this.normalizeLabelForOutput(node.label),
-            properties: node.properties,
-          };
+          // Neo4j 3.5 format: return properties directly
+          resultRow[alias] = node.properties;
           continue;
         }
         
         // Check if it's an edge
         const edge = matchedEdges.get(varName);
         if (edge) {
-          resultRow[alias] = {
-            id: edge.id,
-            type: edge.type,
-            source_id: edge.source_id,
-            target_id: edge.target_id,
-            properties: edge.properties,
-          };
+          // Neo4j 3.5 format: return properties directly
+          resultRow[alias] = edge.properties;
           continue;
         }
       } else if (item.expression.type === "property") {
@@ -2382,11 +2386,8 @@ export class Executor {
       if (item.expression.type === "variable") {
         const node = matchedNodes.get(item.expression.variable!);
         if (node) {
-          resultRow[alias] = {
-            id: node.id,
-            label: this.normalizeLabelForOutput(node.label),
-            properties: node.properties,
-          };
+          // Neo4j 3.5 format: return properties directly
+          resultRow[alias] = node.properties;
         }
       } else if (item.expression.type === "property") {
         const node = matchedNodes.get(item.expression.variable!);
@@ -3500,20 +3501,17 @@ export class Executor {
               }
             } else {
               // It's a node/edge variable - query from database
+              // Neo4j 3.5 format: collect just properties
               for (const resolvedIds of allResolvedIds) {
                 const nodeId = resolvedIds[varName];
                 if (nodeId) {
                   const nodeResult = this.db.execute(
-                    "SELECT id, label, properties FROM nodes WHERE id = ?",
+                    "SELECT properties FROM nodes WHERE id = ?",
                     [nodeId]
                   );
                   if (nodeResult.rows.length > 0) {
                     const row = nodeResult.rows[0];
-                    values.push({
-                      id: row.id,
-                      label: this.normalizeLabelForOutput(row.label),
-                      properties: typeof row.properties === "string" ? JSON.parse(row.properties) : row.properties,
-                    });
+                    values.push(typeof row.properties === "string" ? JSON.parse(row.properties) : row.properties);
                   }
                 }
               }
@@ -3621,13 +3619,10 @@ export class Executor {
               
               if (nodeResult.rows.length > 0) {
                 const row = nodeResult.rows[0];
-                resultRow[alias] = {
-                  id: row.id,
-                  label: this.normalizeLabelForOutput(row.label),
-                  properties: typeof row.properties === "string"
-                    ? JSON.parse(row.properties)
-                    : row.properties,
-                };
+                // Neo4j 3.5 format: return properties directly
+                resultRow[alias] = typeof row.properties === "string"
+                  ? JSON.parse(row.properties)
+                  : row.properties;
               } else {
                 // Try edges
                 const edgeResult = this.db.execute(
@@ -3636,15 +3631,10 @@ export class Executor {
                 );
                 if (edgeResult.rows.length > 0) {
                   const row = edgeResult.rows[0];
-                  resultRow[alias] = {
-                    id: row.id,
-                    type: row.type,
-                    source_id: row.source_id,
-                    target_id: row.target_id,
-                    properties: typeof row.properties === "string"
-                      ? JSON.parse(row.properties)
-                      : row.properties,
-                  };
+                  // Neo4j 3.5 format: return properties directly
+                  resultRow[alias] = typeof row.properties === "string"
+                    ? JSON.parse(row.properties)
+                    : row.properties;
                 }
               }
             }

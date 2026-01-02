@@ -63,11 +63,12 @@ export interface HealthResponse {
   timestamp: string;
 }
 
-export interface NodeResult {
-  id: string;
-  label: string;
-  properties: Record<string, unknown>;
-}
+/**
+ * Result type for node queries.
+ * In Neo4j 3.5 format, nodes return their properties directly.
+ * Use id(n), labels(n), type(r) functions to access metadata.
+ */
+export type NodeResult = Record<string, unknown>;
 
 // ============================================================================
 // Error Class
@@ -223,7 +224,14 @@ export class NiceFoxGraphDB {
 
   /**
    * Get a node by label and property filter.
-   * Returns null if not found.
+   * Returns the node's properties directly, or null if not found.
+   * 
+   * @example
+   * ```ts
+   * const user = await graph.getNode('User', { id: 'abc123' });
+   * // user = { id: 'abc123', name: 'Alice', email: 'alice@example.com' }
+   * console.log(user?.name);  // 'Alice'
+   * ```
    */
   async getNode(
     label: string,

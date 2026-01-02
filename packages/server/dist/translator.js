@@ -2583,28 +2583,32 @@ export class Translator {
                     if (pathExpressions) {
                         const pathInfo = pathExpressions.find(p => p.variable === expr.variable);
                         if (pathInfo) {
+                            // Neo4j 3.5 format: paths are alternating arrays [node, edge, node, edge, node, ...]
+                            // Each element is just the properties object
                             // For variable-length paths, we only have start/end nodes in the CTE
-                            // Intermediate nodes/edges are not directly accessible
                             if (pathInfo.isVariableLength) {
-                                // Only add the node tables (start and end)
                                 tables.push(...pathInfo.nodeAliases);
-                                // Construct a simplified path object for variable-length paths
-                                const nodesJson = pathInfo.nodeAliases.map(alias => `json_object('id', ${alias}.id, 'label', ${alias}.label, 'properties', ${alias}.properties)`).join(', ');
-                                // For variable-length paths, we include empty edges array (actual edges would require extending CTE)
-                                // and add a length field to indicate path depth
+                                // Build alternating array with just properties
+                                // For variable-length, we only have start/end nodes, no intermediate edges
+                                const elements = pathInfo.nodeAliases.map(alias => `${alias}.properties`);
                                 return {
-                                    sql: `json_object('nodes', json_array(${nodesJson}), 'edges', json_array(), 'length', ${pathInfo.pathCteName}.depth)`,
+                                    sql: `json_array(${elements.join(', ')})`,
                                     tables,
                                     params,
                                 };
                             }
-                            // For fixed-length paths, include all nodes and edges
+                            // For fixed-length paths, build alternating [node, edge, node, edge, ...] array
                             tables.push(...pathInfo.nodeAliases, ...pathInfo.edgeAliases);
-                            // Construct a path object with nodes and edges arrays
-                            const nodesJson = pathInfo.nodeAliases.map(alias => `json_object('id', ${alias}.id, 'label', ${alias}.label, 'properties', ${alias}.properties)`).join(', ');
-                            const edgesJson = pathInfo.edgeAliases.map(alias => `json_object('id', ${alias}.id, 'type', ${alias}.type, 'source_id', ${alias}.source_id, 'target_id', ${alias}.target_id, 'properties', ${alias}.properties)`).join(', ');
+                            // Interleave nodes and edges: node0, edge0, node1, edge1, node2...
+                            const elements = [];
+                            for (let i = 0; i < pathInfo.nodeAliases.length; i++) {
+                                elements.push(`${pathInfo.nodeAliases[i]}.properties`);
+                                if (i < pathInfo.edgeAliases.length) {
+                                    elements.push(`${pathInfo.edgeAliases[i]}.properties`);
+                                }
+                            }
                             return {
-                                sql: `json_object('nodes', json_array(${nodesJson}), 'edges', json_array(${edgesJson}))`,
+                                sql: `json_array(${elements.join(', ')})`,
                                 tables,
                                 params,
                             };
@@ -2613,12 +2617,11 @@ export class Translator {
                     throw new Error(`Path information not found for variable: ${expr.variable}`);
                 }
                 tables.push(varInfo.alias);
-                // Return the whole row as JSON for variables
-                // Nodes have: id, label, properties
-                // Edges have: id, type, source_id, target_id, properties
+                // Neo4j 3.5 format: return only properties as flat object
+                // Users access id/labels/type via id(), labels(), type() functions
                 if (varInfo.type === "edge") {
                     return {
-                        sql: `json_object('id', ${varInfo.alias}.id, 'type', ${varInfo.alias}.type, 'source_id', ${varInfo.alias}.source_id, 'target_id', ${varInfo.alias}.target_id, 'properties', ${varInfo.alias}.properties)`,
+                        sql: `${varInfo.alias}.properties`,
                         tables,
                         params,
                     };
@@ -2632,8 +2635,9 @@ export class Translator {
                         params,
                     };
                 }
+                // Node: return properties directly
                 return {
-                    sql: `json_object('id', ${varInfo.alias}.id, 'label', ${varInfo.alias}.label, 'properties', ${varInfo.alias}.properties)`,
+                    sql: `${varInfo.alias}.properties`,
                     tables,
                     params,
                 };
@@ -2936,12 +2940,10 @@ END FROM (SELECT json_group_array(${valueExpr}) as sv))`,
                                 throw new Error(`Unknown variable: ${arg.variable}`);
                             }
                             tables.push(varInfo.alias);
-                            // For full variable, collect as JSON objects
-                            // Use CASE WHEN to filter nulls - json_group_array will still include null entries
-                            // but we can filter them with GROUP_CONCAT pattern or post-filter
-                            // The key: use a direct aggregate that works when wrapped in other functions
+                            // Neo4j 3.5 format: collect just the properties objects
+                            // Use CASE WHEN to filter nulls
                             return {
-                                sql: `json_group_array(CASE WHEN ${varInfo.alias}.id IS NOT NULL THEN json_object('id', ${varInfo.alias}.id, 'label', ${varInfo.alias}.label, 'properties', ${varInfo.alias}.properties) END)`,
+                                sql: `json_group_array(CASE WHEN ${varInfo.alias}.id IS NOT NULL THEN json(${varInfo.alias}.properties) END)`,
                                 tables,
                                 params,
                             };
@@ -3005,8 +3007,8 @@ END FROM (SELECT json_group_array(${valueExpr}) as sv))`,
                                     const pathInfo = pathExpressions.find(p => p.variable === arg.variable);
                                     if (pathInfo) {
                                         tables.push(...pathInfo.nodeAliases);
-                                        // Return array of node objects
-                                        const nodesJson = pathInfo.nodeAliases.map(alias => `json_object('id', ${alias}.id, 'label', ${alias}.label, 'properties', ${alias}.properties)`).join(', ');
+                                        // Neo4j 3.5 format: return array of node properties only
+                                        const nodesJson = pathInfo.nodeAliases.map(alias => `json(${alias}.properties)`).join(', ');
                                         return { sql: `json_array(${nodesJson})`, tables, params };
                                     }
                                 }
@@ -3030,8 +3032,8 @@ END FROM (SELECT json_group_array(${valueExpr}) as sv))`,
                                     const pathInfo = pathExpressions.find(p => p.variable === arg.variable);
                                     if (pathInfo) {
                                         tables.push(...pathInfo.edgeAliases);
-                                        // Return array of relationship objects
-                                        const edgesJson = pathInfo.edgeAliases.map(alias => `json_object('id', ${alias}.id, 'type', ${alias}.type, 'source_id', ${alias}.source_id, 'target_id', ${alias}.target_id, 'properties', ${alias}.properties)`).join(', ');
+                                        // Neo4j 3.5 format: return array of relationship properties only
+                                        const edgesJson = pathInfo.edgeAliases.map(alias => `json(${alias}.properties)`).join(', ');
                                         return { sql: `json_array(${edgesJson})`, tables, params };
                                     }
                                 }

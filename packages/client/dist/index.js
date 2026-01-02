@@ -105,7 +105,14 @@ export class NiceFoxGraphDB {
     }
     /**
      * Get a node by label and property filter.
-     * Returns null if not found.
+     * Returns the node's properties directly, or null if not found.
+     *
+     * @example
+     * ```ts
+     * const user = await graph.getNode('User', { id: 'abc123' });
+     * // user = { id: 'abc123', name: 'Alice', email: 'alice@example.com' }
+     * console.log(user?.name);  // 'Alice'
+     * ```
      */
     async getNode(label, filter) {
         const filterKeys = Object.keys(filter);

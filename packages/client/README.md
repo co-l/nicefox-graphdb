@@ -215,35 +215,37 @@ const pending = await graph.query(`
 
 ### Node Return Structure
 
-When returning a full node (e.g., `RETURN u`), the result includes the node's internal ID, label, and properties in a nested structure:
+When returning a full node (e.g., `RETURN u`), the result contains the node's properties directly (Neo4j 3.5 format):
 
 ```typescript
 const result = await graph.query('MATCH (u:User {id: $id}) RETURN u', { id: 'abc123' });
 // result = [{
 //   u: {
-//     id: "internal-uuid",        // Internal database ID
-//     label: "User",
-//     properties: {
-//       id: "abc123",             // Your application ID
-//       name: "Alice",
-//       email: "alice@example.com"
-//     }
+//     id: "abc123",               // Your application ID
+//     name: "Alice",
+//     email: "alice@example.com"
 //   }
 // }]
 
-// Access properties via .properties
+// Access properties directly
 const user = result[0].u;
-const userName = user.properties.name;  // "Alice"
+const userName = user.name;  // "Alice"
 ```
 
-To get properties directly without the wrapper, use property access in your query:
+To access node metadata (internal ID, labels, relationship type), use the corresponding functions:
 
 ```typescript
-const result = await graph.query(
-  'MATCH (u:User {id: $id}) RETURN u.name as name, u.email as email',
-  { id: 'abc123' }
-);
-// result = [{ name: "Alice", email: "alice@example.com" }]
+// Get internal database ID
+const result = await graph.query('MATCH (u:User {id: $id}) RETURN u, id(u) as nodeId', { id: 'abc123' });
+// result = [{ u: { id: "abc123", name: "Alice" }, nodeId: "internal-uuid" }]
+
+// Get node labels
+const result = await graph.query('MATCH (u:User) RETURN labels(u) as labels');
+// result = [{ labels: ["User"] }]
+
+// Get relationship type
+const result = await graph.query('MATCH ()-[r:FOLLOWS]->() RETURN type(r) as relType');
+// result = [{ relType: "FOLLOWS" }]
 ```
 
 ### Automatic JSON Parsing
@@ -262,14 +264,14 @@ When you retrieve it, the JSON string is automatically parsed back into an objec
 ```typescript
 const result = await graph.query('MATCH (c:Chat {id: $id}) RETURN c', { id: 'chat-1' });
 const chat = result[0].c;
-// chat.properties.messages is already an array, NOT a string!
-// chat.properties.messages = [{ role: 'user', content: 'Hello' }]
+// chat.messages is already an array, NOT a string!
+// chat.messages = [{ role: 'user', content: 'Hello' }]
 
 // DON'T do this - it will fail because messages is already parsed:
-// const messages = JSON.parse(chat.properties.messages);  // ERROR!
+// const messages = JSON.parse(chat.messages);  // ERROR!
 
 // DO this instead:
-const messages = chat.properties.messages;  // Already an array
+const messages = chat.messages;  // Already an array
 ```
 
 This automatic parsing is recursive and applies to all JSON-serializable values in properties. If you need the raw string, store it with a wrapper or use a different serialization approach.
