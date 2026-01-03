@@ -25,13 +25,12 @@ src/
 ## Development
 
 ```bash
-pnpm test              # Run all tests
-pnpm test -- --run     # Run once (no watch)
-pnpm build             # Build to dist/
-pnpm dev               # Run server in dev mode
-pnpm tck 'Return6|11'  # Run single TCK test
-pnpm tck 'Match3' -l   # List matching TCK tests
-pnpm tck 'Return6|11' --sql  # Show generated SQL
+npm test               # Run all tests
+npm run build          # Build to dist/
+npm run dev            # Run server in dev mode
+npm run tck 'Return6|11'  # Run single TCK test
+npm run tck 'Match3' -- -l   # List matching TCK tests
+npm run tck 'Return6|11' -- --sql  # Show generated SQL
 ```
 
 Use TDD: write failing tests first, then implement.
@@ -41,7 +40,7 @@ Use TDD: write failing tests first, then implement.
 Quick way to run individual openCypher TCK tests:
 
 ```bash
-pnpm tck <pattern> [options]
+npm run tck <pattern> [-- options]
 
 Options:
   -v, --verbose    Show detailed test info
@@ -52,9 +51,9 @@ Options:
 
 Examples:
 ```bash
-pnpm tck 'Return6|11'           # Exact test by number
-pnpm tck 'Counting matches'     # Match by name
-pnpm tck 'Match3' --list        # List all Match3 tests
+npm run tck 'Return6|11'           # Exact test by number
+npm run tck 'Counting matches'     # Match by name
+npm run tck 'Match3' -- --list     # List all Match3 tests
 ```
 
 ## Next Implementation Priorities
