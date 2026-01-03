@@ -11,6 +11,25 @@ A lightweight graph database with Cypher query support, powered by SQLite.
 npm install nicefox-graphdb
 ```
 
+### Native Dependencies
+
+The `better-sqlite3` native module is an **optional dependency**:
+
+- **Production mode** (remote HTTP client): No native dependencies, no compilation required
+- **Development mode** (local SQLite): Requires `better-sqlite3`
+
+If you only connect to a remote GraphDB server, you can skip native compilation entirely:
+
+```bash
+npm install nicefox-graphdb --ignore-optional
+```
+
+For local/embedded mode, ensure `better-sqlite3` is installed:
+
+```bash
+npm install nicefox-graphdb better-sqlite3
+```
+
 ## Quick Start
 
 ```typescript

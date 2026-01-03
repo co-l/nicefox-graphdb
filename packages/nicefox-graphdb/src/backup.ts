@@ -1,9 +1,31 @@
 // Backup System for NiceFox GraphDB
 // Uses SQLite's backup API for hot (online) backups
 
-import Database from "better-sqlite3";
+import type BetterSqlite3 from "better-sqlite3";
 import * as fs from "fs";
 import * as path from "path";
+
+// Lazy-load better-sqlite3 to provide a helpful error message if not installed
+let Database: typeof BetterSqlite3;
+try {
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  Database = require("better-sqlite3");
+} catch {
+  throw new Error(
+    `better-sqlite3 is required for backup functionality but is not installed.
+
+To fix this, install it as a dependency:
+
+  npm install better-sqlite3
+
+Or if you only need to connect to a remote GraphDB server, use production mode:
+
+  NODE_ENV=production
+
+In production mode, nicefox-graphdb uses HTTP to connect to a remote server
+and does not require better-sqlite3.`
+  );
+}
 
 // ============================================================================
 // Types

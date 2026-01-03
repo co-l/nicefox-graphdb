@@ -1,7 +1,6 @@
 // NiceFox GraphDB - Unified Package
 // A lightweight graph database with Cypher query support, powered by SQLite.
 
-import { createLocalClient } from "./local.js";
 import { createRemoteClient } from "./remote.js";
 import type { GraphDBOptions, GraphDBClient } from "./types.js";
 
@@ -77,7 +76,7 @@ export type { ApiKeyConfig, ValidationResult, KeyInfo } from "./auth.js";
 // Version
 // ============================================================================
 
-export const VERSION = "1.0.3";
+export const VERSION = "1.0.4";
 
 // ============================================================================
 // Main Factory Function
@@ -128,6 +127,8 @@ export async function GraphDB(options: GraphDBOptions = {}): Promise<GraphDBClie
   const isDevelopment = process.env.NODE_ENV === "development";
 
   if (isDevelopment) {
+    // Lazy-load local client to avoid requiring better-sqlite3 when not needed
+    const { createLocalClient } = await import("./local.js");
     return createLocalClient(options);
   } else {
     return createRemoteClient(options);

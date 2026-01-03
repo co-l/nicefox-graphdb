@@ -1,6 +1,31 @@
 // Database Wrapper for SQLite
 
-import Database from "better-sqlite3";
+import type BetterSqlite3 from "better-sqlite3";
+
+// Type alias for the database instance
+type DatabaseInstance = BetterSqlite3.Database;
+
+// Lazy-load better-sqlite3 to provide a helpful error message if not installed
+let Database: typeof BetterSqlite3;
+try {
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  Database = require("better-sqlite3");
+} catch {
+  throw new Error(
+    `better-sqlite3 is required for local/embedded mode but is not installed.
+
+To fix this, install it as a dependency:
+
+  npm install better-sqlite3
+
+Or if you only need to connect to a remote GraphDB server, use production mode:
+
+  NODE_ENV=production
+
+In production mode, nicefox-graphdb uses HTTP to connect to a remote server
+and does not require better-sqlite3.`
+  );
+}
 
 // ============================================================================
 // Types
@@ -71,7 +96,7 @@ CREATE INDEX IF NOT EXISTS idx_edges_target ON edges(target_id);
 // ============================================================================
 
 export class GraphDatabase {
-  private db: Database.Database;
+  private db: DatabaseInstance;
   private initialized: boolean = false;
 
   constructor(path: string = ":memory:") {
@@ -272,7 +297,7 @@ export class GraphDatabase {
   /**
    * Get the underlying database instance (for advanced operations)
    */
-  getRawDatabase(): Database.Database {
+  getRawDatabase(): DatabaseInstance {
     return this.db;
   }
 
