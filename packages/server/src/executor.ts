@@ -4149,12 +4149,20 @@ export class Executor {
       if (this.isRelationshipPattern(pattern)) {
         this.createRelationshipWithResolvedIds(pattern, resolvedIds, params);
       } else {
-        // Simple node creation - use standard translation
-        const nodeQuery: Query = { clauses: [{ type: "CREATE", patterns: [pattern] }] };
-        const translator = new Translator(params);
-        const translation = translator.translate(nodeQuery);
-        for (const stmt of translation.statements) {
-          this.db.execute(stmt.sql, stmt.params);
+        // Simple node creation - create directly and track the ID
+        const nodePattern = pattern as NodePattern;
+        const nodeId = crypto.randomUUID();
+        const labelJson = this.normalizeLabelToJson(nodePattern.label);
+        const props = this.resolveProperties(nodePattern.properties || {}, params);
+        
+        this.db.execute(
+          "INSERT INTO nodes (id, label, properties) VALUES (?, ?, ?)",
+          [nodeId, labelJson, JSON.stringify(props)]
+        );
+        
+        // Track the created node ID so subsequent patterns can reference it
+        if (nodePattern.variable) {
+          resolvedIds[nodePattern.variable] = nodeId;
         }
       }
     }

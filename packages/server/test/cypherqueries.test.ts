@@ -3765,6 +3765,117 @@ describe("CypherQueries.json Patterns", () => {
     });
   });
 
+  describe("Post Operations", () => {
+    it("creates a post authored by a user", () => {
+      // Pattern: MATCH (u:User {id: $userId})
+      //          CREATE (p:Post {id: $postId, title: $title, content: $content, createdAt: datetime()})
+      //          CREATE (u)-[:AUTHORED]->(p)
+      exec(`CREATE (u:User {id: $userId, name: $name})`, {
+        userId: "user-123",
+        name: "Alice",
+      });
+
+      const result = exec(
+        `MATCH (u:User {id: $userId})
+         CREATE (p:Post {id: $postId, title: $title, content: $content, createdAt: datetime()})
+         CREATE (u)-[:AUTHORED]->(p)
+         RETURN p, u.name AS author`,
+        {
+          userId: "user-123",
+          postId: "post-456",
+          title: "My First Post",
+          content: "Hello, world!",
+        }
+      );
+
+      expect(result.success).toBe(true);
+      expect(result.data).toHaveLength(1);
+      
+      const post = result.data[0].p as Record<string, unknown>;
+      expect(post.id).toBe("post-456");
+      expect(post.title).toBe("My First Post");
+      expect(post.content).toBe("Hello, world!");
+      expect(post.createdAt).toBeDefined();
+      expect(result.data[0].author).toBe("Alice");
+
+      // Verify the relationship was created
+      const relationshipCheck = exec(
+        `MATCH (u:User {id: $userId})-[:AUTHORED]->(p:Post {id: $postId})
+         RETURN p.title AS title`,
+        { userId: "user-123", postId: "post-456" }
+      );
+      expect(relationshipCheck.data).toHaveLength(1);
+      expect(relationshipCheck.data[0].title).toBe("My First Post");
+    });
+
+    it("creates multiple posts by the same user", () => {
+      exec(`CREATE (u:User {id: $userId, name: $name})`, {
+        userId: "user-789",
+        name: "Bob",
+      });
+
+      // Create first post
+      exec(
+        `MATCH (u:User {id: $userId})
+         CREATE (p:Post {id: $postId, title: $title, content: $content, createdAt: datetime()})
+         CREATE (u)-[:AUTHORED]->(p)`,
+        {
+          userId: "user-789",
+          postId: "post-1",
+          title: "First Post",
+          content: "Content 1",
+        }
+      );
+
+      // Create second post
+      exec(
+        `MATCH (u:User {id: $userId})
+         CREATE (p:Post {id: $postId, title: $title, content: $content, createdAt: datetime()})
+         CREATE (u)-[:AUTHORED]->(p)`,
+        {
+          userId: "user-789",
+          postId: "post-2",
+          title: "Second Post",
+          content: "Content 2",
+        }
+      );
+
+      // Verify both posts are linked to the user
+      const result = exec(
+        `MATCH (u:User {id: $userId})-[:AUTHORED]->(p:Post)
+         RETURN p.title AS title
+         ORDER BY title`,
+        { userId: "user-789" }
+      );
+
+      expect(result.data).toHaveLength(2);
+      expect(result.data[0].title).toBe("First Post");
+      expect(result.data[1].title).toBe("Second Post");
+    });
+
+    it("does not create post when user does not exist", () => {
+      const result = exec(
+        `MATCH (u:User {id: $userId})
+         CREATE (p:Post {id: $postId, title: $title, content: $content, createdAt: datetime()})
+         CREATE (u)-[:AUTHORED]->(p)
+         RETURN p`,
+        {
+          userId: "nonexistent-user",
+          postId: "post-999",
+          title: "Orphan Post",
+          content: "This should not be created",
+        }
+      );
+
+      expect(result.success).toBe(true);
+      expect(result.data).toHaveLength(0);
+
+      // Verify no post was created
+      const postCheck = exec(`MATCH (p:Post {id: 'post-999'}) RETURN p`);
+      expect(postCheck.data).toHaveLength(0);
+    });
+  });
+
   describe("Additional Query Patterns", () => {
     // datetime() function
     it("supporte datetime() dans CREATE", () => {
