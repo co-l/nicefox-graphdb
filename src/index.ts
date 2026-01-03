@@ -1,8 +1,12 @@
 // NiceFox GraphDB - Unified Package
 // A lightweight graph database with Cypher query support, powered by SQLite.
 
+import { createRequire } from "module";
 import { createRemoteClient } from "./remote.js";
 import type { GraphDBOptions, GraphDBClient } from "./types.js";
+
+const require = createRequire(import.meta.url);
+const pkg = require("../package.json");
 
 // ============================================================================
 // Re-export Types
@@ -76,7 +80,7 @@ export type { ApiKeyConfig, ValidationResult, KeyInfo } from "./auth.js";
 // Version
 // ============================================================================
 
-export const VERSION = "1.0.10";
+export const VERSION: string = pkg.version;
 
 // ============================================================================
 // Main Factory Function
