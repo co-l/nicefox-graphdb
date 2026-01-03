@@ -76,7 +76,7 @@ export type { ApiKeyConfig, ValidationResult, KeyInfo } from "./auth.js";
 // Version
 // ============================================================================
 
-export const VERSION = "1.0.9";
+export const VERSION = "1.0.10";
 
 // ============================================================================
 // Main Factory Function
