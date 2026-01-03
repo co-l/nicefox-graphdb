@@ -1,6 +1,6 @@
 {
   "name": "nicefox-graphdb",
-  "version": "1.0.7",
+  "version": "1.0.8",
   "description": "SQLite-based graph database with Cypher query support",
   "type": "module",
   "main": "packages/nicefox-graphdb/dist/index.js",
