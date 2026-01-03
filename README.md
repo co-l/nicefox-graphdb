@@ -17,9 +17,8 @@ npm install nicefox-graphdb
 import { GraphDB } from 'nicefox-graphdb';
 
 const db = await GraphDB({
-  url: 'https://my-graphdb.example.com',
-  project: 'myapp',
-  apiKey: process.env.GRAPHDB_API_KEY,
+  project: 'myapp',       // or process.env.GRAPHDB_PROJECT
+  apiKey: 'nfx_xxx',      // or process.env.GRAPHDB_API_KEY
 });
 
 // Create nodes and relationships
@@ -47,11 +46,7 @@ This means you can use the **exact same code** in both environments:
 
 ```typescript
 // Works in both development and production!
-const db = await GraphDB({
-  url: 'https://my-graphdb.example.com',
-  project: 'myapp',
-  apiKey: process.env.GRAPHDB_API_KEY,
-});
+const db = await GraphDB({ project: 'myapp' });
 ```
 
 ### Development Mode
@@ -82,38 +77,37 @@ NODE_ENV=production GRAPHDB_API_KEY=xxx node app.js
 
 | Option | Type | Required | Default | Description |
 |--------|------|----------|---------|-------------|
-| `url` | `string` | Yes | - | Base URL of the GraphDB server (used in production) |
-| `project` | `string` | Yes | - | Project name |
-| `apiKey` | `string` | No | - | API key for authentication (used in production) |
-| `env` | `'production' \| 'test'` | No | `'production'` | Environment (determines database isolation) |
-| `dataPath` | `string` | No | `'./data'` | Path for local data storage (development only). Use `':memory:'` for in-memory database |
+| `url` | `string` | No | `GRAPHDB_URL` or `https://graphdb.nicefox.net` | Base URL of the GraphDB server (production only) |
+| `project` | `string` | Yes | `GRAPHDB_PROJECT` | Project name |
+| `apiKey` | `string` | No | `GRAPHDB_API_KEY` | API key for authentication (production only) |
+| `env` | `string` | No | `NODE_ENV` or `production` | Environment (determines database isolation) |
+| `dataPath` | `string` | No | `GRAPHDB_DATA_PATH` or `./data` | Path for local data storage (development only). Use `':memory:'` for in-memory database |
 
 ### Examples
 
+**Production** (default when `NODE_ENV` is unset or `production`):
 ```typescript
-// Production: connect to remote server
 const db = await GraphDB({
-  url: 'https://graphdb.example.com',
-  project: 'myapp',
-  apiKey: 'your-api-key',
-  env: 'production',
+  project: 'myapp',           // or process.env.GRAPHDB_PROJECT
+  apiKey: 'nfx_xxx',          // or process.env.GRAPHDB_API_KEY
+  url: 'https://my-server',   // or process.env.GRAPHDB_URL (default: graphdb.nicefox.net)
 });
+```
 
-// Development: use local SQLite (url/apiKey ignored)
-// NODE_ENV=development
+**Development** (when `NODE_ENV=development`):
+```typescript
 const db = await GraphDB({
-  url: 'https://graphdb.example.com', // ignored
-  project: 'myapp',
-  apiKey: 'your-api-key',             // ignored
-  dataPath: './local-data',           // custom data directory
+  project: 'myapp',           // or process.env.GRAPHDB_PROJECT
+  dataPath: './local-data',   // or process.env.GRAPHDB_DATA_PATH (default: ./data)
 });
+// url and apiKey are ignored - uses local SQLite
+```
 
-// Testing: use in-memory database
-// NODE_ENV=development
+**Testing** (when `NODE_ENV=development`):
+```typescript
 const db = await GraphDB({
-  url: 'https://graphdb.example.com',
   project: 'test-project',
-  dataPath: ':memory:',               // resets on each run
+  dataPath: ':memory:',       // in-memory database, resets on each run
 });
 ```
 
@@ -305,15 +299,12 @@ npx nicefox-graphdb serve --port 3000 --host 0.0.0.0 --data ./data
 ### Creating Projects
 
 ```bash
-# Create a new project (generates API keys)
+# Create a new project (generates API key)
 npx nicefox-graphdb create myapp --data ./data
 
 # Output:
 #   [created] production/myapp.db
-#   [created] test/myapp.db
-#   API Keys:
-#     production: nfx_abc123...
-#     test:       nfx_def456...
+#   API Key: nfx_abc123...
 ```
 
 ### CLI Reference
@@ -332,8 +323,8 @@ nicefox-graphdb delete <project>   Delete project (use --force)
 nicefox-graphdb list               List all projects
 
 # Environment management
-nicefox-graphdb clone <project>    Copy production to test
-nicefox-graphdb wipe <project>     Clear test database
+nicefox-graphdb clone <project> --from <env> --to <env>   Copy between environments
+nicefox-graphdb wipe <project> --env <env>                Clear environment database
 
 # Direct queries
 nicefox-graphdb query <env> <project> "CYPHER"
