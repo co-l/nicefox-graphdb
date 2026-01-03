@@ -6,40 +6,43 @@
 
 /**
  * Options for creating a GraphDB client.
+ * All options support environment variable defaults.
  */
 export interface GraphDBOptions {
   /**
    * Base URL of the GraphDB server.
    * Used in production mode. Ignored in development mode.
+   * @default GRAPHDB_URL env var or 'https://graphdb.nicefox.net'
    * @example 'https://my-graphdb.example.com'
    */
-  url: string;
+  url?: string;
 
   /**
    * Project name.
    * In production: used as part of the API endpoint path.
    * In development: used as the database filename.
+   * @default GRAPHDB_PROJECT env var (required)
    */
-  project: string;
+  project?: string;
 
   /**
    * API key for authentication.
    * Used in production mode. Ignored in development mode.
+   * @default GRAPHDB_API_KEY env var
    */
   apiKey?: string;
 
   /**
-   * Environment: 'production' or 'test'.
-   * @default 'production'
+   * Environment name for data isolation.
+   * @default NODE_ENV or 'production'
    */
-  env?: "production" | "test";
+  env?: string;
 
   /**
    * Path for local data storage.
    * Only used in development mode (when NODE_ENV=development).
-   * - Default: './data'
    * - Use ':memory:' for an in-memory database (resets on restart)
-   * @default './data'
+   * @default GRAPHDB_DATA_PATH env var or './data'
    */
   dataPath?: string;
 }

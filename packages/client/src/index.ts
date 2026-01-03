@@ -33,14 +33,16 @@ export interface TestClient {
 }
 
 export interface ClientOptions {
-  /** Base URL of the GraphDB server */
-  url: string;
-  /** Project name */
-  project: string;
-  /** Environment: 'production' or 'test' (default: 'production') */
-  env?: "production" | "test";
-  /** API key for authentication */
+  /** Base URL of the GraphDB server (default: GRAPHDB_URL env var or 'https://graphdb.nicefox.net') */
+  url?: string;
+  /** Project name (default: GRAPHDB_PROJECT env var) */
+  project?: string;
+  /** Environment name for data isolation (default: NODE_ENV or 'production') */
+  env?: string;
+  /** API key for authentication (default: GRAPHDB_API_KEY env var) */
   apiKey?: string;
+  /** Path to data directory (default: GRAPHDB_DATA_PATH env var) */
+  dataPath?: string;
 }
 
 export interface QueryResponse<T = Record<string, unknown>> {
@@ -102,15 +104,25 @@ export class GraphDBError extends Error {
 export class NiceFoxGraphDB {
   private url: string;
   private project: string;
-  private env: "production" | "test";
+  private env: string;
   private apiKey?: string;
+  private dataPath?: string;
 
-  constructor(options: ClientOptions) {
+  constructor(options: ClientOptions = {}) {
+    // Resolve options with environment variable defaults
+    const url = options.url ?? process.env.GRAPHDB_URL ?? "https://graphdb.nicefox.net";
+    const project = options.project ?? process.env.GRAPHDB_PROJECT;
+    
+    if (!project) {
+      throw new Error("Project is required. Set via options.project or GRAPHDB_PROJECT env var.");
+    }
+    
     // Normalize URL (remove trailing slash)
-    this.url = options.url.replace(/\/$/, "");
-    this.project = options.project;
-    this.env = options.env || "production";
-    this.apiKey = options.apiKey;
+    this.url = url.replace(/\/$/, "");
+    this.project = project;
+    this.env = options.env ?? process.env.NODE_ENV ?? "production";
+    this.apiKey = options.apiKey ?? process.env.GRAPHDB_API_KEY;
+    this.dataPath = options.dataPath ?? process.env.GRAPHDB_DATA_PATH;
   }
 
   // ==========================================================================

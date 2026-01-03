@@ -18,10 +18,14 @@ import { GraphDBError } from "./types.js";
  * Create a local embedded GraphDB client.
  * This client uses SQLite directly without any HTTP layer.
  */
-export function createLocalClient(options: GraphDBOptions): GraphDBClient {
-  const dataPath = options.dataPath || "./data";
-  const project = options.project;
-  const env = options.env || "production";
+export function createLocalClient(options: GraphDBOptions = {}): GraphDBClient {
+  const dataPath = options.dataPath ?? process.env.GRAPHDB_DATA_PATH ?? "./data";
+  const project = options.project ?? process.env.GRAPHDB_PROJECT;
+  const env = options.env ?? process.env.NODE_ENV ?? "production";
+
+  if (!project) {
+    throw new Error("Project is required. Set via options.project or GRAPHDB_PROJECT env var.");
+  }
 
   // Determine database path
   let dbPath: string;

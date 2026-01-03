@@ -13,12 +13,19 @@ import { GraphDBError } from "./types.js";
 /**
  * Create a remote GraphDB client that connects via HTTP.
  */
-export function createRemoteClient(options: GraphDBOptions): GraphDBClient {
+export function createRemoteClient(options: GraphDBOptions = {}): GraphDBClient {
+  // Resolve options with environment variable defaults
+  const rawUrl = options.url ?? process.env.GRAPHDB_URL ?? "https://graphdb.nicefox.net";
+  const project = options.project ?? process.env.GRAPHDB_PROJECT;
+  const env = options.env ?? process.env.NODE_ENV ?? "production";
+  const apiKey = options.apiKey ?? process.env.GRAPHDB_API_KEY;
+
+  if (!project) {
+    throw new Error("Project is required. Set via options.project or GRAPHDB_PROJECT env var.");
+  }
+
   // Normalize URL (remove trailing slash)
-  const url = options.url.replace(/\/$/, "");
-  const project = options.project;
-  const env = options.env || "production";
-  const apiKey = options.apiKey;
+  const url = rawUrl.replace(/\/$/, "");
 
   return {
     async query<T = Record<string, unknown>>(

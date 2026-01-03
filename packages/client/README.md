@@ -23,10 +23,15 @@ import { NiceFoxGraphDB } from 'nicefox-graphdb/packages/client/src/index.ts';
 ```typescript
 import { NiceFoxGraphDB } from 'nicefox-graphdb/packages/client/src/index.ts';
 
+// Using environment variables (recommended)
+// Set: GRAPHDB_PROJECT, GRAPHDB_API_KEY, and optionally GRAPHDB_URL, GRAPHDB_ENV
+const graph = new NiceFoxGraphDB();
+
+// Or with explicit options
 const graph = new NiceFoxGraphDB({
-  url: 'https://graphdb.nicefox.net',
+  url: 'https://graphdb.nicefox.net',  // default
   project: 'myproject',
-  env: process.env.NODE_ENV === 'production' ? 'production' : 'test',
+  env: 'production',                    // default
   apiKey: process.env.GRAPHDB_API_KEY
 });
 
@@ -62,12 +67,23 @@ const result = await graph.query('MATCH (u:User) RETURN COUNT(u) as count');
 
 ```typescript
 new NiceFoxGraphDB({
-  url: string;        // GraphDB server URL
-  project: string;    // Project name
-  env?: string;       // 'production' (default) or 'test'
-  apiKey?: string;    // API key for authentication
+  url?: string;       // Server URL (default: GRAPHDB_URL or 'https://graphdb.nicefox.net')
+  project?: string;   // Project name (default: GRAPHDB_PROJECT) - required
+  env?: string;       // Environment name (default: GRAPHDB_ENV or 'production')
+  apiKey?: string;    // API key (default: GRAPHDB_API_KEY)
+  dataPath?: string;  // Data directory path (default: GRAPHDB_DATA_PATH)
 })
 ```
+
+### Environment Variables
+
+| Variable | Description | Default |
+|----------|-------------|---------|
+| `GRAPHDB_URL` | Server URL | `https://graphdb.nicefox.net` |
+| `GRAPHDB_PROJECT` | Project name | (required) |
+| `NODE_ENV` | Environment name | `production` |
+| `GRAPHDB_API_KEY` | API key for authentication | - |
+| `GRAPHDB_DATA_PATH` | Data directory path | - |
 
 ### Methods
 

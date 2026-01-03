@@ -77,7 +77,7 @@ export type { ApiKeyConfig, ValidationResult, KeyInfo } from "./auth.js";
 // Version
 // ============================================================================
 
-export const VERSION = "0.1.0";
+export const VERSION = "1.0.1";
 
 // ============================================================================
 // Main Factory Function
@@ -86,6 +86,13 @@ export const VERSION = "0.1.0";
 /**
  * Create a GraphDB client.
  *
+ * All options support environment variable defaults:
+ * - `url`: GRAPHDB_URL (default: 'https://graphdb.nicefox.net')
+ * - `project`: GRAPHDB_PROJECT (required)
+ * - `env`: NODE_ENV (default: 'production')
+ * - `apiKey`: GRAPHDB_API_KEY
+ * - `dataPath`: GRAPHDB_DATA_PATH (default: './data')
+ *
  * **Development Mode** (NODE_ENV=development):
  * - Uses a local SQLite database
  * - `url` and `apiKey` are ignored
@@ -93,15 +100,16 @@ export const VERSION = "0.1.0";
  *
  * **Production Mode** (NODE_ENV=production or unset):
  * - Connects to a remote server via HTTP
- * - `url` and `apiKey` are required
  *
  * @example
  * ```typescript
  * import { GraphDB } from 'nicefox-graphdb';
  *
- * // Same code works in both development and production!
+ * // Using environment variables (set GRAPHDB_PROJECT, GRAPHDB_API_KEY)
+ * const db = await GraphDB();
+ *
+ * // Or with explicit options
  * const db = await GraphDB({
- *   url: 'https://my-graphdb.example.com',
  *   project: 'myapp',
  *   apiKey: process.env.GRAPHDB_API_KEY,
  * });
@@ -116,7 +124,7 @@ export const VERSION = "0.1.0";
  * db.close();
  * ```
  */
-export async function GraphDB(options: GraphDBOptions): Promise<GraphDBClient> {
+export async function GraphDB(options: GraphDBOptions = {}): Promise<GraphDBClient> {
   const isDevelopment = process.env.NODE_ENV === "development";
 
   if (isDevelopment) {

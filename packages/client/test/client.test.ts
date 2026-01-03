@@ -91,6 +91,7 @@ describe("NiceFoxGraphDB Client", () => {
       const client = new NiceFoxGraphDB({
         url: "https://graph.example.com",
         project: "myproject",
+        env: "production",
       });
 
       const result = await client.query("MATCH (n:Person) RETURN n.name as name");
@@ -181,6 +182,7 @@ describe("NiceFoxGraphDB Client", () => {
       const client = new NiceFoxGraphDB({
         url: "https://graph.example.com",
         project: "myproject",
+        env: "production",
       });
 
       await expect(client.query("INVALID QUERY")).rejects.toThrow(GraphDBError);
@@ -203,6 +205,7 @@ describe("NiceFoxGraphDB Client", () => {
       const client = new NiceFoxGraphDB({
         url: "https://graph.example.com",
         project: "myproject",
+        env: "production",
       });
 
       try {
@@ -230,6 +233,7 @@ describe("NiceFoxGraphDB Client", () => {
       const client = new NiceFoxGraphDB({
         url: "https://graph.example.com",
         project: "myproject",
+        env: "production",
       });
 
       const result = await client.queryRaw("MATCH (n) RETURN COUNT(n) as count");
@@ -255,6 +259,7 @@ describe("NiceFoxGraphDB Client", () => {
       const client = new NiceFoxGraphDB({
         url: "https://graph.example.com",
         project: "myproject",
+        env: "production",
       });
 
       // Should not throw
@@ -269,6 +274,7 @@ describe("NiceFoxGraphDB Client", () => {
       client = new NiceFoxGraphDB({
         url: "https://graph.example.com",
         project: "myproject",
+        env: "production",
       });
     });
 
@@ -331,7 +337,7 @@ describe("NiceFoxGraphDB Client", () => {
         const node = await client.getNode("Person", { id: "123" });
 
         expect(node).toBeDefined();
-        expect(node?.properties?.name).toBe("Alice");
+        expect((node as Record<string, unknown>)?.properties).toMatchObject({ name: "Alice" });
       });
 
       it("should return null if node not found", async () => {
