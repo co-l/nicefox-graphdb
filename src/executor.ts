@@ -227,6 +227,21 @@ export class Executor {
         };
       }
 
+      // 2.6. Check for MATCH...WITH...MATCH pattern with bound relationship list
+      // e.g., MATCH ()-[r1]->()-[r2]->() WITH [r1, r2] AS rs MATCH (a)-[rs*]->(b) RETURN a, b
+      const boundRelListResult = this.tryBoundRelationshipListExecution(parseResult.query, params);
+      if (boundRelListResult !== null) {
+        const endTime = performance.now();
+        return {
+          success: true,
+          data: boundRelListResult,
+          meta: {
+            count: boundRelListResult.length,
+            time_ms: Math.round((endTime - startTime) * 100) / 100,
+          },
+        };
+      }
+
       // 3. Check if this is a pattern that needs multi-phase execution
       // (MATCH...CREATE, MATCH...SET, MATCH...DELETE with relationship patterns)
       const multiPhaseResult = this.tryMultiPhaseExecution(parseResult.query, params);
@@ -828,6 +843,13 @@ export class Executor {
     context: PhaseContext,
     params: Record<string, unknown>
   ): PhaseContext {
+    // Check for special case: variable-length pattern with pre-bound relationship list
+    // e.g., MATCH (first)-[rs*]->(second) where rs is a list of relationships from WITH
+    const boundRelListPattern = this.findBoundRelationshipListPattern(clause, context);
+    if (boundRelListPattern) {
+      return this.executeMatchWithBoundRelList(clause, context, boundRelListPattern, params);
+    }
+    
     // For now, delegate to SQL translation for MATCH
     // This is a complex operation that the translator handles well
     // We'll use it and merge results back into context
@@ -871,6 +893,201 @@ export class Executor {
       newContext.rows = newRows;
     } else if (clause.type === "OPTIONAL_MATCH") {
       // Optional match with no results - keep input rows with nulls
+      newContext.rows = context.rows;
+    }
+    
+    return newContext;
+  }
+
+  /**
+   * Find a pattern with a variable-length edge where the edge variable is bound to a list
+   * Returns the pattern info if found, null otherwise
+   */
+  private findBoundRelationshipListPattern(
+    clause: MatchClause,
+    context: PhaseContext
+  ): { pattern: RelationshipPattern; edgeVar: string; sourceVar: string; targetVar: string } | null {
+    for (const pattern of clause.patterns) {
+      if (!this.isRelationshipPattern(pattern)) continue;
+      
+      const relPattern = pattern as RelationshipPattern;
+      const edgeVar = relPattern.edge.variable;
+      
+      // Check if this is a variable-length pattern with a bound variable
+      if (!edgeVar) continue;
+      const isVarLength = relPattern.edge.minHops !== undefined || relPattern.edge.maxHops !== undefined;
+      if (!isVarLength) continue;
+      
+      // Check if the edge variable is already bound in the context rows
+      for (const row of context.rows) {
+        const boundValue = row.get(edgeVar);
+        if (boundValue !== undefined && Array.isArray(boundValue)) {
+          // Found a bound relationship list
+          return {
+            pattern: relPattern,
+            edgeVar,
+            sourceVar: relPattern.source.variable || "_first",
+            targetVar: relPattern.target.variable || "_second"
+          };
+        }
+      }
+    }
+    return null;
+  }
+
+  /**
+   * Execute MATCH with a pre-bound relationship list
+   * e.g., MATCH (first)-[rs*]->(second) where rs = [r1, r2, ...]
+   * This finds the path by following the exact sequence of relationships in rs
+   */
+  private executeMatchWithBoundRelList(
+    clause: MatchClause,
+    context: PhaseContext,
+    boundInfo: { pattern: RelationshipPattern; edgeVar: string; sourceVar: string; targetVar: string },
+    params: Record<string, unknown>
+  ): PhaseContext {
+    const newContext = cloneContext(context);
+    const newRows: Array<Map<string, unknown>> = [];
+    
+    for (const inputRow of context.rows) {
+      const relList = inputRow.get(boundInfo.edgeVar);
+      if (!Array.isArray(relList) || relList.length === 0) {
+        // No relationships, skip this row
+        continue;
+      }
+      
+      // Follow the sequence of relationships to find the path endpoints
+      // Each relationship in the list is either an edge object or edge ID
+      
+      let currentNodeId: string | null = null;
+      let firstNodeId: string | null = null;
+      let lastNodeId: string | null = null;
+      let valid = true;
+      
+      for (let i = 0; i < relList.length; i++) {
+        const rel = relList[i];
+        
+        // Extract edge info - could be object with id, source_id, target_id or string ID
+        let edgeInfo: { id: string; source_id: string; target_id: string } | null = null;
+        
+        if (typeof rel === "object" && rel !== null) {
+          // Edge object from MATCH - may have _nf_id instead of id
+          const relObj = rel as Record<string, unknown>;
+          const edgeId = (relObj._nf_id || relObj.id) as string;
+          if (edgeId) {
+            // Look up the edge to get source/target
+            const edgeResult = this.db.execute(
+              "SELECT id, source_id, target_id FROM edges WHERE id = ?",
+              [edgeId]
+            );
+            if (edgeResult.rows.length > 0) {
+              const row = edgeResult.rows[0];
+              edgeInfo = {
+                id: row.id as string,
+                source_id: row.source_id as string,
+                target_id: row.target_id as string
+              };
+            }
+          }
+        } else if (typeof rel === "string") {
+          // Edge ID string
+          const edgeResult = this.db.execute(
+            "SELECT id, source_id, target_id FROM edges WHERE id = ?",
+            [rel]
+          );
+          if (edgeResult.rows.length > 0) {
+            const row = edgeResult.rows[0];
+            edgeInfo = {
+              id: row.id as string,
+              source_id: row.source_id as string,
+              target_id: row.target_id as string
+            };
+          }
+        }
+        
+        if (!edgeInfo) {
+          valid = false;
+          break;
+        }
+        
+        if (i === 0) {
+          // First edge: determine direction from pattern
+          // For pattern (first)-[rs*]->(second), we follow edges left-to-right
+          if (boundInfo.pattern.edge.direction === "left") {
+            // Left-directed: (first)<-[rs*]-(second), so first is at target_id of first edge
+            currentNodeId = edgeInfo.target_id;
+            firstNodeId = currentNodeId;
+            currentNodeId = edgeInfo.source_id;
+          } else {
+            // Right-directed or undirected: first is at source_id of first edge
+            currentNodeId = edgeInfo.source_id;
+            firstNodeId = currentNodeId;
+            currentNodeId = edgeInfo.target_id;
+          }
+        } else {
+          // Subsequent edges: follow the chain
+          // The current node should be connected to this edge
+          if (boundInfo.pattern.edge.direction === "left") {
+            if (edgeInfo.target_id !== currentNodeId && edgeInfo.source_id !== currentNodeId) {
+              valid = false;
+              break;
+            }
+            currentNodeId = edgeInfo.target_id === currentNodeId ? edgeInfo.source_id : edgeInfo.target_id;
+          } else {
+            if (edgeInfo.source_id !== currentNodeId && edgeInfo.target_id !== currentNodeId) {
+              valid = false;
+              break;
+            }
+            currentNodeId = edgeInfo.source_id === currentNodeId ? edgeInfo.target_id : edgeInfo.source_id;
+          }
+        }
+        
+        if (i === relList.length - 1) {
+          lastNodeId = currentNodeId;
+        }
+      }
+      
+      if (!valid || !firstNodeId || !lastNodeId) {
+        continue;
+      }
+      
+      // Look up the first and last nodes
+      const firstNodeResult = this.db.execute(
+        "SELECT id, properties FROM nodes WHERE id = ?",
+        [firstNodeId]
+      );
+      const lastNodeResult = this.db.execute(
+        "SELECT id, properties FROM nodes WHERE id = ?",
+        [lastNodeId]
+      );
+      
+      if (firstNodeResult.rows.length === 0 || lastNodeResult.rows.length === 0) {
+        continue;
+      }
+      
+      // Build output row with first and second nodes
+      const outputRow = new Map(inputRow);
+      
+      const firstNode = firstNodeResult.rows[0];
+      const lastNode = lastNodeResult.rows[0];
+      
+      // Format nodes like the translator does (with _nf_id embedded)
+      const firstProps = typeof firstNode.properties === "string" 
+        ? JSON.parse(firstNode.properties) 
+        : firstNode.properties;
+      const lastProps = typeof lastNode.properties === "string"
+        ? JSON.parse(lastNode.properties)
+        : lastNode.properties;
+      
+      outputRow.set(boundInfo.sourceVar, { ...firstProps, _nf_id: firstNode.id });
+      outputRow.set(boundInfo.targetVar, { ...lastProps, _nf_id: lastNode.id });
+      
+      newRows.push(outputRow);
+    }
+    
+    if (newRows.length > 0) {
+      newContext.rows = newRows;
+    } else if (clause.type === "OPTIONAL_MATCH") {
       newContext.rows = context.rows;
     }
     
@@ -2886,6 +3103,324 @@ export class Executor {
         ? returnClause.limit
         : (params[returnClause.limit] as number) || 0;
       finalResults = finalResults.slice(0, limitValue);
+    }
+    
+    return finalResults;
+  }
+
+  /**
+   * Handle MATCH...WITH...MATCH patterns where the second MATCH has a variable-length 
+   * pattern with a bound relationship list from the WITH clause.
+   * 
+   * Example: MATCH ()-[r1]->()-[r2]->() WITH [r1, r2] AS rs MATCH (a)-[rs*]->(b) RETURN a, b
+   * 
+   * The second MATCH should follow the exact sequence of relationships in rs.
+   * Returns null if this pattern is not detected.
+   */
+  private tryBoundRelationshipListExecution(
+    query: Query,
+    params: Record<string, unknown>
+  ): Record<string, unknown>[] | null {
+    const clauses = query.clauses;
+    
+    // Look for: MATCH...WITH...MATCH...RETURN pattern
+    let firstMatch: MatchClause | null = null;
+    let withClause: WithClause | null = null;
+    let secondMatch: MatchClause | null = null;
+    let returnClause: ReturnClause | null = null;
+    
+    let foundWith = false;
+    for (const clause of clauses) {
+      if (clause.type === "MATCH" || clause.type === "OPTIONAL_MATCH") {
+        if (!foundWith) {
+          firstMatch = clause;
+        } else {
+          secondMatch = clause;
+        }
+      } else if (clause.type === "WITH") {
+        withClause = clause;
+        foundWith = true;
+      } else if (clause.type === "RETURN") {
+        returnClause = clause;
+      }
+    }
+    
+    if (!firstMatch || !withClause || !secondMatch || !returnClause) {
+      return null;
+    }
+    
+    // Check if WITH creates a list that's used in second MATCH as a var-length pattern
+    // Look for pattern like: WITH [r1, r2] AS rs
+    // List literals with variables are stored as: { type: "function", functionName: "LIST", args: [...] }
+    let boundListVar: string | null = null;
+    let listExprVars: string[] = [];
+    
+    for (const item of withClause.items) {
+      if (item.alias && item.expression.type === "function" && 
+          item.expression.functionName === "LIST" && item.expression.args) {
+        // This is a list literal [r1, r2, ...]
+        boundListVar = item.alias;
+        listExprVars = [];
+        for (const elem of item.expression.args) {
+          if (elem.type === "variable" && elem.variable) {
+            listExprVars.push(elem.variable);
+          }
+        }
+        break;
+      }
+    }
+    
+    if (!boundListVar || listExprVars.length === 0) {
+      return null;
+    }
+    
+    // Check if second MATCH has a var-length pattern using the bound list
+    let hasVarLengthWithBoundList = false;
+    let sourceVar: string | null = null;
+    let targetVar: string | null = null;
+    
+    for (const pattern of secondMatch.patterns) {
+      if (this.isRelationshipPattern(pattern)) {
+        const relPattern = pattern as RelationshipPattern;
+        if (relPattern.edge.variable === boundListVar &&
+            (relPattern.edge.minHops !== undefined || relPattern.edge.maxHops !== undefined)) {
+          hasVarLengthWithBoundList = true;
+          sourceVar = relPattern.source.variable || null;
+          targetVar = relPattern.target.variable || null;
+          break;
+        }
+      }
+    }
+    
+    if (!hasVarLengthWithBoundList || !sourceVar || !targetVar) {
+      return null;
+    }
+    
+    // Check if sourceVar or targetVar are bound in the WITH clause (not the relationship list)
+    // This handles cases like: WITH [r1, r2] AS rs, a AS second, b AS first
+    // where first and second are bound from the first MATCH
+    let boundSourceFromVar: string | null = null;  // e.g., "b" if "b AS first"
+    let boundTargetFromVar: string | null = null;  // e.g., "a" if "a AS second"
+    
+    for (const item of withClause.items) {
+      if (item.alias === sourceVar && item.expression.type === "variable" && item.expression.variable) {
+        boundSourceFromVar = item.expression.variable;
+      }
+      if (item.alias === targetVar && item.expression.type === "variable" && item.expression.variable) {
+        boundTargetFromVar = item.expression.variable;
+      }
+    }
+    
+    // Build the list of variables to fetch in phase 1
+    // Include relationship vars + any bound node vars
+    const varsToFetch = [...listExprVars];
+    if (boundSourceFromVar && !varsToFetch.includes(boundSourceFromVar)) {
+      varsToFetch.push(boundSourceFromVar);
+    }
+    if (boundTargetFromVar && !varsToFetch.includes(boundTargetFromVar)) {
+      varsToFetch.push(boundTargetFromVar);
+    }
+    
+    // Execute the pattern in phases
+    // Phase 1: Execute first MATCH to get relationships (and bound nodes if any)
+    const phase1Query: Query = {
+      clauses: [
+        firstMatch,
+        {
+          type: "RETURN" as const,
+          items: varsToFetch.map(v => ({
+            expression: { type: "variable" as const, variable: v }
+          })),
+        },
+      ],
+    };
+    
+    const translator1 = new Translator(params);
+    const translation1 = translator1.translate(phase1Query);
+    
+    const phase1Results: Array<Map<string, unknown>> = [];
+    for (const stmt of translation1.statements) {
+      const result = this.db.execute(stmt.sql, stmt.params);
+      for (const row of result.rows) {
+        const rowMap = new Map<string, unknown>();
+        for (const [key, value] of Object.entries(row)) {
+          rowMap.set(key, value);
+        }
+        phase1Results.push(rowMap);
+      }
+    }
+    
+    if (phase1Results.length === 0) {
+      return [];
+    }
+    
+    // Apply WITH LIMIT if present
+    let limitedResults = phase1Results;
+    if (withClause.limit !== undefined) {
+      const limitVal = typeof withClause.limit === "number" 
+        ? withClause.limit 
+        : (params[withClause.limit] as number) || phase1Results.length;
+      limitedResults = phase1Results.slice(0, limitVal);
+    }
+    
+    // Phase 2: For each row, build the list and follow the relationships
+    const finalResults: Record<string, unknown>[] = [];
+    
+    for (const row of limitedResults) {
+      // Build the relationship list from the row
+      const relList: unknown[] = [];
+      for (const v of listExprVars) {
+        const relValue = row.get(v);
+        if (relValue !== undefined) {
+          relList.push(relValue);
+        }
+      }
+      
+      if (relList.length === 0) continue;
+      
+      // Follow the sequence of relationships to find endpoints
+      let currentNodeId: string | null = null;
+      let firstNodeId: string | null = null;
+      let lastNodeId: string | null = null;
+      let valid = true;
+      
+      for (let i = 0; i < relList.length; i++) {
+        const rel = relList[i];
+        
+        // Extract edge info
+        let edgeInfo: { id: string; source_id: string; target_id: string } | null = null;
+        
+        if (typeof rel === "object" && rel !== null) {
+          const relObj = rel as Record<string, unknown>;
+          const edgeId = (relObj._nf_id || relObj.id) as string;
+          if (edgeId) {
+            const edgeResult = this.db.execute(
+              "SELECT id, source_id, target_id FROM edges WHERE id = ?",
+              [edgeId]
+            );
+            if (edgeResult.rows.length > 0) {
+              const r = edgeResult.rows[0];
+              edgeInfo = {
+                id: r.id as string,
+                source_id: r.source_id as string,
+                target_id: r.target_id as string
+              };
+            }
+          }
+        } else if (typeof rel === "string") {
+          // Could be a JSON string like '{"_nf_id":"uuid"}' or a raw edge ID
+          let edgeId = rel;
+          try {
+            const parsed = JSON.parse(rel);
+            if (typeof parsed === "object" && parsed !== null && (parsed._nf_id || parsed.id)) {
+              edgeId = (parsed._nf_id || parsed.id) as string;
+            }
+          } catch {
+            // Not JSON, use as-is
+          }
+          
+          const edgeResult = this.db.execute(
+            "SELECT id, source_id, target_id FROM edges WHERE id = ?",
+            [edgeId]
+          );
+          if (edgeResult.rows.length > 0) {
+            const r = edgeResult.rows[0];
+            edgeInfo = {
+              id: r.id as string,
+              source_id: r.source_id as string,
+              target_id: r.target_id as string
+            };
+          }
+        }
+        
+        if (!edgeInfo) {
+          valid = false;
+          break;
+        }
+        
+        if (i === 0) {
+          // First edge: start from source, go to target
+          currentNodeId = edgeInfo.source_id;
+          firstNodeId = currentNodeId;
+          currentNodeId = edgeInfo.target_id;
+        } else {
+          // Subsequent edges: verify chain continuity
+          if (edgeInfo.source_id !== currentNodeId && edgeInfo.target_id !== currentNodeId) {
+            valid = false;
+            break;
+          }
+          currentNodeId = edgeInfo.source_id === currentNodeId ? edgeInfo.target_id : edgeInfo.source_id;
+        }
+        
+        if (i === relList.length - 1) {
+          lastNodeId = currentNodeId;
+        }
+      }
+      
+      if (!valid || !firstNodeId || !lastNodeId) {
+        continue;
+      }
+      
+      // If source/target are bound from WITH, verify path endpoints match
+      if (boundSourceFromVar) {
+        const boundSourceVal = row.get(boundSourceFromVar);
+        const boundSourceId = this.extractNodeId(boundSourceVal);
+        if (boundSourceId && boundSourceId !== firstNodeId) {
+          // Path start doesn't match bound source node - skip this row
+          continue;
+        }
+      }
+      
+      if (boundTargetFromVar) {
+        const boundTargetVal = row.get(boundTargetFromVar);
+        const boundTargetId = this.extractNodeId(boundTargetVal);
+        if (boundTargetId && boundTargetId !== lastNodeId) {
+          // Path end doesn't match bound target node - skip this row
+          continue;
+        }
+      }
+      
+      // Look up the nodes
+      const firstNodeResult = this.db.execute(
+        "SELECT id, label, properties FROM nodes WHERE id = ?",
+        [firstNodeId]
+      );
+      const lastNodeResult = this.db.execute(
+        "SELECT id, label, properties FROM nodes WHERE id = ?",
+        [lastNodeId]
+      );
+      
+      if (firstNodeResult.rows.length === 0 || lastNodeResult.rows.length === 0) {
+        continue;
+      }
+      
+      const firstNode = firstNodeResult.rows[0];
+      const lastNode = lastNodeResult.rows[0];
+      
+      const firstProps = typeof firstNode.properties === "string"
+        ? JSON.parse(firstNode.properties)
+        : firstNode.properties;
+      const lastProps = typeof lastNode.properties === "string"
+        ? JSON.parse(lastNode.properties)
+        : lastNode.properties;
+      
+      // Build result based on RETURN items
+      const resultRow: Record<string, unknown> = {};
+      for (const item of returnClause.items) {
+        const alias = item.alias || this.getExpressionName(item.expression);
+        
+        if (item.expression.type === "variable") {
+          if (item.expression.variable === sourceVar) {
+            resultRow[alias] = { ...firstProps, _nf_id: firstNode.id };
+          } else if (item.expression.variable === targetVar) {
+            resultRow[alias] = { ...lastProps, _nf_id: lastNode.id };
+          }
+        }
+      }
+      
+      if (Object.keys(resultRow).length > 0) {
+        finalResults.push(resultRow);
+      }
     }
     
     return finalResults;

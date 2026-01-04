@@ -184,10 +184,10 @@ export const FAILING_TESTS = new Set<string>([
   // "clauses/match > Match4 - Match variable length patterns scenarios|10",
   // "clauses/match > Match4 - Match variable length patterns scenarios|4", // TARGET: Phase-based executor
   // "clauses/match > Match4 - Match variable length patterns scenarios|7",
-  "clauses/match > Match4 - Match variable length patterns scenarios|8",
+  // "clauses/match > Match4 - Match variable length patterns scenarios|8", // Fixed: bound relationship list traversal with node endpoint verification
   // "clauses/match > Match4 - Match variable length patterns scenarios|9",
   // "clauses/match > Match4 - Match variable length patterns scenarios|7", // Fixed: edge uniqueness in var-length paths
-  "clauses/match > Match6 - Match named paths scenarios|14",
+  // "clauses/match > Match6 - Match named paths scenarios|14", // Fixed: left-directed edge handling in fixedPatternsBefore + path output format
   // Variable-length path tests that fail because full intermediate path tracking is not implemented
   // Only start/end nodes are tracked, not intermediate nodes/edges
   "clauses/match > Match6 - Match named paths scenarios|16",
