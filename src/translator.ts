@@ -1175,9 +1175,21 @@ export class Translator {
           joinParams.push(...edgeOnParams);
           addedEdgeAliases.add(relPattern.edgeAlias);
         } else {
-          // Edge already joined - just add any additional type/property filters to WHERE
-          // (The ON conditions would be redundant but filters might differ)
-          // Note: edgeOnParams were already added when the edge was first joined
+          // Edge already joined (bound from earlier in query)
+          // For OPTIONAL MATCH, we need to verify the direction matches
+          // For example: MATCH (a)-[r]->() ... OPTIONAL MATCH (a)<-[r]-(b)
+          // The bound edge r has a specific direction that must match the pattern
+          // Store the direction constraint to be added to the target node's LEFT JOIN condition
+          if (isOptional && !isUndirected && sourceWasAlreadyAdded) {
+            // Store the direction constraint for use in the target node join
+            if (relPattern.edge.direction === "left") {
+              // Left-directed: (a)<-[r]-(b) means r.target_id should equal a
+              (relPattern as any).boundEdgeDirectionConstraint = `${relPattern.edgeAlias}.target_id = ${relPattern.sourceAlias}.id`;
+            } else {
+              // Right-directed: (a)-[r]->(b) means r.source_id should equal a
+              (relPattern as any).boundEdgeDirectionConstraint = `${relPattern.edgeAlias}.source_id = ${relPattern.sourceAlias}.id`;
+            }
+          }
         }
         
         // Handle deferred source join (when target was bound but source was new)
@@ -1243,6 +1255,12 @@ export class Translator {
                 targetOnParams.push(value);
               }
             }
+          }
+          
+          // For bound edges with direction constraint, add it to the ON clause
+          // This ensures the OPTIONAL MATCH fails (returns NULL) if direction doesn't match
+          if ((relPattern as any).boundEdgeDirectionConstraint) {
+            targetOnConditions.push((relPattern as any).boundEdgeDirectionConstraint);
           }
 
           joinParts.push(`${joinType} nodes ${relPattern.targetAlias} ON ${targetOnConditions.join(" AND ")}`);
@@ -2182,10 +2200,10 @@ export class Translator {
         }
         addedEdgeAliases.add(pattern.edgeAlias);
         
-        // Add edge type filter
+        // Add edge type filter - deferred until after all CTE params
         if (pattern.edge.type) {
           whereParts.push(`${pattern.edgeAlias}.type = ?`);
-          allParams.push(pattern.edge.type);
+          deferredWhereParams.push(pattern.edge.type);
         }
       }
       
