@@ -2269,62 +2269,112 @@ export class Translator {
     // Process fixed-length patterns before the variable-length pattern
     for (let i = 0; i < fixedPatternsBefore.length; i++) {
       const pattern = fixedPatternsBefore[i];
+      const isOptional = pattern.optional === true;
+      const joinType = isOptional ? "LEFT JOIN" : "JOIN";
       
-      if (i === 0) {
-        // First pattern: add source to FROM
-        fromParts.push(`nodes ${pattern.sourceAlias}`);
-        addedNodeAliases.add(pattern.sourceAlias);
+      // Check if source node is already in FROM (from a previous non-optional MATCH)
+      const sourceIsAlreadyAdded = addedNodeAliases.has(pattern.sourceAlias);
+      
+      if (!sourceIsAlreadyAdded) {
+        // Check if source should be in FROM (non-optional) or is from a prior required pattern
+        const sourceNodeOptional = (this.ctx as any)[`optional_${pattern.sourceAlias}`] === true;
         
-        // Add source label/property filters
-        const sourcePattern = (this.ctx as any)[`pattern_${pattern.sourceAlias}`];
-        if (sourcePattern?.label) {
-          const labelMatch = this.generateLabelMatchCondition(pattern.sourceAlias, sourcePattern.label);
-          whereParts.push(labelMatch.sql);
-          allParams.push(...labelMatch.params);
+        if (!sourceNodeOptional) {
+          // Source is from a required MATCH - add to FROM
+          fromParts.push(`nodes ${pattern.sourceAlias}`);
+          addedNodeAliases.add(pattern.sourceAlias);
+          
+          // Add source label/property filters
+          const sourcePattern = (this.ctx as any)[`pattern_${pattern.sourceAlias}`];
+          if (sourcePattern?.label) {
+            const labelMatch = this.generateLabelMatchCondition(pattern.sourceAlias, sourcePattern.label);
+            whereParts.push(labelMatch.sql);
+            allParams.push(...labelMatch.params);
+          }
+          filteredNodeAliases.add(pattern.sourceAlias);
+        } else if (fromParts.length === 0) {
+          // Need at least something in FROM - add a dummy
+          fromParts.push(`(SELECT 1) AS __dummy__`);
         }
-        filteredNodeAliases.add(pattern.sourceAlias);
       }
       
       // Add edge JOIN (only if not already added - handles bound relationships)
       if (!addedEdgeAliases.has(pattern.edgeAlias)) {
         const isUndirectedPattern = pattern.edge.direction === "none";
         const isLeftDirected = pattern.edge.direction === "left";
+        
+        // Build ON conditions for the edge
+        const edgeOnConditions: string[] = [];
+        
         if (isUndirectedPattern) {
           // For undirected patterns, match edges in either direction
-          joinParts.push(`JOIN edges ${pattern.edgeAlias} ON (${pattern.edgeAlias}.source_id = ${pattern.sourceAlias}.id OR ${pattern.edgeAlias}.target_id = ${pattern.sourceAlias}.id)`);
+          edgeOnConditions.push(`(${pattern.edgeAlias}.source_id = ${pattern.sourceAlias}.id OR ${pattern.edgeAlias}.target_id = ${pattern.sourceAlias}.id)`);
         } else if (isLeftDirected) {
           // Left-directed: (a)<-[:R]-(b) means edge goes FROM b TO a, so a is at target_id
-          joinParts.push(`JOIN edges ${pattern.edgeAlias} ON ${pattern.edgeAlias}.target_id = ${pattern.sourceAlias}.id`);
+          edgeOnConditions.push(`${pattern.edgeAlias}.target_id = ${pattern.sourceAlias}.id`);
         } else {
           // Right-directed: (a)-[:R]->(b) means edge goes FROM a TO b, so a is at source_id
-          joinParts.push(`JOIN edges ${pattern.edgeAlias} ON ${pattern.edgeAlias}.source_id = ${pattern.sourceAlias}.id`);
+          edgeOnConditions.push(`${pattern.edgeAlias}.source_id = ${pattern.sourceAlias}.id`);
         }
-        addedEdgeAliases.add(pattern.edgeAlias);
         
-        // Add edge type filter - deferred until after all CTE params
+        // For optional patterns, add edge type filter to ON clause
+        // For non-optional, add to WHERE (deferred)
         if (pattern.edge.type) {
-          whereParts.push(`${pattern.edgeAlias}.type = ?`);
-          deferredWhereParams.push(pattern.edge.type);
+          if (isOptional) {
+            edgeOnConditions.push(`${pattern.edgeAlias}.type = ?`);
+            joinParams.push(pattern.edge.type);
+          } else {
+            whereParts.push(`${pattern.edgeAlias}.type = ?`);
+            deferredWhereParams.push(pattern.edge.type);
+          }
         }
+        
+        joinParts.push(`${joinType} edges ${pattern.edgeAlias} ON ${edgeOnConditions.join(" AND ")}`);
+        addedEdgeAliases.add(pattern.edgeAlias);
       }
       
       // Add target node JOIN
       if (!addedNodeAliases.has(pattern.targetAlias)) {
         const isUndirectedPattern = pattern.edge.direction === "none";
         const isLeftDirected = pattern.edge.direction === "left";
+        
+        // Build ON conditions for the target node
+        const targetOnConditions: string[] = [];
+        
         if (isUndirectedPattern) {
           // For undirected, target could be on either side
-          joinParts.push(`JOIN nodes ${pattern.targetAlias} ON (${pattern.edgeAlias}.target_id = ${pattern.targetAlias}.id OR ${pattern.edgeAlias}.source_id = ${pattern.targetAlias}.id)`);
+          targetOnConditions.push(`(${pattern.edgeAlias}.target_id = ${pattern.targetAlias}.id OR ${pattern.edgeAlias}.source_id = ${pattern.targetAlias}.id)`);
           // Also ensure source and target are different (for undirected edges)
-          whereParts.push(`${pattern.sourceAlias}.id != ${pattern.targetAlias}.id`);
+          if (!isOptional) {
+            whereParts.push(`${pattern.sourceAlias}.id != ${pattern.targetAlias}.id`);
+          }
         } else if (isLeftDirected) {
           // Left-directed: (a)<-[:R]-(b) means edge goes FROM b TO a, so b is at source_id
-          joinParts.push(`JOIN nodes ${pattern.targetAlias} ON ${pattern.edgeAlias}.source_id = ${pattern.targetAlias}.id`);
+          targetOnConditions.push(`${pattern.edgeAlias}.source_id = ${pattern.targetAlias}.id`);
         } else {
           // Right-directed: (a)-[:R]->(b) means edge goes FROM a TO b, so b is at target_id
-          joinParts.push(`JOIN nodes ${pattern.targetAlias} ON ${pattern.edgeAlias}.target_id = ${pattern.targetAlias}.id`);
+          targetOnConditions.push(`${pattern.edgeAlias}.target_id = ${pattern.targetAlias}.id`);
         }
+        
+        // For optional patterns, add target label filter to ON clause
+        const targetPattern = (this.ctx as any)[`pattern_${pattern.targetAlias}`];
+        if (isOptional && targetPattern?.label) {
+          const labelMatch = this.generateLabelMatchCondition(pattern.targetAlias, targetPattern.label);
+          targetOnConditions.push(labelMatch.sql);
+          joinParams.push(...labelMatch.params);
+          filteredNodeAliases.add(pattern.targetAlias);
+        }
+        
+        joinParts.push(`${joinType} nodes ${pattern.targetAlias} ON ${targetOnConditions.join(" AND ")}`);
         addedNodeAliases.add(pattern.targetAlias);
+        
+        // For non-optional patterns, add target label filter to WHERE
+        if (!isOptional && targetPattern?.label && !filteredNodeAliases.has(pattern.targetAlias)) {
+          const labelMatch = this.generateLabelMatchCondition(pattern.targetAlias, targetPattern.label);
+          whereParts.push(labelMatch.sql);
+          deferredWhereParams.push(...labelMatch.params);
+          filteredNodeAliases.add(pattern.targetAlias);
+        }
       }
     }
 
@@ -2753,6 +2803,10 @@ export class Translator {
       }
     }
 
+    // Now add JOIN params (for ON clause conditions in fixed patterns before var-length)
+    // These come after CTE params but before WHERE params
+    allParams.push(...joinParams);
+    
     // Now add the deferred WHERE params (after all CTE params have been added)
     allParams.push(...deferredWhereParams);
     
