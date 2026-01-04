@@ -162,33 +162,10 @@ function printDetailedSummary(): void {
       const [subName, subStats] = subcats[i];
       const isLastSubcat = i === subcats.length - 1;
       const prefix = isLastSubcat ? "└── " : "├── ";
-      const childPrefix = isLastSubcat ? "    " : "│   ";
       
       // Pad subcategory name for alignment
       const paddedName = (subName + ":").padEnd(22);
       console.log(`${prefix}${paddedName} ${formatStats(subStats)}`);
-      
-      // Show feature breakdown only if subcategory is not 100% passing
-      const subPassRate = subStats.total > 0 ? subStats.passed / subStats.total : 0;
-      if (subPassRate < 1 && subStats.features.size > 0) {
-        // Sort features and filter to those with issues (not 100% passed)
-        const features = [...subStats.features.entries()]
-          .filter(([, fStats]) => fStats.passed < fStats.total)
-          .sort((a, b) => a[0].localeCompare(b[0]));
-        
-        for (let j = 0; j < features.length; j++) {
-          const [featName, featStats] = features[j];
-          const isLastFeat = j === features.length - 1;
-          const featPrefix = isLastFeat ? "└── " : "├── ";
-          
-          // Truncate long feature names
-          const displayName = featName.length > 40 
-            ? featName.substring(0, 37) + "..." 
-            : featName;
-          const paddedFeatName = (displayName + ":").padEnd(44);
-          console.log(`${childPrefix}${featPrefix}${paddedFeatName} ${formatStats(featStats)}`);
-        }
-      }
     }
     console.log(""); // Blank line between categories
   }
@@ -623,7 +600,11 @@ afterAll(() => {
     totalSkipped += cat.skipped;
   }
   
-  console.log(`\n📈 TCK Results Summary:`);
+  // Print detailed category breakdown first
+  printDetailedSummary();
+  
+  // Then print the summary
+  console.log(`📈 TCK Results Summary:`);
   console.log(`   ✅ Passed: ${totalPassed}`);
   console.log(`   ❌ Failed: ${totalFailed}`);
   console.log(`   ⏭️  Skipped: ${totalSkipped}`);
@@ -634,9 +615,6 @@ afterAll(() => {
       console.log(`   - ${err.scenario}: ${err.error.slice(0, 100)}`);
     }
   }
-  
-  // Print detailed category breakdown
-  printDetailedSummary();
   
   // Report tests that were in FAILING_TESTS but actually passed
   if (TCK_TEST_ALL && unexpectedlyPassed.length > 0) {
