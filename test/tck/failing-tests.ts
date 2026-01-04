@@ -186,6 +186,7 @@ export const FAILING_TESTS = new Set<string>([
   "clauses/match > Match4 - Match variable length patterns scenarios|7",
   "clauses/match > Match4 - Match variable length patterns scenarios|8",
   // "clauses/match > Match4 - Match variable length patterns scenarios|9",
+  // "clauses/match > Match4 - Match variable length patterns scenarios|7", // Fixed: edge uniqueness in var-length paths
   "clauses/match > Match6 - Match named paths scenarios|14",
   // Variable-length path tests that fail because full intermediate path tracking is not implemented
   // Only start/end nodes are tracked, not intermediate nodes/edges

@@ -1945,9 +1945,11 @@ export class Translator {
       optional?: boolean;
       sourceIsNew?: boolean;
       targetIsNew?: boolean;
+      edgeIsNew?: boolean;
       isVariableLength?: boolean;
       minHops?: number;
       maxHops?: number;
+      boundEdgeOriginalPattern?: { sourceAlias: string; targetAlias: string };
     }>,
     selectParts: string[],
     returnColumns: string[],
@@ -2169,6 +2171,20 @@ export class Translator {
     // Deferred WHERE params - these are added after all CTE params
     // This is needed because CTEs are defined before the WHERE clause in SQL
     const deferredWhereParams: unknown[] = [];
+    
+    // Track bound edges (edges that are reused from a previous MATCH, not newly matched)
+    // These must be excluded from variable-length path results to ensure edge uniqueness
+    const boundEdgeAliases: string[] = [];
+    
+    // Find all bound (non-new) edge aliases in fixedPatternsAfter and fixedPatternsBefore
+    for (const pattern of [...fixedPatternsBefore, ...fixedPatternsAfter]) {
+      if (!pattern.isVariableLength && pattern.edgeIsNew === false) {
+        boundEdgeAliases.push(pattern.edgeAlias);
+      }
+    }
+    
+    // Track all CTE names to add edge uniqueness constraints later
+    const pathCteNames: string[] = [pathCteName!];
 
     // Process fixed-length patterns before the variable-length pattern
     for (let i = 0; i < fixedPatternsBefore.length; i++) {
@@ -2430,6 +2446,9 @@ export class Translator {
         // Append second CTE to the first
         cte += cte2;
         
+        // Track this CTE for edge uniqueness constraints
+        pathCteNames.push(pathCteName2);
+        
         // Add the second CTE to FROM
         fromParts.push(pathCteName2);
         
@@ -2540,6 +2559,16 @@ export class Translator {
 
     // Now add the deferred WHERE params (after all CTE params have been added)
     allParams.push(...deferredWhereParams);
+    
+    // Add edge uniqueness constraints: variable-length paths must not include bound edges
+    // This ensures that when a pattern like (n)-[*0..1]-()-[r]-()-[*0..1]-(m) is matched,
+    // the variable-length portions don't traverse the bound edge r
+    for (const boundEdgeAlias of boundEdgeAliases) {
+      for (const pathCte of pathCteNames) {
+        // Exclude paths that contain the bound edge
+        whereParts.push(`NOT EXISTS (SELECT 1 FROM json_each(${pathCte}.edge_ids) WHERE json_extract(value, '$.id') = ${boundEdgeAlias}.id)`);
+      }
+    }
 
     // Add WHERE clause from MATCH if present
     const matchWhereClause = (this.ctx as any).whereClause;
