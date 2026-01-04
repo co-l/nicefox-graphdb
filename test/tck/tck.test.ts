@@ -38,6 +38,162 @@ const results = {
   errors: [] as { scenario: string; error: string }[],
 };
 
+// Hierarchical stats tracking for detailed summary
+interface FeatureStats {
+  passed: number;
+  failed: number;
+  skipped: number;
+  total: number;
+}
+
+interface SubcategoryStats extends FeatureStats {
+  features: Map<string, FeatureStats>;
+}
+
+interface CategoryStats extends FeatureStats {
+  subcategories: Map<string, SubcategoryStats>;
+}
+
+// Track results by category hierarchy
+const categoryResults = new Map<string, CategoryStats>();
+
+/**
+ * Parse a test key into its hierarchical components
+ * e.g., "clauses/match > Match1 - Match nodes|5" =>
+ *   { topLevel: "clauses", subCategory: "match", feature: "Match1 - Match nodes" }
+ */
+function parseTestKey(testKey: string): { 
+  topLevel: string; 
+  subCategory: string; 
+  feature: string;
+} {
+  // Format: "category/subcategory > FeatureName - Description|testNum"
+  const categoryMatch = testKey.match(/^([^/]+)\/([^>]+)\s*>\s*([^|]+)/);
+  if (!categoryMatch) {
+    return { topLevel: "unknown", subCategory: "unknown", feature: "unknown" };
+  }
+  return {
+    topLevel: categoryMatch[1].trim(),
+    subCategory: categoryMatch[2].trim(),
+    feature: categoryMatch[3].trim(),
+  };
+}
+
+/**
+ * Record a test result in the hierarchical tracking structure
+ */
+function recordResult(
+  testKey: string, 
+  status: "passed" | "failed" | "skipped"
+): void {
+  const { topLevel, subCategory, feature } = parseTestKey(testKey);
+  
+  // Initialize category if needed
+  if (!categoryResults.has(topLevel)) {
+    categoryResults.set(topLevel, {
+      passed: 0, failed: 0, skipped: 0, total: 0,
+      subcategories: new Map(),
+    });
+  }
+  const cat = categoryResults.get(topLevel)!;
+  
+  // Initialize subcategory if needed
+  if (!cat.subcategories.has(subCategory)) {
+    cat.subcategories.set(subCategory, {
+      passed: 0, failed: 0, skipped: 0, total: 0,
+      features: new Map(),
+    });
+  }
+  const subcat = cat.subcategories.get(subCategory)!;
+  
+  // Initialize feature if needed
+  if (!subcat.features.has(feature)) {
+    subcat.features.set(feature, { passed: 0, failed: 0, skipped: 0, total: 0 });
+  }
+  const feat = subcat.features.get(feature)!;
+  
+  // Update counts at all levels
+  cat[status]++;
+  cat.total++;
+  subcat[status]++;
+  subcat.total++;
+  feat[status]++;
+  feat.total++;
+}
+
+/**
+ * Format stats as "passed/total" with optional checkmark or skip info
+ */
+function formatStats(stats: FeatureStats): string {
+  const passRate = stats.total > 0 ? stats.passed / stats.total : 0;
+  const base = `${stats.passed}/${stats.total}`;
+  
+  if (passRate === 1 && stats.total > 0) {
+    return `${base} ✓`;
+  }
+  if (stats.skipped > 0 && stats.failed === 0) {
+    return `${base} (${stats.skipped} skipped)`;
+  }
+  return base;
+}
+
+/**
+ * Print the detailed category breakdown with tree structure
+ */
+function printDetailedSummary(): void {
+  console.log(`\n📊 Detailed Results:\n`);
+  
+  // Sort categories for consistent output
+  const sortedCategories = [...categoryResults.entries()].sort((a, b) => 
+    a[0].localeCompare(b[0])
+  );
+  
+  for (const [catName, catStats] of sortedCategories) {
+    const passRate = catStats.total > 0 
+      ? ((catStats.passed / catStats.total) * 100).toFixed(1) 
+      : "0.0";
+    console.log(`${catName} (${catStats.passed}/${catStats.total} passed, ${passRate}%)`);
+    
+    const subcats = [...catStats.subcategories.entries()].sort((a, b) => 
+      a[0].localeCompare(b[0])
+    );
+    
+    for (let i = 0; i < subcats.length; i++) {
+      const [subName, subStats] = subcats[i];
+      const isLastSubcat = i === subcats.length - 1;
+      const prefix = isLastSubcat ? "└── " : "├── ";
+      const childPrefix = isLastSubcat ? "    " : "│   ";
+      
+      // Pad subcategory name for alignment
+      const paddedName = (subName + ":").padEnd(22);
+      console.log(`${prefix}${paddedName} ${formatStats(subStats)}`);
+      
+      // Show feature breakdown only if subcategory is not 100% passing
+      const subPassRate = subStats.total > 0 ? subStats.passed / subStats.total : 0;
+      if (subPassRate < 1 && subStats.features.size > 0) {
+        // Sort features and filter to those with issues (not 100% passed)
+        const features = [...subStats.features.entries()]
+          .filter(([, fStats]) => fStats.passed < fStats.total)
+          .sort((a, b) => a[0].localeCompare(b[0]));
+        
+        for (let j = 0; j < features.length; j++) {
+          const [featName, featStats] = features[j];
+          const isLastFeat = j === features.length - 1;
+          const featPrefix = isLastFeat ? "└── " : "├── ";
+          
+          // Truncate long feature names
+          const displayName = featName.length > 40 
+            ? featName.substring(0, 37) + "..." 
+            : featName;
+          const paddedFeatName = (displayName + ":").padEnd(44);
+          console.log(`${childPrefix}${featPrefix}${paddedFeatName} ${formatStats(featStats)}`);
+        }
+      }
+    }
+    console.log(""); // Blank line between categories
+  }
+}
+
 // Track which tests from FAILING_TESTS actually passed (only when TCK_TEST_ALL is set)
 const unexpectedlyPassed: string[] = [];
 
@@ -245,7 +401,7 @@ function extractColumns(row: Record<string, unknown>, columns: string[]): unknow
 function runScenario(scenario: TCKScenario, db: GraphDatabase, executor: Executor): void {
   // Skip Scenario Outlines (require template expansion)
   if (scenario.tags?.includes("outline")) {
-    results.skipped++;
+    // Note: This case shouldn't happen as outlines are expanded in tck-parser
     return;
   }
   
@@ -290,7 +446,7 @@ function runScenario(scenario: TCKScenario, db: GraphDatabase, executor: Executo
     }
   }
   
-  results.passed++;
+  // Note: results.passed is now tracked in the test function after runScenario completes
 }
 
 // Group scenarios by category for organized testing
@@ -401,7 +557,15 @@ describe("openCypher TCK", () => {
               : `[${scenario.index}] ${scenario.name}`;
             
             // Skip known failing tests unless TCK_TEST_ALL is set
-            const testFn = (isKnownFailing && !TCK_TEST_ALL) ? it.skip : it;
+            const shouldSkip = isKnownFailing && !TCK_TEST_ALL;
+            const testFn = shouldSkip ? it.skip : it;
+            
+            // Record skipped tests for detailed summary
+            if (shouldSkip) {
+              recordResult(testKey, "skipped");
+              results.skipped++;
+            }
+            
             testFn(testName, () => {
               // Fresh DB for each test
               db = new GraphDatabase(":memory:");
@@ -410,10 +574,21 @@ describe("openCypher TCK", () => {
               
               try {
                 runScenario(scenario, db, executor);
+                // Record successful test
+                recordResult(testKey, "passed");
                 // If this test was in the failing list but passed, track it
                 if (TCK_TEST_ALL && isKnownFailing) {
                   unexpectedlyPassed.push(testKey);
                 }
+              } catch (error) {
+                // Record failed test
+                recordResult(testKey, "failed");
+                results.failed++;
+                results.errors.push({
+                  scenario: testKey,
+                  error: error instanceof Error ? error.message : String(error),
+                });
+                throw error; // Re-throw to fail the test
               } finally {
                 db.close();
               }
@@ -427,16 +602,30 @@ describe("openCypher TCK", () => {
 
 // Summary at the end
 afterAll(() => {
+  // Calculate totals from category results for accurate counting
+  let totalPassed = 0;
+  let totalFailed = 0;
+  let totalSkipped = 0;
+  for (const cat of categoryResults.values()) {
+    totalPassed += cat.passed;
+    totalFailed += cat.failed;
+    totalSkipped += cat.skipped;
+  }
+  
   console.log(`\n📈 TCK Results Summary:`);
-  console.log(`   ✅ Passed: ${results.passed}`);
-  console.log(`   ❌ Failed: ${results.failed}`);
-  console.log(`   ⏭️  Skipped: ${results.skipped}`);
+  console.log(`   ✅ Passed: ${totalPassed}`);
+  console.log(`   ❌ Failed: ${totalFailed}`);
+  console.log(`   ⏭️  Skipped: ${totalSkipped}`);
+  
   if (results.errors.length > 0) {
     console.log(`\n   First 10 errors:`);
     for (const err of results.errors.slice(0, 10)) {
       console.log(`   - ${err.scenario}: ${err.error.slice(0, 100)}`);
     }
   }
+  
+  // Print detailed category breakdown
+  printDetailedSummary();
   
   // Report tests that were in FAILING_TESTS but actually passed
   if (TCK_TEST_ALL && unexpectedlyPassed.length > 0) {

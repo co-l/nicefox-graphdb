@@ -16,10 +16,10 @@ We only run tests that Neo4j 3.5 actually passes. This gives us a realistic, ach
 
 The workflow is simple:
 
-1. **Unskip the first test** in `packages/server/test/tck/failing-tests.ts` (comment out the first uncommented line)
-2. **Run tests** - `pnpm test -- --run` - see it fail
+1. **Unskip the first test** in `test/tck/failing-tests.ts` (comment out the first uncommented line)
+2. **Run tests** - `npm test` - see it fail
 3. **Fix the code** until green
-4. **Find other fixed tests** - Run `TCK_TEST_ALL=1 pnpm test -- --run` to check if your fix also fixed other tests
+4. **Find other fixed tests** - Run `TCK_TEST_ALL=1 npm test` to check if your fix also fixed other tests
 5. **Update failing-tests.ts** - Comment out any tests that now pass (shown in the output)
 6. **Update this document**
 7. **Commit and push**
@@ -43,23 +43,23 @@ Some tests require significant architectural changes. Skip these during normal T
   // "clauses/delete > Delete4 - Delete clause interoperation with other clauses|1",
 ```
 
-Then run `pnpm test -- --run`, fix code, commit, push.
+Then run `npm test`, fix code, commit, push.
 
 ## Quick Commands
 
 ```bash
 # Run all tests (skipping known failing)
-pnpm test -- --run
+npm test
 
 # Run ALL tests including known failing ones
 # Shows which tests from failing-tests.ts now pass
-TCK_TEST_ALL=1 pnpm test -- --run
+TCK_TEST_ALL=1 npm test
 
 # Test a specific TCK test with details
-pnpm tck 'Delete4|1' -v --sql -f
+npm run tck 'Delete4|1' -- -v --sql -f
 
 # See what error a test produces
-pnpm tck 'Delete4|1' -f
+npm run tck 'Delete4|1' -- -f
 ```
 
 ### Finding Fixed Tests
@@ -67,7 +67,7 @@ pnpm tck 'Delete4|1' -f
 After implementing a fix, run with `TCK_TEST_ALL=1` to discover other tests that might have been fixed:
 
 ```bash
-TCK_TEST_ALL=1 pnpm test -- --run
+TCK_TEST_ALL=1 npm test
 ```
 
 At the end of the test run, you'll see output like:
@@ -85,10 +85,10 @@ Copy these commented lines to `failing-tests.ts` to mark them as passing.
 
 ## Key Files
 
-- `packages/server/test/tck/failing-tests.ts` - List of skipped tests
-- `packages/server/src/parser.ts` - Cypher parsing
-- `packages/server/src/translator.ts` - AST → SQL
-- `packages/server/src/executor.ts` - Query execution
+- `test/tck/failing-tests.ts` - List of skipped tests
+- `src/parser.ts` - Cypher parsing
+- `src/translator.ts` - AST → SQL
+- `src/executor.ts` - Query execution
 
 ## Error Quick Reference
 
