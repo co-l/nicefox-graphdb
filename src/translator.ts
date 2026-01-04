@@ -3149,19 +3149,41 @@ export class Translator {
                 if (pathExpressions) {
                   const pathInfo = pathExpressions.find(p => p.variable === arg.variable);
                   if (pathInfo && pathInfo.nodeAliases.length > 0) {
-                    // Count by the first node's id to represent path count
-                    const firstNodeAlias = pathInfo.nodeAliases[0];
-                    tables.push(firstNodeAlias);
-                    // Use COUNT(*) for paths - each row is a distinct path match
-                    return {
-                      sql: `COUNT(${distinctKeyword}*)`,
-                      tables,
-                      params,
-                    };
+                    // For paths, we need to count unique path combinations
+                    // Build a path identifier from all node and edge IDs
+                    if (expr.distinct) {
+                      // For COUNT(DISTINCT p), create a composite key from all path elements
+                      const pathElements: string[] = [];
+                      for (let i = 0; i < pathInfo.nodeAliases.length; i++) {
+                        pathElements.push(`${pathInfo.nodeAliases[i]}.id`);
+                        if (i < pathInfo.edgeAliases.length) {
+                          pathElements.push(`${pathInfo.edgeAliases[i]}.id`);
+                        }
+                      }
+                      // Concatenate all IDs to create a unique path identifier
+                      const pathIdExpr = pathElements.length > 0 
+                        ? pathElements.join(" || '|' || ")
+                        : "1";
+                      tables.push(...pathInfo.nodeAliases);
+                      return {
+                        sql: `COUNT(DISTINCT (${pathIdExpr}))`,
+                        tables,
+                        params,
+                      };
+                    } else {
+                      // Use COUNT(*) for non-distinct - each row is a path match
+                      const firstNodeAlias = pathInfo.nodeAliases[0];
+                      tables.push(firstNodeAlias);
+                      return {
+                        sql: `COUNT(*)`,
+                        tables,
+                        params,
+                      };
+                    }
                   }
                 }
                 // Fallback for paths without node info
-                return { sql: `COUNT(${distinctKeyword}*)`, tables, params };
+                return { sql: expr.distinct ? "COUNT(DISTINCT 1)" : "COUNT(*)", tables, params };
               }
               
               tables.push(varInfo.alias);

@@ -175,6 +175,18 @@ function extractColumns(row: Record<string, unknown>, columns: string[]): unknow
       return value;
     }
     
+    // Normalize function expression column name and try matching
+    // e.g., "coUnt( dIstInct p )" -> "count(distinct p)"
+    const normalizedCol = col.toLowerCase().replace(/\s+/g, "").replace(/,/g, ", ");
+    for (const key of Object.keys(row)) {
+      const normalizedKey = key.toLowerCase().replace(/\s+/g, "").replace(/,/g, ", ");
+      if (normalizedKey === normalizedCol) {
+        const value = row[key];
+        if (isNullEntity(value)) return null;
+        return value;
+      }
+    }
+    
     return undefined;
   });
 }
