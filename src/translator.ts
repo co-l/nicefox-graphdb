@@ -298,6 +298,18 @@ export class Translator {
   }
 
   private registerPathExpression(pathExpr: any, optional: boolean = false): void {
+    // Check if the path variable is already declared as a node or edge
+    const existingVar = this.ctx.variables.get(pathExpr.variable);
+    if (existingVar) {
+      if (existingVar.type === "node") {
+        throw new Error(`SyntaxError: Variable \`${pathExpr.variable}\` already declared`);
+      } else if (existingVar.type === "edge" || existingVar.type === "varLengthEdge") {
+        throw new Error(`SyntaxError: Variable \`${pathExpr.variable}\` already declared`);
+      } else if (existingVar.type === "path") {
+        throw new Error(`SyntaxError: Variable \`${pathExpr.variable}\` already declared`);
+      }
+    }
+    
     // Register the path variable so it can be returned
     const pathAlias = `path${this.ctx.aliasCounter++}`;
     this.ctx.variables.set(pathExpr.variable, { type: "path", alias: pathAlias });
