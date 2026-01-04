@@ -183,7 +183,7 @@ export const FAILING_TESTS = new Set<string>([
   // "clauses/match > Match3 - Match fixed length patterns|30",
   // "clauses/match > Match4 - Match variable length patterns scenarios|10",
   // "clauses/match > Match4 - Match variable length patterns scenarios|4", // TARGET: Phase-based executor
-  "clauses/match > Match4 - Match variable length patterns scenarios|7",
+  // "clauses/match > Match4 - Match variable length patterns scenarios|7",
   "clauses/match > Match4 - Match variable length patterns scenarios|8",
   // "clauses/match > Match4 - Match variable length patterns scenarios|9",
   // "clauses/match > Match4 - Match variable length patterns scenarios|7", // Fixed: edge uniqueness in var-length paths
