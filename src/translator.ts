@@ -2320,6 +2320,18 @@ export class Translator {
             whereParts.push(labelMatch.sql);
             allParams.push(...labelMatch.params);
           }
+          // Add source property filters (e.g., {name: 'A'})
+          if (sourcePattern?.properties) {
+            for (const [key, value] of Object.entries(sourcePattern.properties)) {
+              if (this.isParameterRef(value as PropertyValue)) {
+                whereParts.push(`json_extract(${pattern.sourceAlias}.properties, '$.${key}') = ?`);
+                deferredWhereParams.push(this.ctx.paramValues[(value as ParameterRef).name]);
+              } else {
+                whereParts.push(`json_extract(${pattern.sourceAlias}.properties, '$.${key}') = ?`);
+                deferredWhereParams.push(value);
+              }
+            }
+          }
           filteredNodeAliases.add(pattern.sourceAlias);
         } else if (fromParts.length === 0) {
           // Need at least something in FROM - add a dummy
@@ -3286,8 +3298,22 @@ export class Translator {
                 
                 // Build a JSON object with nodes array and edges from edge_ids
                 // The edges need to be transformed to just their properties for consistency
+                const pathSql = `json_object('nodes', json_array(${nodeElements.join(', ')}), 'edges', ${pathCteName}.edge_ids)`;
+                
+                // For optional paths, return NULL if the path doesn't exist (end node or CTE is NULL)
+                // This handles OPTIONAL MATCH p = (a)-[*]->(b) returning NULL when no path found
+                if (pathInfo.optional && pathInfo.nodeAliases.length > 0) {
+                  // Check the last node in the path (the target) - if it's NULL, the path failed
+                  const endNodeAlias = pathInfo.nodeAliases[pathInfo.nodeAliases.length - 1];
+                  return {
+                    sql: `CASE WHEN ${endNodeAlias}.id IS NULL THEN NULL ELSE ${pathSql} END`,
+                    tables,
+                    params,
+                  };
+                }
+                
                 return {
-                  sql: `json_object('nodes', json_array(${nodeElements.join(', ')}), 'edges', ${pathCteName}.edge_ids)`,
+                  sql: pathSql,
                   tables,
                   params,
                 };
