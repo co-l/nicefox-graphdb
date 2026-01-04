@@ -429,9 +429,47 @@ export class Translator {
       
       // Check if variable is bound to a non-node value from WITH clause
       // e.g., WITH true AS n MATCH (n) should error because n is a boolean, not a node
+      // But expressions like coalesce(b, c) could return nodes, so allow them
       const withAliases = (this.ctx as any).withAliases as Map<string, Expression> | undefined;
       if (withAliases && withAliases.has(node.variable)) {
-        throw new Error(`Type mismatch: expected Node but was Boolean`);
+        const expr = withAliases.get(node.variable)!;
+        // Only allow expressions that could return nodes
+        // Reject literals (except null), LIST function, and other non-node-returning expressions
+        const isAllowedExpression = 
+          expr.type === "variable" ||  // Passthrough of a node variable
+          (expr.type === "function" && 
+            expr.functionName !== "LIST" && 
+            expr.functionName !== "FILTER" && 
+            expr.functionName !== "EXTRACT" && 
+            expr.functionName !== "REDUCE" &&
+            expr.functionName !== "keys" &&
+            expr.functionName !== "labels") || // Most functions could return nodes
+          expr.type === "case" ||  // CASE could return nodes
+          expr.type === "binary" ||  // Binary ops could return nodes
+          expr.type === "property" ||  // Property access returns the property value
+          expr.type === "propertyAccess" ||  // Chained property access
+          expr.type === "comparison";  // Comparison returns boolean, but we'll allow it to return no rows
+        
+        if (!isAllowedExpression) {
+          // Determine the error type
+          if (expr.type === "literal") {
+            throw new Error(`Type mismatch: expected Node but was ${typeof expr.value === 'string' ? 'String' : typeof expr.value === 'number' ? (Number.isInteger(expr.value) ? 'Integer' : 'Float') : typeof expr.value === 'boolean' ? 'Boolean' : 'List'}`);
+          } else if (expr.type === "function" && expr.functionName === "LIST") {
+            throw new Error(`Type mismatch: expected Node but was List`);
+          } else if (expr.type === "listComprehension" || expr.type === "listPredicate") {
+            throw new Error(`Type mismatch: expected Node but was List`);
+          } else if (expr.type === "object") {
+            throw new Error(`Type mismatch: expected Node but was Map`);
+          } else {
+            throw new Error(`Type mismatch: expected Node but was ${expr.type}`);
+          }
+        }
+        // Track that this variable comes from a WITH expression alias
+        // This requires a NULL check in the WHERE clause when used in MATCH
+        if (!(this.ctx as any).withExpressionAliases) {
+          (this.ctx as any).withExpressionAliases = new Set<string>();
+        }
+        (this.ctx as any).withExpressionAliases.add(node.variable);
       }
       
       this.ctx.variables.set(node.variable, { type: "node", alias });
@@ -530,10 +568,42 @@ export class Translator {
     // Check if relationship variable is bound to a non-relationship value from WITH clause
     // e.g., WITH true AS r MATCH ()-[r]-() should error because r is a boolean, not a relationship
     // However, variable-length patterns like [rs*] can accept lists of relationships
+    // And expressions like coalesce() could return relationships, so allow them
     const isVariableLengthPattern = rel.edge.minHops !== undefined || rel.edge.maxHops !== undefined;
     const withAliases = (this.ctx as any).withAliases as Map<string, Expression> | undefined;
     if (rel.edge.variable && withAliases && withAliases.has(rel.edge.variable) && !isVariableLengthPattern) {
-      throw new Error(`Type mismatch: expected Relationship but was Boolean`);
+      const expr = withAliases.get(rel.edge.variable)!;
+      // Only allow expressions that could return relationships
+      // Reject literals (except null), LIST function, and other non-relationship-returning expressions
+      const isAllowedExpression = 
+        expr.type === "variable" ||  // Passthrough of a relationship variable
+        (expr.type === "function" && 
+          expr.functionName !== "LIST" && 
+          expr.functionName !== "FILTER" && 
+          expr.functionName !== "EXTRACT" && 
+          expr.functionName !== "REDUCE" &&
+          expr.functionName !== "keys" &&
+          expr.functionName !== "labels") || // Most functions could return relationships
+        expr.type === "case" ||  // CASE could return relationships
+        expr.type === "binary" ||  // Binary ops could return relationships
+        expr.type === "property" ||  // Property access
+        expr.type === "propertyAccess" ||  // Chained property access
+        expr.type === "comparison";  // Comparison
+      
+      if (!isAllowedExpression) {
+        // Determine the error type
+        if (expr.type === "literal") {
+          throw new Error(`Type mismatch: expected Relationship but was ${typeof expr.value === 'string' ? 'String' : typeof expr.value === 'number' ? (Number.isInteger(expr.value) ? 'Integer' : 'Float') : typeof expr.value === 'boolean' ? 'Boolean' : 'List'}`);
+        } else if (expr.type === "function" && expr.functionName === "LIST") {
+          throw new Error(`Type mismatch: expected Relationship but was List`);
+        } else if (expr.type === "listComprehension" || expr.type === "listPredicate") {
+          throw new Error(`Type mismatch: expected Relationship but was List`);
+        } else if (expr.type === "object") {
+          throw new Error(`Type mismatch: expected Relationship but was Map`);
+        } else {
+          throw new Error(`Type mismatch: expected Relationship but was ${expr.type}`);
+        }
+      }
     }
     
     if (rel.edge.variable && this.ctx.variables.has(rel.edge.variable)) {
@@ -1126,11 +1196,28 @@ export class Translator {
               joinParams.push(...onParams);
               whereParts.push(`${relPattern.sourceAlias}.id IS NOT NULL`);
             } else {
-              joinParts.push(`JOIN nodes ${relPattern.sourceAlias} ON 1=1`);
+              // Check if source variable is from a WITH expression alias
+              const withExpressionAliases = (this.ctx as any).withExpressionAliases as Set<string> | undefined;
+              const sourceVarName = Array.from(this.ctx.variables.entries())
+                .find(([_, info]) => info.alias === relPattern.sourceAlias)?.[0];
+              
+              if (sourceVarName && withExpressionAliases?.has(sourceVarName)) {
+                // Source is from a WITH expression alias (e.g., WITH coalesce(b, c) AS x MATCH (x)-->(d))
+                // Don't create a node join - the expression will be used directly in the edge join condition
+                // Mark this pattern to use the expression for the source
+                const withAliases = (this.ctx as any).withAliases as Map<string, Expression> | undefined;
+                const expr = withAliases?.get(sourceVarName);
+                if (expr) {
+                  const { sql: exprSql } = this.translateExpression(expr);
+                  (relPattern as any).sourceExpression = exprSql;
+                }
+              } else {
+                joinParts.push(`JOIN nodes ${relPattern.sourceAlias} ON 1=1`);
+              }
             }
           }
           // Only add to addedNodeAliases if we actually added a join (not deferred)
-          if (!(relPattern as any).deferSourceJoin) {
+          if (!(relPattern as any).deferSourceJoin && !(relPattern as any).sourceExpression) {
             addedNodeAliases.add(relPattern.sourceAlias);
           }
         }
@@ -1159,15 +1246,18 @@ export class Translator {
         
         // Add edge join - need to determine direction based on whether source/target already exist
         // Use sourceWasAlreadyAdded (recorded before adding source) for accurate check
+        const sourceExpression = (relPattern as any).sourceExpression as string | undefined;
         if (isUndirected) {
           // For undirected patterns, the source node connects based on direction:
           // dir=1: source is at edge.source_id
           // dir=2: source is at edge.target_id
           if (dirAlias) {
-            edgeOnConditions.push(`(${dirAlias} = 1 AND ${relPattern.edgeAlias}.source_id = ${relPattern.sourceAlias}.id OR ${dirAlias} = 2 AND ${relPattern.edgeAlias}.target_id = ${relPattern.sourceAlias}.id)`);
+            const sourceRef = sourceExpression || `${relPattern.sourceAlias}.id`;
+            edgeOnConditions.push(`(${dirAlias} = 1 AND ${relPattern.edgeAlias}.source_id = ${sourceRef} OR ${dirAlias} = 2 AND ${relPattern.edgeAlias}.target_id = ${sourceRef})`);
           } else {
             // Optional undirected - use the old OR-based approach
-            edgeOnConditions.push(`(${relPattern.edgeAlias}.source_id = ${relPattern.sourceAlias}.id OR ${relPattern.edgeAlias}.target_id = ${relPattern.sourceAlias}.id)`);
+            const sourceRef = sourceExpression || `${relPattern.sourceAlias}.id`;
+            edgeOnConditions.push(`(${relPattern.edgeAlias}.source_id = ${sourceRef} OR ${relPattern.edgeAlias}.target_id = ${sourceRef})`);
           }
         } else if (isOptional && addedNodeAliases.has(relPattern.targetAlias) && !sourceWasAlreadyAdded) {
           // OPTIONAL MATCH special case: target was already added (bound from previous MATCH) 
@@ -1176,9 +1266,11 @@ export class Translator {
           edgeOnConditions.push(`${relPattern.edgeAlias}.target_id = ${relPattern.targetAlias}.id`);
         } else if (relPattern.edge.direction === "left") {
           // Left-directed: (a)<-[:R]-(b) means edge goes from b to a, so source is target_id
-          edgeOnConditions.push(`${relPattern.edgeAlias}.target_id = ${relPattern.sourceAlias}.id`);
+          const sourceRef = sourceExpression || `${relPattern.sourceAlias}.id`;
+          edgeOnConditions.push(`${relPattern.edgeAlias}.target_id = ${sourceRef}`);
         } else {
-          edgeOnConditions.push(`${relPattern.edgeAlias}.source_id = ${relPattern.sourceAlias}.id`);
+          const sourceRef = sourceExpression || `${relPattern.sourceAlias}.id`;
+          edgeOnConditions.push(`${relPattern.edgeAlias}.source_id = ${sourceRef}`);
         }
 
         // For optional patterns, add type filter to ON clause instead of WHERE
