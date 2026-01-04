@@ -2,8 +2,8 @@
 
 ## Current Status (vs Neo4j 3.5 Baseline)
 - **Target**: 2703 tests (what Neo4j 3.5 passes)
-- **Passing**: 1326 tests (49.0% of target)
-- **Failing**: 1358 tests (to be fixed)
+- **Passing**: 1327 tests (49.0% of target)
+- **Failing**: 1357 tests (to be fixed)
 - **Not in baseline**: 19 tests (parser edge cases)
 
 ### What This Means
@@ -11,6 +11,9 @@ We only run tests that Neo4j 3.5 actually passes. This gives us a realistic, ach
 
 ### Excluded Categories
 - `clauses/call` - CALL procedures not yet supported
+
+## Recent Fixes
+- **Match7-24**: Fixed self-loop matching in OPTIONAL MATCH - undirected patterns `(a)-[r]-(a)` now correctly return self-loops once instead of twice. The fix adds a NOT condition to prevent duplicate matches when `source_id = target_id`.
 
 ## TDD Workflow
 

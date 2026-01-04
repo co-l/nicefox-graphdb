@@ -282,7 +282,7 @@ export const FAILING_TESTS = new Set<string>([
   // "clauses/match > Match7 - Optional match|20",
   // "clauses/match > Match7 - Optional match|21",
   // "clauses/match > Match7 - Optional match|22",
-  "clauses/match > Match7 - Optional match|24",
+  //   // "clauses/match > Match7 - Optional match|24",
   // "clauses/match > Match7 - Optional match|25",
   "clauses/match > Match7 - Optional match|28",
   // "clauses/match > Match7 - Optional match|31",

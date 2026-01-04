@@ -1258,6 +1258,11 @@ export class Translator {
             // Optional undirected - use the old OR-based approach
             const sourceRef = sourceExpression || `${relPattern.sourceAlias}.id`;
             edgeOnConditions.push(`(${relPattern.edgeAlias}.source_id = ${sourceRef} OR ${relPattern.edgeAlias}.target_id = ${sourceRef})`);
+            // For self-loops (source_id = target_id), match only once
+            // Only apply when source and target are the same node (to avoid referencing target before it's joined)
+            if (relPattern.sourceAlias === relPattern.targetAlias) {
+              edgeOnConditions.push(`NOT (${relPattern.edgeAlias}.source_id = ${relPattern.edgeAlias}.target_id AND ${relPattern.edgeAlias}.source_id = ${relPattern.sourceAlias}.id)`);
+            }
           }
         } else if (isOptional && addedNodeAliases.has(relPattern.targetAlias) && !sourceWasAlreadyAdded) {
           // OPTIONAL MATCH special case: target was already added (bound from previous MATCH) 
@@ -1364,6 +1369,7 @@ export class Translator {
           const edgeTargetColumn = isLeftDirected ? "source_id" : "target_id";
           if (isUndirected) {
             edgeOnConditions.push(`(${relPattern.edgeAlias}.target_id = ${relPattern.targetAlias}.id OR ${relPattern.edgeAlias}.source_id = ${relPattern.targetAlias}.id)`);
+            edgeOnConditions.push(`NOT (${relPattern.edgeAlias}.source_id = ${relPattern.edgeAlias}.target_id AND ${relPattern.edgeAlias}.source_id = ${relPattern.sourceAlias}.id AND ${relPattern.edgeAlias}.target_id = ${relPattern.targetAlias}.id)`);
           } else {
             edgeOnConditions.push(`${relPattern.edgeAlias}.${edgeTargetColumn} = ${relPattern.targetAlias}.id`);
           }
@@ -2441,7 +2447,9 @@ export class Translator {
         
         if (isUndirectedPattern) {
           // For undirected patterns, match edges in either direction
+          // For self-loops (source_id = target_id), match only once by requiring both conditions
           edgeOnConditions.push(`(${pattern.edgeAlias}.source_id = ${pattern.sourceAlias}.id OR ${pattern.edgeAlias}.target_id = ${pattern.sourceAlias}.id)`);
+          edgeOnConditions.push(`NOT (${pattern.edgeAlias}.source_id = ${pattern.edgeAlias}.target_id AND ${pattern.edgeAlias}.source_id = ${pattern.sourceAlias}.id AND ${pattern.edgeAlias}.target_id = ${pattern.targetAlias}.id)`);
         } else if (isLeftDirected) {
           // Left-directed: (a)<-[:R]-(b) means edge goes FROM b TO a, so a is at target_id
           edgeOnConditions.push(`${pattern.edgeAlias}.target_id = ${pattern.sourceAlias}.id`);
