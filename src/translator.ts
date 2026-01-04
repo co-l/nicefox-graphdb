@@ -2228,7 +2228,7 @@ export class Translator {
   SELECT p.start_id, e.target_id, p.depth + 1, json_insert(p.edge_ids, '$[#]', json_object('id', e.id, 'type', e.type, 'source_id', e.source_id, 'target_id', e.target_id, 'properties', json(e.properties)))
   FROM ${pathCteName} p
   JOIN edges e ON p.end_id = e.source_id
-  WHERE p.depth < ?${edgeType ? " AND e.type = ?" : ""}${recursivePropCondition}
+  WHERE p.depth < ?${edgeType ? " AND e.type = ?" : ""}${recursivePropCondition} AND NOT EXISTS (SELECT 1 FROM json_each(p.edge_ids) WHERE json_extract(value, '$.id') = e.id)
 )`;
         // For maxHops=2, we need depth to reach 2, so recursion limit should be maxHops
         allParams.push(...edgePropParams); // for base case
