@@ -355,6 +355,11 @@ export class Executor {
     const aggregateVariables = new Set<string>();
     // Track all known variables in current phase
     const knownVariables = new Set<string>();
+    // Track if we've seen OPTIONAL_MATCH (and no regular MATCH) before this WITH
+    // This is for the case: OPTIONAL MATCH ... WITH ... OPTIONAL MATCH
+    // where the first OPTIONAL MATCH might return null rows
+    let hasOnlyOptionalMatchBeforeWith = false;
+    let hasRegularMatchBeforeWith = false;
     
     for (let i = 0; i < clauses.length; i++) {
       const clause = clauses[i];
@@ -373,12 +378,32 @@ export class Executor {
         }
       }
       
+      // Check if OPTIONAL_MATCH after a WITH that followed only OPTIONAL_MATCH (no regular MATCH)
+      // This pattern needs phased execution for proper OPTIONAL MATCH null semantics
+      // Example: OPTIONAL MATCH (a) WITH a OPTIONAL MATCH (a)-->(b) RETURN b
+      // The first OPTIONAL MATCH with no data should produce 1 row with a=null
+      if (clause.type === "OPTIONAL_MATCH" && i > 0) {
+        const prevClause = clauses[i - 1];
+        if (prevClause.type === "WITH" && hasOnlyOptionalMatchBeforeWith && !hasRegularMatchBeforeWith) {
+          needsNewPhase = true;
+        }
+      }
+      
       if (needsNewPhase && currentPhase.length > 0) {
         phases.push(currentPhase);
         currentPhase = [];
+        hasOnlyOptionalMatchBeforeWith = false; // Reset for new phase
+        hasRegularMatchBeforeWith = false;
       }
       
       currentPhase.push(clause);
+      
+      // Track MATCH types in this phase
+      if (clause.type === "OPTIONAL_MATCH") {
+        hasOnlyOptionalMatchBeforeWith = true;
+      } else if (clause.type === "MATCH") {
+        hasRegularMatchBeforeWith = true;
+      }
       
       // Track variables defined by this clause
       this.trackClauseVariables(clause, knownVariables, aggregateVariables);
@@ -892,8 +917,29 @@ export class Executor {
     if (newRows.length > 0) {
       newContext.rows = newRows;
     } else if (clause.type === "OPTIONAL_MATCH") {
-      // Optional match with no results - keep input rows with nulls
-      newContext.rows = context.rows;
+      // Optional match with no results - keep input rows but add null for new variables
+      // Get variables introduced by this OPTIONAL MATCH
+      const introducedVars = new Set<string>();
+      for (const pattern of clause.patterns) {
+        if (this.isRelationshipPattern(pattern)) {
+          if (pattern.source.variable) introducedVars.add(pattern.source.variable);
+          if (pattern.target.variable) introducedVars.add(pattern.target.variable);
+          if (pattern.edge.variable) introducedVars.add(pattern.edge.variable);
+        } else if (pattern.variable) {
+          introducedVars.add(pattern.variable);
+        }
+      }
+      
+      // Add null values for introduced variables to each input row
+      newContext.rows = context.rows.map(row => {
+        const newRow = new Map(row);
+        for (const varName of introducedVars) {
+          if (!newRow.has(varName)) {
+            newRow.set(varName, null);
+          }
+        }
+        return newRow;
+      });
     }
     
     return newContext;
