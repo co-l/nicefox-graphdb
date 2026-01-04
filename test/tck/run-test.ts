@@ -87,9 +87,24 @@ function valuesMatch(expected: unknown, actual: unknown): boolean {
   // Handle path patterns like <(:Start)-[:T]->()>
   if (typeof expected === "object" && expected !== null && "_pathPattern" in expected) {
     if (typeof actual !== "object" || actual === null) return false;
+    
+    // Check for object format with nodes and edges arrays
     const pathObj = actual as Record<string, unknown>;
-    if (!Array.isArray(pathObj.nodes) || !Array.isArray(pathObj.edges)) return false;
-    return true;
+    if (Array.isArray(pathObj.nodes) && Array.isArray(pathObj.edges)) {
+      return true;
+    }
+    
+    // Also accept Neo4j 3.5 alternating array format: [nodeProps, edgeProps, nodeProps, ...]
+    if (Array.isArray(actual)) {
+      // A path should have odd length (n nodes, n-1 edges alternating)
+      // e.g., [node] = length 1, [node, edge, node] = length 3, etc.
+      // Each element should be an object (properties)
+      if (actual.length === 0) return false;
+      if (actual.length % 2 !== 1) return false;
+      return actual.every(el => typeof el === "object" && el !== null);
+    }
+    
+    return false;
   }
   
   // Handle arrays

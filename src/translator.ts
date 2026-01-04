@@ -1255,6 +1255,28 @@ export class Translator {
           }
         }
 
+        // For OPTIONAL MATCH when BOTH source and target were bound FROM A REQUIRED MATCH, 
+        // add target constraint to ON clause. This ensures the LEFT JOIN properly returns NULL 
+        // when no edge connects source to target, instead of filtering out the row entirely in WHERE.
+        // 
+        // We only do this when BOTH source and target were from a required MATCH (not optional):
+        // - MATCH (a), (x) OPTIONAL MATCH (a)-->(x): both bound → use ON (keep all combinations)
+        // - MATCH (a), (c) OPTIONAL MATCH (a)-->(b)-->(c): b is NEW → use WHERE (filter incomplete paths)
+        //
+        // The key insight: if source is NEW (from previous pattern in OPTIONAL MATCH),
+        // we need WHERE to filter incomplete paths using the outgoing-edge-exists logic.
+        const targetIsOptional = (this.ctx as any)[`optional_${relPattern.targetAlias}`] === true;
+        const sourceIsFromRequiredMatch = sourceWasAlreadyAdded && !(this.ctx as any)[`optional_${relPattern.sourceAlias}`];
+        if (isOptional && addedNodeAliases.has(relPattern.targetAlias) && !targetIsOptional && sourceIsFromRequiredMatch) {
+          const isLeftDirected = relPattern.edge.direction === "left";
+          const edgeTargetColumn = isLeftDirected ? "source_id" : "target_id";
+          if (isUndirected) {
+            edgeOnConditions.push(`(${relPattern.edgeAlias}.target_id = ${relPattern.targetAlias}.id OR ${relPattern.edgeAlias}.source_id = ${relPattern.targetAlias}.id)`);
+          } else {
+            edgeOnConditions.push(`${relPattern.edgeAlias}.${edgeTargetColumn} = ${relPattern.targetAlias}.id`);
+          }
+        }
+
         // Only add edge join if this edge alias hasn't been added yet
         if (!addedEdgeAliases.has(relPattern.edgeAlias)) {
           joinParts.push(`${joinType} edges ${relPattern.edgeAlias} ON ${edgeOnConditions.join(" AND ")}`);
@@ -1362,24 +1384,31 @@ export class Translator {
           addedNodeAliases.add(relPattern.targetAlias);
         } else {
           // Target was already added, but we need to ensure edge connects to it
-          // Add WHERE condition to connect edge to the existing node
           // For left-directed edges, the pattern's target is the edge's source_id
           const isLeftDirected = relPattern.edge.direction === "left";
           const edgeColumn = isLeftDirected ? "source_id" : "target_id";
           
-          if (isOptional) {
-            // For optional, we need to handle this in ON clause of edge
-            // This is already handled above by adding to edgeOnConditions
-            if (isUndirected) {
-              whereParts.push(`(${relPattern.edgeAlias}.id IS NULL OR ${relPattern.edgeAlias}.target_id = ${relPattern.targetAlias}.id OR ${relPattern.edgeAlias}.source_id = ${relPattern.targetAlias}.id)`);
+          // Check if we already added the target constraint to the ON clause
+          // (this happens when both source and target were from required MATCH)
+          const targetIsOptional = (this.ctx as any)[`optional_${relPattern.targetAlias}`] === true;
+          const sourceIsFromRequiredMatch = sourceWasAlreadyAdded && !(this.ctx as any)[`optional_${relPattern.sourceAlias}`];
+          const addedToOnClause = isOptional && !targetIsOptional && sourceIsFromRequiredMatch;
+          
+          if (!addedToOnClause) {
+            // Add WHERE condition - use (edge IS NULL OR edge.target = target) for optional patterns
+            // to allow NULL edges while filtering incomplete paths
+            if (isOptional) {
+              if (isUndirected) {
+                whereParts.push(`(${relPattern.edgeAlias}.id IS NULL OR ${relPattern.edgeAlias}.target_id = ${relPattern.targetAlias}.id OR ${relPattern.edgeAlias}.source_id = ${relPattern.targetAlias}.id)`);
+              } else {
+                whereParts.push(`(${relPattern.edgeAlias}.id IS NULL OR ${relPattern.edgeAlias}.${edgeColumn} = ${relPattern.targetAlias}.id)`);
+              }
             } else {
-              whereParts.push(`(${relPattern.edgeAlias}.id IS NULL OR ${relPattern.edgeAlias}.${edgeColumn} = ${relPattern.targetAlias}.id)`);
-            }
-          } else {
-            if (isUndirected) {
-              whereParts.push(`(${relPattern.edgeAlias}.target_id = ${relPattern.targetAlias}.id OR ${relPattern.edgeAlias}.source_id = ${relPattern.targetAlias}.id)`);
-            } else {
-              whereParts.push(`${relPattern.edgeAlias}.${edgeColumn} = ${relPattern.targetAlias}.id`);
+              if (isUndirected) {
+                whereParts.push(`(${relPattern.edgeAlias}.target_id = ${relPattern.targetAlias}.id OR ${relPattern.edgeAlias}.source_id = ${relPattern.targetAlias}.id)`);
+              } else {
+                whereParts.push(`${relPattern.edgeAlias}.${edgeColumn} = ${relPattern.targetAlias}.id`);
+              }
             }
           }
         }
