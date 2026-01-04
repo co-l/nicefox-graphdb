@@ -310,6 +310,12 @@ export class Translator {
       }
     }
     
+    // Check if the path variable is already declared as a WITH alias (e.g., WITH true AS p MATCH p = ...)
+    const withAliases = (this.ctx as any).withAliases as Map<string, Expression> | undefined;
+    if (withAliases && withAliases.has(pathExpr.variable)) {
+      throw new Error(`SyntaxError: Variable \`${pathExpr.variable}\` already declared`);
+    }
+    
     // Register the path variable so it can be returned
     const pathAlias = `path${this.ctx.aliasCounter++}`;
     this.ctx.variables.set(pathExpr.variable, { type: "path", alias: pathAlias });
