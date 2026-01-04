@@ -875,6 +875,95 @@ export class Executor {
       return this.executeMatchWithBoundRelList(clause, context, boundRelListPattern, params);
     }
     
+    // Get all variables referenced in the pattern (bound variables that must exist)
+    // and variables introduced by the pattern (new variables)
+    const boundVars = new Set<string>();
+    const introducedVars = new Set<string>();
+    
+    for (const pattern of clause.patterns) {
+      if (this.isRelationshipPattern(pattern)) {
+        // Check each variable - if it's in context, it's bound; otherwise it's introduced
+        if (pattern.source.variable) {
+          if (context.rows.length > 0 && context.rows[0].has(pattern.source.variable)) {
+            boundVars.add(pattern.source.variable);
+          } else {
+            introducedVars.add(pattern.source.variable);
+          }
+        }
+        if (pattern.target.variable) {
+          if (context.rows.length > 0 && context.rows[0].has(pattern.target.variable)) {
+            boundVars.add(pattern.target.variable);
+          } else {
+            introducedVars.add(pattern.target.variable);
+          }
+        }
+        if (pattern.edge.variable) {
+          if (context.rows.length > 0 && context.rows[0].has(pattern.edge.variable)) {
+            boundVars.add(pattern.edge.variable);
+          } else {
+            introducedVars.add(pattern.edge.variable);
+          }
+        }
+      } else if (pattern.variable) {
+        if (context.rows.length > 0 && context.rows[0].has(pattern.variable)) {
+          boundVars.add(pattern.variable);
+        } else {
+          introducedVars.add(pattern.variable);
+        }
+      }
+    }
+    
+    // For OPTIONAL_MATCH: if any bound variable is null in the context row,
+    // the match cannot succeed - return null for introduced variables
+    // This handles cases like: WITH a, b (where both are null) OPTIONAL MATCH (b)-[r]->(a)
+    if (clause.type === "OPTIONAL_MATCH" && boundVars.size > 0) {
+      const newContext = cloneContext(context);
+      const newRows: Array<Map<string, unknown>> = [];
+      
+      for (const inputRow of context.rows) {
+        // Check if any bound variable is null
+        let anyBoundIsNull = false;
+        for (const varName of boundVars) {
+          const value = inputRow.get(varName);
+          if (value === null || value === undefined) {
+            anyBoundIsNull = true;
+            break;
+          }
+        }
+        
+        if (anyBoundIsNull) {
+          // Bound variable is null, so OPTIONAL MATCH returns null for new variables
+          const newRow = new Map(inputRow);
+          for (const varName of introducedVars) {
+            newRow.set(varName, null);
+          }
+          newRows.push(newRow);
+        } else {
+          // Bound variables are not null - need to execute the match for this row
+          // For now, add this row to be processed by SQL
+          // Mark this row as needing SQL execution
+          (inputRow as any).__needsSqlExecution = true;
+          newRows.push(inputRow);
+        }
+      }
+      
+      // Check if all rows were handled without SQL
+      const rowsNeedingSql = newRows.filter(r => (r as any).__needsSqlExecution);
+      if (rowsNeedingSql.length === 0) {
+        // All rows handled - return directly
+        newContext.rows = newRows;
+        return newContext;
+      }
+      
+      // Some rows need SQL execution - continue to the SQL path below
+      // But only for rows that need it
+      // For simplicity, if any row needs SQL, run SQL for all and filter later
+      // Clean up the marker
+      for (const row of newRows) {
+        delete (row as any).__needsSqlExecution;
+      }
+    }
+    
     // For now, delegate to SQL translation for MATCH
     // This is a complex operation that the translator handles well
     // We'll use it and merge results back into context
@@ -918,18 +1007,6 @@ export class Executor {
       newContext.rows = newRows;
     } else if (clause.type === "OPTIONAL_MATCH") {
       // Optional match with no results - keep input rows but add null for new variables
-      // Get variables introduced by this OPTIONAL MATCH
-      const introducedVars = new Set<string>();
-      for (const pattern of clause.patterns) {
-        if (this.isRelationshipPattern(pattern)) {
-          if (pattern.source.variable) introducedVars.add(pattern.source.variable);
-          if (pattern.target.variable) introducedVars.add(pattern.target.variable);
-          if (pattern.edge.variable) introducedVars.add(pattern.edge.variable);
-        } else if (pattern.variable) {
-          introducedVars.add(pattern.variable);
-        }
-      }
-      
       // Add null values for introduced variables to each input row
       newContext.rows = context.rows.map(row => {
         const newRow = new Map(row);
