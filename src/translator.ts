@@ -496,6 +496,16 @@ export class Translator {
     let edgeAlias: string;
     let edgeIsNew = false;
     let boundEdgeOriginalPattern: { sourceAlias: string; targetAlias: string } | undefined;
+    
+    // Check if relationship variable is bound to a non-relationship value from WITH clause
+    // e.g., WITH true AS r MATCH ()-[r]-() should error because r is a boolean, not a relationship
+    // However, variable-length patterns like [rs*] can accept lists of relationships
+    const isVariableLengthPattern = rel.edge.minHops !== undefined || rel.edge.maxHops !== undefined;
+    const withAliases = (this.ctx as any).withAliases as Map<string, Expression> | undefined;
+    if (rel.edge.variable && withAliases && withAliases.has(rel.edge.variable) && !isVariableLengthPattern) {
+      throw new Error(`Type mismatch: expected Relationship but was Boolean`);
+    }
+    
     if (rel.edge.variable && this.ctx.variables.has(rel.edge.variable)) {
       const existingVar = this.ctx.variables.get(rel.edge.variable)!;
       // Check if variable is a path - cannot use path variable as an edge
