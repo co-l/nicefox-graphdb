@@ -4050,26 +4050,6 @@ export class Executor {
   }
 
   /**
-   * Find variables in CREATE that reference MATCH variables
-   */
-  private findReferencedVariables(
-    pattern: NodePattern | RelationshipPattern,
-    matchedVars: Set<string>,
-    referenced: Set<string>
-  ): void {
-    if (this.isRelationshipPattern(pattern)) {
-      // Source node references a matched variable if it has no label
-      if (pattern.source.variable && !pattern.source.label && matchedVars.has(pattern.source.variable)) {
-        referenced.add(pattern.source.variable);
-      }
-      // Target node references a matched variable if it has no label
-      if (pattern.target.variable && !pattern.target.label && matchedVars.has(pattern.target.variable)) {
-        referenced.add(pattern.target.variable);
-      }
-    }
-  }
-
-  /**
    * Find variables in CREATE that reference MATCH variables (with alias support)
    */
   private findReferencedVariablesWithAliases(
@@ -4934,31 +4914,6 @@ export class Executor {
     }
     
     return finalResults;
-  }
-
-  /**
-   * Execute a MATCH...CREATE pattern in multiple phases (legacy, for backwards compatibility)
-   */
-  private executeMultiPhase(
-    matchClauses: MatchClause[],
-    createClauses: CreateClause[],
-    referencedVars: Set<string>,
-    params: Record<string, unknown>
-  ): Record<string, unknown>[] {
-    return this.executeMultiPhaseGeneral(
-      matchClauses,
-      [], // no WITH clauses
-      createClauses,
-      [],
-      [],
-      null,
-      referencedVars,
-      referencedVars,
-      new Map(), // no alias map
-      new Map(), // no property alias map
-      new Map(), // no WITH aggregate map
-      params
-    );
   }
 
   /**
