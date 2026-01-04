@@ -190,9 +190,9 @@ export const FAILING_TESTS = new Set<string>([
   // "clauses/match > Match6 - Match named paths scenarios|14", // Fixed: left-directed edge handling in fixedPatternsBefore + path output format
   // Variable-length path tests that fail because full intermediate path tracking is not implemented
   // Only start/end nodes are tracked, not intermediate nodes/edges
-  "clauses/match > Match6 - Match named paths scenarios|16",
-  "clauses/match > Match6 - Match named paths scenarios|19",
-  "clauses/match > Match6 - Match named paths scenarios|20",
+  // "clauses/match > Match6 - Match named paths scenarios|16",
+  // "clauses/match > Match6 - Match named paths scenarios|19",
+  // "clauses/match > Match6 - Match named paths scenarios|20",
   "clauses/match > Match6 - Match named paths scenarios|21:1",
   "clauses/match > Match6 - Match named paths scenarios|21:10",
   "clauses/match > Match6 - Match named paths scenarios|21:11",
