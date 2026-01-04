@@ -2,8 +2,8 @@
 
 ## Current Status (vs Neo4j 3.5 Baseline)
 - **Target**: 2703 tests (what Neo4j 3.5 passes)
-- **Passing**: 2313 tests (85.6% of target)
-- **Failing**: 390 tests (to be fixed)
+- **Passing**: 1262 tests (46.7% of target)
+- **Failing**: 1422 tests (to be fixed)
 - **Not in baseline**: 19 tests (parser edge cases)
 
 ### What This Means
@@ -24,12 +24,6 @@ The workflow is simple:
 6. **Update this document**
 7. **Commit and push**
 
-
-### Recently Fixed Complex Tests
-
-| Test | Solution |
-|------|----------|
-| `Match4\|4` | Implemented phase-based execution in executor.ts. Fixed binary expressions with aggregates (`[a] + collect(n) + [b]`), collect() for node objects, and increased default maxHops to 50 for variable-length paths. |
 
 ### Example
 
