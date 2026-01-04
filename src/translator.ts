@@ -390,6 +390,14 @@ export class Translator {
       if (existingVar && existingVar.type === "path") {
         throw new Error(`VariableAlreadyBound: Variable \`${node.variable}\` already declared as a path`);
       }
+      
+      // Check if variable is bound to a non-node value from WITH clause
+      // e.g., WITH true AS n MATCH (n) should error because n is a boolean, not a node
+      const withAliases = (this.ctx as any).withAliases as Map<string, Expression> | undefined;
+      if (withAliases && withAliases.has(node.variable)) {
+        throw new Error(`Type mismatch: expected Node but was Boolean`);
+      }
+      
       this.ctx.variables.set(node.variable, { type: "node", alias });
     } else {
       // Track anonymous node patterns so they can be included in FROM clause
