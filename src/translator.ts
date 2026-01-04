@@ -264,6 +264,10 @@ export class Translator {
     // MATCH doesn't produce standalone statements - it sets up context for RETURN/SET/DELETE
     // The actual SELECT is generated when we encounter RETURN
 
+    // Track clause index for distinguishing patterns from different MATCH/OPTIONAL MATCH clauses
+    const clauseIndex = (this.ctx as any).matchClauseCounter || 0;
+    (this.ctx as any).matchClauseCounter = clauseIndex + 1;
+
     // Handle path expressions FIRST (e.g., p = (a)-[r]->(b))
     // This ensures path variables are registered before we check for conflicts with node patterns
     if (clause.pathExpressions) {
@@ -274,7 +278,7 @@ export class Translator {
 
     for (const pattern of clause.patterns) {
       if (this.isRelationshipPattern(pattern)) {
-        this.registerRelationshipPattern(pattern, optional);
+        this.registerRelationshipPattern(pattern, optional, clauseIndex);
       } else {
         this.registerNodePattern(pattern, optional);
       }
@@ -487,7 +491,7 @@ export class Translator {
     return alias;
   }
 
-  private registerRelationshipPattern(rel: RelationshipPattern, optional: boolean = false): void {
+  private registerRelationshipPattern(rel: RelationshipPattern, optional: boolean = false, clauseIndex?: number): void {
     // Check if source node is already registered (for chained patterns or multi-MATCH)
     let sourceAlias: string;
     let sourceIsNew = false;
@@ -661,6 +665,10 @@ export class Translator {
       maxHops: rel.edge.maxHops,
       // If edge is bound, store original pattern info for constraint generation
       boundEdgeOriginalPattern,
+      // Track if target node has a label predicate (for DISTINCT optimization)
+      targetHasLabel: !!rel.target.label,
+      // Track which MATCH/OPTIONAL MATCH clause this pattern belongs to
+      clauseIndex,
     });
 
     // Track the last anonymous target for chained patterns
@@ -1050,6 +1058,8 @@ export class Translator {
       isVariableLength?: boolean;
       minHops?: number;
       maxHops?: number;
+      targetHasLabel?: boolean;
+      edgeIsNew?: boolean;
     }> | undefined;
 
     // Check if any pattern is variable-length
@@ -1492,16 +1502,16 @@ export class Translator {
           const sourceIsFromRequiredMatch = sourceWasAlreadyAdded && !(this.ctx as any)[`optional_${relPattern.sourceAlias}`];
           const addedToOnClause = isOptional && !targetIsOptional && sourceIsFromRequiredMatch;
           
-          if (!addedToOnClause) {
-            // Add WHERE condition - use (edge IS NULL OR edge.target = target) for optional patterns
-            // to allow NULL edges while filtering incomplete paths
-            if (isOptional) {
-              if (isUndirected) {
-                whereParts.push(`(${relPattern.edgeAlias}.id IS NULL OR ${relPattern.edgeAlias}.target_id = ${relPattern.targetAlias}.id OR ${relPattern.edgeAlias}.source_id = ${relPattern.targetAlias}.id)`);
-              } else {
-                whereParts.push(`(${relPattern.edgeAlias}.id IS NULL OR ${relPattern.edgeAlias}.${edgeColumn} = ${relPattern.targetAlias}.id)`);
-              }
-            } else {
+           if (!addedToOnClause) {
+             // Add WHERE condition - use (edge IS NULL OR edge.target = target) for optional patterns
+             // to allow NULL edges while filtering incomplete paths
+             if (isOptional) {
+               if (isUndirected) {
+                 whereParts.push(`(${relPattern.edgeAlias}.id IS NULL OR ${relPattern.edgeAlias}.target_id = ${relPattern.targetAlias}.id OR ${relPattern.edgeAlias}.source_id = ${relPattern.targetAlias}.id)`);
+               } else {
+                 whereParts.push(`(${relPattern.edgeAlias}.id IS NULL OR ${relPattern.edgeAlias}.${edgeColumn} = ${relPattern.targetAlias}.id)`);
+               }
+             } else {
               if (isUndirected) {
                 whereParts.push(`(${relPattern.edgeAlias}.target_id = ${relPattern.targetAlias}.id OR ${relPattern.edgeAlias}.source_id = ${relPattern.targetAlias}.id)`);
               } else {
@@ -1630,15 +1640,15 @@ export class Translator {
               if (edge1Alias === edge2Alias) continue;
               
               const edge1Optional = relPatterns[edge1Idx].optional;
-              const edge2Optional = relPatterns[edge2Idx].optional;
-              
-              // For non-optional edges, require distinct IDs
-              // For optional edges, allow NULL (edge not matched) OR distinct
-              if (edge1Optional || edge2Optional) {
-                whereParts.push(`(${edge1Alias}.id IS NULL OR ${edge2Alias}.id IS NULL OR ${edge1Alias}.id <> ${edge2Alias}.id)`);
-              } else {
-                whereParts.push(`${edge1Alias}.id <> ${edge2Alias}.id`);
-              }
+               const edge2Optional = relPatterns[edge2Idx].optional;
+               
+               // For non-optional edges, require distinct IDs
+               // For optional edges, allow NULL (edge not matched) OR distinct
+               if (edge1Optional || edge2Optional) {
+                 whereParts.push(`(${edge1Alias}.id IS NULL OR ${edge2Alias}.id IS NULL OR ${edge1Alias}.id <> ${edge2Alias}.id)`);
+               } else {
+                 whereParts.push(`${edge1Alias}.id <> ${edge2Alias}.id`);
+               }
             }
           }
         }
@@ -1869,9 +1879,32 @@ export class Translator {
       whereParams.push(...conditionParams);
     }
 
+    // Check if we need DISTINCT for OPTIONAL MATCH with label predicate on target node
+    // This prevents row multiplication when the target doesn't exist (returns multiple NULL rows)
+    const optRelPatterns = (this.ctx as any).relationshipPatterns as Array<{
+      sourceAlias: string;
+      targetAlias: string;
+      edgeAlias: string;
+      edge: { type?: string; types?: string[]; properties?: Record<string, PropertyValue>; minHops?: number; maxHops?: number; direction?: "left" | "right" | "none" };
+      optional?: boolean;
+      sourceIsNew?: boolean;
+      targetIsNew?: boolean;
+      isVariableLength?: boolean;
+      minHops?: number;
+      maxHops?: number;
+      targetHasLabel?: boolean;
+      edgeIsNew?: boolean;
+    }> | undefined;
+    
+    const needsOptionalMatchDistinct = optRelPatterns?.some(p => 
+      p.optional && 
+      p.targetHasLabel && 
+      p.edgeIsNew
+    );
+
     // Build final SQL
-    // Apply DISTINCT from either the RETURN clause or preceding WITH
-    const distinctKeyword = (clause.distinct || withDistinct) ? "DISTINCT " : "";
+    // Apply DISTINCT from either the RETURN clause, preceding WITH, or OPTIONAL MATCH pattern
+    const distinctKeyword = (clause.distinct || withDistinct || needsOptionalMatchDistinct) ? "DISTINCT " : "";
     let sql = `SELECT ${distinctKeyword}${selectParts.join(", ")}`;
 
     if (fromParts.length > 0) {
@@ -3461,8 +3494,59 @@ export class Translator {
         // Users access id/labels/type via id(), labels(), type() functions
         // Return NULL if the node/edge is NULL (OPTIONAL MATCH case)
         if (varInfo.type === "edge") {
+          // For OPTIONAL MATCH with label predicate on target node, also check if target exists
+          const relPatterns = (this.ctx as any).relationshipPatterns as Array<{
+            sourceAlias: string;
+            targetAlias: string;
+            edgeAlias: string;
+            edge: { type?: string; types?: string[]; properties?: Record<string, PropertyValue>; minHops?: number; maxHops?: number; direction?: "left" | "right" | "none" };
+            optional?: boolean;
+            sourceIsNew?: boolean;
+            targetIsNew?: boolean;
+            isVariableLength?: boolean;
+            minHops?: number;
+            maxHops?: number;
+          }> | undefined;
+          
+          let nullCheck = `${varInfo.alias}.id IS NULL`;
+          
+          // Check if this edge is in a relationship pattern with a label predicate on target
+          if (relPatterns) {
+            const relPattern = relPatterns.find(p => p.edgeAlias === varInfo.alias);
+            if (relPattern) {
+              const targetPattern = (this.ctx as any)[`pattern_${relPattern.targetAlias}`];
+              // If target has a label predicate and is from optional match, check if target exists
+              if (targetPattern?.label && relPattern.optional) {
+                nullCheck = `(${nullCheck} OR ${relPattern.targetAlias}.id IS NULL)`;
+              }
+              
+              // For multi-hop OPTIONAL MATCH, if this edge is followed by other optional edges,
+              // check if all subsequent edges exist. If any edge in the chain is NULL, return NULL.
+              if (relPattern.optional) {
+                const currentIdx = relPatterns.findIndex(p => p.edgeAlias === varInfo.alias);
+                // Check subsequent edges in the pattern
+                for (let i = currentIdx + 1; i < relPatterns.length; i++) {
+                  const nextPattern = relPatterns[i];
+                  // Check if this is a connected edge (shares a node with previous)
+                  const isConnected = i === 0 || 
+                    relPatterns[i - 1].targetAlias === nextPattern.sourceAlias ||
+                    relPatterns[i - 1].sourceAlias === nextPattern.sourceAlias ||
+                    relPatterns[i - 1].targetAlias === nextPattern.targetAlias;
+                  
+                  if (isConnected && nextPattern.optional) {
+                    // This edge must exist for the chain to be valid
+                    nullCheck = `(${nullCheck} OR ${nextPattern.edgeAlias}.id IS NULL)`;
+                  } else if (!isConnected) {
+                    // Not connected, stop checking
+                    break;
+                  }
+                }
+              }
+            }
+          }
+          
           return {
-            sql: `CASE WHEN ${varInfo.alias}.id IS NULL THEN NULL ELSE json_set(COALESCE(${varInfo.alias}.properties, '{}'), '$._nf_id', ${varInfo.alias}.id) END`,
+            sql: `CASE WHEN ${nullCheck} THEN NULL ELSE json_set(COALESCE(${varInfo.alias}.properties, '{}'), '$._nf_id', ${varInfo.alias}.id) END`,
             tables,
             params,
           };
@@ -3478,13 +3562,67 @@ export class Translator {
         }
         // Node: return properties with hidden _nf_id for identity
         // Return NULL if the node is NULL (OPTIONAL MATCH case)
-        return {
-          sql: `CASE WHEN ${varInfo.alias}.id IS NULL THEN NULL ELSE json_set(COALESCE(${varInfo.alias}.properties, '{}'), '$._nf_id', ${varInfo.alias}.id) END`,
-          tables,
-          params,
-        };
+        if (varInfo.type === "node") {
+          const relPatterns = (this.ctx as any).relationshipPatterns as Array<{
+            sourceAlias: string;
+            targetAlias: string;
+            edgeAlias: string;
+            edge: { type?: string; types?: string[]; properties?: Record<string, PropertyValue>; minHops?: number; maxHops?: number; direction?: "left" | "right" | "none" };
+            optional?: boolean;
+            sourceIsNew?: boolean;
+            targetIsNew?: boolean;
+            isVariableLength?: boolean;
+            minHops?: number;
+            maxHops?: number;
+            clauseIndex?: number;
+          }> | undefined;
+          
+          let nullCheck = `${varInfo.alias}.id IS NULL`;
+          
+          // For nodes in multi-hop OPTIONAL MATCH patterns, check if all edges in the chain exist
+          // Only consider edges from the SAME clause (clauseIndex) - separate OPTIONAL MATCH clauses
+          // should not be treated as a chain
+          if (relPatterns) {
+            // Find patterns where this node is the target
+            const patternsWhereTarget = relPatterns.filter(p => p.targetAlias === varInfo.alias);
+            
+            for (const pattern of patternsWhereTarget) {
+              if (pattern.optional && pattern.clauseIndex !== undefined) {
+                const currentIdx = relPatterns.findIndex(p => p.edgeAlias === pattern.edgeAlias);
+                
+                // Check subsequent edges in the SAME clause
+                for (let i = currentIdx + 1; i < relPatterns.length; i++) {
+                  const nextPattern = relPatterns[i];
+                  
+                  // Skip if from a different clause
+                  if (nextPattern.clauseIndex !== pattern.clauseIndex) {
+                    break; // Different clause, stop checking
+                  }
+                  
+                  // Check if this is a connected edge (shares the previous node as source)
+                  const prevPattern = relPatterns[i - 1];
+                  const isConnected = prevPattern.targetAlias === nextPattern.sourceAlias;
+                  
+                  if (isConnected && nextPattern.optional) {
+                    // This edge must exist for the chain to be valid
+                    nullCheck = `(${nullCheck} OR ${nextPattern.edgeAlias}.id IS NULL)`;
+                  } else if (!isConnected) {
+                    // Not connected, stop checking
+                    break;
+                  }
+                }
+              }
+            }
+          }
+          
+          return {
+            sql: `CASE WHEN ${nullCheck} THEN NULL ELSE json_set(COALESCE(${varInfo.alias}.properties, '{}'), '$._nf_id', ${varInfo.alias}.id) END`,
+            tables,
+            params,
+          };
+        }
       }
-
+      
       case "property": {
         const varInfo = this.ctx.variables.get(expr.variable!);
         if (!varInfo) {

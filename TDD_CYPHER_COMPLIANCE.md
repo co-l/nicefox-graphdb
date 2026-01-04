@@ -14,6 +14,8 @@ We only run tests that Neo4j 3.5 actually passes. This gives us a realistic, ach
 
 ## Recent Fixes
 - **Match7-24**: Fixed self-loop matching in OPTIONAL MATCH - undirected patterns `(a)-[r]-(a)` now correctly return self-loops once instead of twice. The fix adds a NOT condition to prevent duplicate matches when `source_id = target_id`.
+- **Match7-28**: Fixed OPTIONAL MATCH with inline label predicate - when the target node with a specific label doesn't exist, the query now correctly returns 1 row with NULL instead of multiple rows. The fix adds `DISTINCT` to the SELECT when there's an OPTIONAL MATCH with a label predicate on a new edge's target node, preventing row multiplication from multiple edges that don't match the label.
+- **Match7-8**: Fixed multi-hop OPTIONAL MATCH - for a chain like `(a)-->(b)-->(c)`, if the intermediate node b is found but there's no edge from b to c, the query now correctly returns NULL for b instead of the node. The fix adds clause boundary tracking and checks if all edges in a connected optional chain exist before returning intermediate nodes. Separate OPTIONAL MATCH clauses are correctly treated as independent patterns.
 
 ## TDD Workflow
 
