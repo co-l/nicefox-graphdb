@@ -44,7 +44,8 @@ export interface TranslationResult {
 
 export interface TranslationContext {
   // Maps Cypher variable names to SQL table aliases
-  variables: Map<string, { type: "node" | "edge" | "path" | "varLengthEdge"; alias: string; pathCteName?: string }>;
+  // For nodes created via MERGE/CREATE, `id` stores the actual database UUID
+  variables: Map<string, { type: "node" | "edge" | "path" | "varLengthEdge"; alias: string; pathCteName?: string; id?: string }>;
   // Parameter values provided by the user
   paramValues: Record<string, unknown>;
   // Counter for generating unique aliases
@@ -197,7 +198,8 @@ export class Translator {
         if (rel.source.label || rel.source.properties) {
           throw new Error(`Variable \`${rel.source.variable}\` already declared`);
         }
-        sourceId = existing.alias;
+        // Use the actual ID if available (from MERGE), otherwise use alias (from CREATE)
+        sourceId = existing.id || existing.alias;
       } else {
         // Variable not found but has a label - create new node
         const sourceStmt = this.translateCreateNode(rel.source);
@@ -221,7 +223,8 @@ export class Translator {
         if (rel.target.label || rel.target.properties) {
           throw new Error(`Variable \`${rel.target.variable}\` already declared`);
         }
-        targetId = existing.alias;
+        // Use the actual ID if available (from MERGE), otherwise use alias (from CREATE)
+        targetId = existing.id || existing.alias;
       } else {
         // Variable not found but has a label - create new node
         const targetStmt = this.translateCreateNode(rel.target);
@@ -744,8 +747,11 @@ export class Translator {
     }
 
     const id = this.generateId();
+    // Use a proper table alias (n0, n1, etc.) for SQL, not the UUID
+    // But also store the actual ID for edge creation
+    const alias = `n${this.ctx.aliasCounter++}`;
     if (node.variable) {
-      this.ctx.variables.set(node.variable, { type: "node", alias: id });
+      this.ctx.variables.set(node.variable, { type: "node", alias, id });
     }
 
     // Normalize label to JSON array for storage
