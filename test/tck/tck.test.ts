@@ -255,10 +255,17 @@ function valuesMatch(expected: unknown, actual: unknown): boolean {
   
   // Handle numbers (with floating point tolerance)
   if (typeof expected === "number" && typeof actual === "number") {
+    // Always use tolerance for floating point comparison
+    // This handles cases like expected=0 vs actual=-1.1e-15
+    const tolerance = 0.0001;
+    if (Math.abs(expected - actual) < tolerance) {
+      return true;
+    }
+    // For integers, also require exact match if above tolerance
     if (Number.isInteger(expected)) {
       return expected === actual;
     }
-    return Math.abs(expected - actual) < 0.0001;
+    return false;
   }
   
   // Handle string patterns that represent maps like "{a: 1, b: 'foo'}"

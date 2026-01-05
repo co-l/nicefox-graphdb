@@ -541,6 +541,18 @@ export class Executor {
         }
       }
       
+      // Check if MATCH after a WITH with aggregates - needs phase boundary
+      // This handles patterns like:
+      //   MATCH ... WITH me, count(...) AS H1, you MATCH ... RETURN sum(... H1 ...)
+      // The second MATCH needs to be in a new phase to properly use the aggregated H1 value
+      if (clause.type === "MATCH" && i > 0 && aggregateVariables.size > 0) {
+        // Check if previous clause is WITH
+        const prevClause = clauses[i - 1];
+        if (prevClause.type === "WITH") {
+          needsNewPhase = true;
+        }
+      }
+      
       // Check if OPTIONAL_MATCH after a WITH that followed only OPTIONAL_MATCH (no regular MATCH)
       // This pattern needs phased execution for proper OPTIONAL MATCH null semantics
       // Example: OPTIONAL MATCH (a) WITH a OPTIONAL MATCH (a)-->(b) RETURN b
@@ -1226,33 +1238,67 @@ export class Executor {
   ): PhaseContext {
     const newContext = cloneContext(context);
     
-    // Check for aggregates - they collapse all rows into one
+    // Check for aggregates - they collapse rows by grouping keys
     const hasAggregate = clause.items.some(item => 
       this.expressionHasAggregate(item.expression)
     );
     
     if (hasAggregate) {
-      // Aggregate mode: collect values across all rows, produce single output row
-      const outputRow = new Map<string, unknown>();
+      // Aggregate mode with grouping: group by non-aggregate expressions
+      // For each unique combination of grouping keys, compute aggregates
+      
+      // Identify grouping keys (non-aggregate expressions) and aggregate expressions
+      const groupingItems: { alias: string; expression: Expression }[] = [];
+      const aggregateItems: { alias: string; expression: Expression }[] = [];
       
       for (const item of clause.items) {
         const alias = item.alias || this.getExpressionName(item.expression);
-        
         if (this.expressionHasAggregate(item.expression)) {
-          // Evaluate aggregate across all rows
-          const value = this.evaluateAggregateExpression(item.expression, context.rows, params);
-          outputRow.set(alias, value);
-          newContext.values.set(alias, value);
+          aggregateItems.push({ alias, expression: item.expression });
         } else {
-          // Non-aggregate: take from first row (for grouping key)
-          if (context.rows.length > 0) {
-            const value = this.evaluateExpressionInRow(item.expression, context.rows[0], params);
-            outputRow.set(alias, value);
-          }
+          groupingItems.push({ alias, expression: item.expression });
         }
       }
       
-      newContext.rows = [outputRow];
+      // Group rows by grouping key values
+      const groups = new Map<string, Array<Map<string, unknown>>>();
+      
+      for (const row of context.rows) {
+        // Compute the grouping key (JSON string of grouping values)
+        const keyValues: Record<string, unknown> = {};
+        for (const { alias, expression } of groupingItems) {
+          keyValues[alias] = this.evaluateExpressionInRow(expression, row, params);
+        }
+        const groupKey = JSON.stringify(keyValues);
+        
+        if (!groups.has(groupKey)) {
+          groups.set(groupKey, []);
+        }
+        groups.get(groupKey)!.push(row);
+      }
+      
+      // For each group, compute aggregates and produce output row
+      const outputRows: Array<Map<string, unknown>> = [];
+      
+      for (const [groupKey, groupRows] of groups) {
+        const outputRow = new Map<string, unknown>();
+        
+        // Add grouping values
+        const groupKeyValues = JSON.parse(groupKey);
+        for (const alias of Object.keys(groupKeyValues)) {
+          outputRow.set(alias, groupKeyValues[alias]);
+        }
+        
+        // Compute aggregates for this group
+        for (const { alias, expression } of aggregateItems) {
+          const value = this.evaluateAggregateExpression(expression, groupRows, params);
+          outputRow.set(alias, value);
+        }
+        
+        outputRows.push(outputRow);
+      }
+      
+      newContext.rows = outputRows;
     } else {
       // Non-aggregate mode: transform each row
       const newRows: Array<Map<string, unknown>> = [];
@@ -1442,9 +1488,14 @@ export class Executor {
     const newRows: Array<Map<string, unknown>> = [];
     
     if (boundVars.size > 0) {
-      // Execute match for each input row individually
+      // For complex patterns (multi-hop, anonymous nodes), use SQL translation with 
+      // constraints for bound variables. This handles patterns like:
+      // WITH me, you MATCH (me)-[r1:ATE]->()<-[r2:ATE]-(you) 
+      // where me and you are bound but the middle node is new.
+      
+      // Execute match for each input row using SQL with bound variable constraints
       for (const inputRow of context.rows) {
-        const matchResults = this.executeMatchForRow(clause, inputRow, boundVars, introducedVars, params);
+        const matchResults = this.executeMatchWithSqlForRow(clause, inputRow, boundVars, introducedVars, params);
         
         if (matchResults.length > 0) {
           for (const matchResult of matchResults) {
@@ -1619,6 +1670,106 @@ export class Executor {
     }
     
     return results;
+  }
+
+  /**
+   * Execute a MATCH clause for a single input row using SQL translation.
+   * This handles complex patterns (multi-hop, anonymous nodes) by:
+   * 1. Translating the MATCH to SQL
+   * 2. Adding WHERE constraints for bound variables (matching by node ID)
+   * 3. Executing and returning results
+   */
+  private executeMatchWithSqlForRow(
+    clause: MatchClause,
+    inputRow: Map<string, unknown>,
+    boundVars: Set<string>,
+    introducedVars: Set<string>,
+    params: Record<string, unknown>
+  ): Array<Map<string, unknown>> {
+    // Build a MATCH + RETURN query for all pattern variables
+    const matchQuery: Query = {
+      clauses: [
+        clause,
+        {
+          type: "RETURN" as const,
+          items: this.buildReturnItemsForMatch(clause),
+        },
+      ],
+    };
+    
+    // Translate to SQL
+    const translator = new Translator(params);
+    const translation = translator.translate(matchQuery);
+    
+    if (translation.statements.length === 0) {
+      return [];
+    }
+    
+    // For each bound variable, we need to add a WHERE constraint
+    // to match the specific node ID from the input row
+    const stmt = translation.statements[0];
+    let sql = stmt.sql;
+    const sqlParams = [...stmt.params];
+    
+    // Build WHERE constraints for bound variables
+    // We need to constrain node variables by their _nf_id
+    for (const varName of boundVars) {
+      const value = inputRow.get(varName);
+      const nodeId = this.extractNodeId(value);
+      
+      if (!nodeId) continue;
+      
+      // The translator uses table aliases like n0, n1, etc.
+      // We need to find the alias for this variable
+      // The translator generates: SELECT ... FROM nodes n0 ... WHERE ...
+      // Variable mappings are internal to translator, so we use a different approach:
+      // Add a JSON condition that matches the _nf_id in the output
+      
+      // Instead of modifying the SQL directly (which is fragile), 
+      // we'll filter the results after execution
+    }
+    
+    // Execute the SQL query
+    const result = this.db.execute(sql, sqlParams);
+    
+    // Filter results to only include rows where bound variables match
+    const matchedResults: Array<Map<string, unknown>> = [];
+    
+    for (const sqlRow of result.rows) {
+      // Check if all bound variables match their expected values
+      let matches = true;
+      
+      for (const varName of boundVars) {
+        const expectedValue = inputRow.get(varName);
+        const expectedId = this.extractNodeId(expectedValue);
+        
+        if (!expectedId) continue;
+        
+        // Get the actual value from SQL result
+        const actualValue = sqlRow[varName];
+        const actualId = this.extractNodeId(actualValue);
+        
+        if (actualId !== expectedId) {
+          matches = false;
+          break;
+        }
+      }
+      
+      if (matches) {
+        const matchRow = new Map<string, unknown>();
+        
+        // Add all introduced variables to the result
+        for (const varName of introducedVars) {
+          if (varName in sqlRow) {
+            matchRow.set(varName, sqlRow[varName]);
+          }
+        }
+        
+        matchedResults.push(matchRow);
+      }
+    }
+    
+    return matchedResults;
   }
 
   /**
@@ -1870,26 +2021,61 @@ export class Executor {
     );
     
     if (hasAggregate) {
-      // Aggregate mode: collapse all rows into one
-      const outputRow = new Map<string, unknown>();
+      // Aggregate mode with grouping: group by non-aggregate expressions
+      // For each unique combination of grouping keys, compute aggregates
+      
+      // Identify grouping keys (non-aggregate expressions) and aggregate expressions
+      const groupingItems: { alias: string; expression: Expression }[] = [];
+      const aggregateItems: { alias: string; expression: Expression }[] = [];
       
       for (const item of clause.items) {
         const alias = item.alias || this.getExpressionName(item.expression);
-        
         if (this.expressionHasAggregate(item.expression)) {
-          // Evaluate aggregate across all rows
-          const value = this.evaluateAggregateExpression(item.expression, context.rows, params);
-          outputRow.set(alias, value);
+          aggregateItems.push({ alias, expression: item.expression });
         } else {
-          // Non-aggregate: take from first row (grouping key)
-          if (context.rows.length > 0) {
-            const value = this.evaluateExpressionInRow(item.expression, context.rows[0], params);
-            outputRow.set(alias, value);
-          }
+          groupingItems.push({ alias, expression: item.expression });
         }
       }
       
-      newContext.rows = [outputRow];
+      // Group rows by grouping key values
+      const groups = new Map<string, Array<Map<string, unknown>>>();
+      
+      for (const row of context.rows) {
+        // Compute the grouping key (JSON string of grouping values)
+        const keyValues: Record<string, unknown> = {};
+        for (const { alias, expression } of groupingItems) {
+          keyValues[alias] = this.evaluateExpressionInRow(expression, row, params);
+        }
+        const groupKey = JSON.stringify(keyValues);
+        
+        if (!groups.has(groupKey)) {
+          groups.set(groupKey, []);
+        }
+        groups.get(groupKey)!.push(row);
+      }
+      
+      // For each group, compute aggregates and produce output row
+      const outputRows: Array<Map<string, unknown>> = [];
+      
+      for (const [groupKey, groupRows] of groups) {
+        const outputRow = new Map<string, unknown>();
+        
+        // Add grouping values
+        const groupKeyValues = JSON.parse(groupKey);
+        for (const alias of Object.keys(groupKeyValues)) {
+          outputRow.set(alias, groupKeyValues[alias]);
+        }
+        
+        // Compute aggregates for this group
+        for (const { alias, expression } of aggregateItems) {
+          const value = this.evaluateAggregateExpression(expression, groupRows, params);
+          outputRow.set(alias, value);
+        }
+        
+        outputRows.push(outputRow);
+      }
+      
+      newContext.rows = outputRows;
     } else {
       // Non-aggregate mode: transform each row
       const newRows: Array<Map<string, unknown>> = [];
@@ -2232,6 +2418,50 @@ export class Executor {
         return null;
       }
       
+      // Math functions
+      case "ABS": {
+        if (args.length === 0) return null;
+        const value = this.evaluateExpressionInRow(args[0], row, params);
+        if (typeof value !== "number") return null;
+        return Math.abs(value);
+      }
+      
+      case "CEIL":
+      case "CEILING": {
+        if (args.length === 0) return null;
+        const value = this.evaluateExpressionInRow(args[0], row, params);
+        if (typeof value !== "number") return null;
+        return Math.ceil(value);
+      }
+      
+      case "FLOOR": {
+        if (args.length === 0) return null;
+        const value = this.evaluateExpressionInRow(args[0], row, params);
+        if (typeof value !== "number") return null;
+        return Math.floor(value);
+      }
+      
+      case "ROUND": {
+        if (args.length === 0) return null;
+        const value = this.evaluateExpressionInRow(args[0], row, params);
+        if (typeof value !== "number") return null;
+        return Math.round(value);
+      }
+      
+      case "SIGN": {
+        if (args.length === 0) return null;
+        const value = this.evaluateExpressionInRow(args[0], row, params);
+        if (typeof value !== "number") return null;
+        return Math.sign(value);
+      }
+      
+      case "SQRT": {
+        if (args.length === 0) return null;
+        const value = this.evaluateExpressionInRow(args[0], row, params);
+        if (typeof value !== "number") return null;
+        return Math.sqrt(value);
+      }
+      
       default:
         return null;
     }
@@ -2463,7 +2693,8 @@ export class Executor {
     return context.rows.map(row => {
       const result: Record<string, unknown> = {};
       for (const [key, value] of row) {
-        result[key] = value;
+        // Parse JSON strings to objects (nodes/edges are often stored as JSON strings)
+        result[key] = this.deepParseJson(value);
       }
       return result;
     });
