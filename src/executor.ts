@@ -375,27 +375,43 @@ export class Executor {
    * However, you CAN use already-bound variables in:
    * - Relationship MERGE endpoints: MATCH (a), (b) MERGE (a)-[:REL]->(b) is valid
    * - Subsequent MERGE clauses: MERGE (c) MERGE (c) is valid (second one just matches)
+   * 
+   * Additionally: you cannot impose new predicates (labels/properties) on a variable
+   * that is already bound. E.g., CREATE (a:Foo) MERGE (a)-[:R]->(a:Bar) is invalid
+   * because it tries to impose label :Bar on variable 'a' which is already bound.
    */
   private validateMergeVariables(query: Query): void {
     // Track variables bound by MATCH clauses (not CREATE/MERGE)
     const matchBoundVariables = new Set<string>();
+    // Track ALL bound variables (MATCH, CREATE, MERGE) for label/property conflict detection
+    const allBoundVariables = new Set<string>();
     
     for (const clause of query.clauses) {
       if (clause.type === "MATCH" || clause.type === "OPTIONAL_MATCH") {
         // Collect all variables bound by MATCH
         for (const pattern of clause.patterns) {
           this.collectPatternVariables(pattern, matchBoundVariables);
+          this.collectPatternVariables(pattern, allBoundVariables);
+        }
+      } else if (clause.type === "CREATE") {
+        // Collect variables bound by CREATE (for label/property conflict detection)
+        for (const pattern of clause.patterns) {
+          this.collectPatternVariables(pattern, allBoundVariables);
         }
       } else if (clause.type === "MERGE") {
         // Check if MERGE tries to use a MATCH-bound variable as a standalone node pattern
         for (const pattern of clause.patterns) {
           this.checkMergePatternForBoundVariables(pattern, matchBoundVariables);
+          // Also check for imposing new predicates on any bound variable
+          this.checkMergePatternForLabelConflicts(pattern, allBoundVariables);
+        }
+        // Add MERGE variables to allBoundVariables for subsequent clauses
+        for (const pattern of clause.patterns) {
+          this.collectPatternVariables(pattern, allBoundVariables);
         }
         // Note: We don't add MERGE variables to matchBoundVariables
         // because MERGE (c) followed by MERGE (c) is valid
       }
-      // Note: We don't track CREATE variables either - the semantics of
-      // CREATE (a) MERGE (a) are different but also not an error
     }
   }
   
@@ -440,6 +456,28 @@ export class Executor {
         throw new Error(`Cannot merge node using variable '${nodePattern.variable}' that is already bound`);
       }
     }
+  }
+  
+  /**
+   * Check if a MERGE pattern tries to impose new labels/properties on an already-bound variable.
+   * E.g., CREATE (a:Foo) MERGE (a)-[:R]->(a:Bar) is invalid because :Bar conflicts with :Foo
+   */
+  private checkMergePatternForLabelConflicts(pattern: NodePattern | RelationshipPattern, boundVariables: Set<string>): void {
+    if (this.isRelationshipPattern(pattern)) {
+      // Check source node - if variable is bound and has label/properties, that's a conflict
+      if (pattern.source?.variable && boundVariables.has(pattern.source.variable)) {
+        if (pattern.source.label || (pattern.source.properties && Object.keys(pattern.source.properties).length > 0)) {
+          throw new Error(`Variable \`${pattern.source.variable}\` already declared`);
+        }
+      }
+      // Check target node - if variable is bound and has label/properties, that's a conflict
+      if (pattern.target?.variable && boundVariables.has(pattern.target.variable)) {
+        if (pattern.target.label || (pattern.target.properties && Object.keys(pattern.target.properties).length > 0)) {
+          throw new Error(`Variable \`${pattern.target.variable}\` already declared`);
+        }
+      }
+    }
+    // For simple node patterns, the other check already handles it
   }
 
   /**
