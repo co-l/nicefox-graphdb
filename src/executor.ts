@@ -7408,6 +7408,12 @@ export class Executor {
             // Use the captured property value
             resultRow[alias] = capturedValues[variable];
           } else {
+            // Check if this variable was deleted
+            const deletedVariables = allDeletedVariables[i] || new Set();
+            if (deletedVariables.has(variable)) {
+              throw new Error(`EntityNotFound: The deleted entity ${variable} no longer exists in the graph.`);
+            }
+            
             const nodeId = resolvedIds[variable];
             
             if (nodeId) {
@@ -7476,6 +7482,13 @@ export class Executor {
           const args = item.expression.args;
           if (args && args.length > 0 && args[0].type === "variable") {
             const variable = args[0].variable!;
+            
+            // Check if this variable was deleted
+            const deletedVariables = allDeletedVariables[i] || new Set();
+            if (deletedVariables.has(variable)) {
+              throw new Error(`EntityNotFound: The deleted entity ${variable} no longer exists in the graph.`);
+            }
+            
             const nodeId = resolvedIds[variable];
             if (nodeId) {
               resultRow[alias] = nodeId;
@@ -7486,6 +7499,13 @@ export class Executor {
           const args = item.expression.args;
           if (args && args.length > 0 && args[0].type === "variable") {
             const variable = args[0].variable!;
+            
+            // Check if this variable was deleted
+            const deletedVariables = allDeletedVariables[i] || new Set();
+            if (deletedVariables.has(variable)) {
+              throw new Error(`EntityNotFound: The deleted entity ${variable} no longer exists in the graph.`);
+            }
+            
             const nodeId = resolvedIds[variable];
             if (nodeId) {
               const nodeResult = this.db.execute(
@@ -7515,6 +7535,12 @@ export class Executor {
           const args = item.expression.args;
           if (args && args.length > 0 && args[0].type === "variable") {
             const variable = args[0].variable!;
+            
+            // Check if this variable was deleted (and not captured)
+            const deletedVariables = allDeletedVariables[i] || new Set();
+            if (deletedVariables.has(variable) && !capturedEdgeTypes[variable]) {
+              throw new Error(`EntityNotFound: The deleted entity ${variable} no longer exists in the graph.`);
+            }
             
             // First check if we have a captured edge type (for deleted edges)
             if (capturedEdgeTypes[variable]) {

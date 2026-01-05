@@ -352,7 +352,7 @@ export const FAILING_TESTS = new Set<string>([
   // "clauses/return-orderby > ReturnOrderBy6 - Aggregation expressions in order by|4",
   // "clauses/return > Return1 - Return single variable (correct return of values according to their type)|2",
   // "clauses/return > Return2 - Return single expression (correctly projecting an expression)|15",
-  "clauses/return > Return2 - Return single expression (correctly projecting an expression)|16",
+  // "clauses/return > Return2 - Return single expression (correctly projecting an expression)|16",
   "clauses/return > Return2 - Return single expression (correctly projecting an expression)|17",
   // "clauses/return > Return2 - Return single expression (correctly projecting an expression)|18",
   // "clauses/return > Return4 - Column renaming|10", // Fixed: duplicate column name detection
