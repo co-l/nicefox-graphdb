@@ -359,7 +359,7 @@ export const FAILING_TESTS = new Set<string>([
   // "clauses/return > Return4 - Column renaming|11",
   // "clauses/return > Return4 - Column renaming|6",
   // "clauses/return > Return6 - Implicit grouping with aggregates|14",
-  "clauses/return > Return6 - Implicit grouping with aggregates|15",
+  // "clauses/return > Return6 - Implicit grouping with aggregates|15",
   "clauses/return > Return6 - Implicit grouping with aggregates|16",
   "clauses/return > Return6 - Implicit grouping with aggregates|6",
   // "clauses/return > Return7 - Return all variables|2",

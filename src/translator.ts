@@ -4101,6 +4101,10 @@ export class Translator {
         if (expr.functionName === "COUNT") {
           if (expr.args && expr.args.length > 0) {
             const arg = expr.args[0];
+            // Validate that the argument doesn't contain non-deterministic functions
+            if (this.containsNonDeterministicFunction(arg)) {
+              throw new Error(`SyntaxError: Can't use non-deterministic (random) functions inside of aggregate functions.`);
+            }
             const distinctKeyword = expr.distinct ? "DISTINCT " : "";
             
             // For count(DISTINCT n.property), we need to count distinct property values
@@ -4216,6 +4220,10 @@ export class Translator {
             expr.functionName === "MIN" || expr.functionName === "MAX") {
           if (expr.args && expr.args.length > 0) {
             const arg = expr.args[0];
+            // Validate that the argument doesn't contain non-deterministic functions
+            if (this.containsNonDeterministicFunction(arg)) {
+              throw new Error(`SyntaxError: Can't use non-deterministic (random) functions inside of aggregate functions.`);
+            }
             const distinctKeyword = expr.distinct ? "DISTINCT " : "";
             
             if (arg.type === "property") {
@@ -4296,6 +4304,10 @@ export class Translator {
           if (expr.args && expr.args.length >= 2) {
             const valueArg = expr.args[0];
             const percentileArg = expr.args[1];
+            // Validate that the argument doesn't contain non-deterministic functions
+            if (this.containsNonDeterministicFunction(valueArg)) {
+              throw new Error(`SyntaxError: Can't use non-deterministic (random) functions inside of aggregate functions.`);
+            }
             
             // Get the value expression (property access)
             let valueExpr: string;
@@ -4379,6 +4391,10 @@ END FROM (SELECT json_group_array(${valueExpr}) as sv))`,
         if (expr.functionName === "COLLECT") {
           if (expr.args && expr.args.length > 0) {
             const arg = expr.args[0];
+            // Validate that the argument doesn't contain non-deterministic functions
+            if (this.containsNonDeterministicFunction(arg)) {
+              throw new Error(`SyntaxError: Can't use non-deterministic (random) functions inside of aggregate functions.`);
+            }
             
             // For DISTINCT, SQLite doesn't support json_group_array(DISTINCT ...)
             // We use json() to parse a JSON array string built from GROUP_CONCAT(DISTINCT ...)
@@ -7028,6 +7044,31 @@ END FROM (SELECT json_group_array(${valueExpr}) as sv))`,
 
   private isParameterRef(value: PropertyValue): value is ParameterRef {
     return typeof value === "object" && value !== null && "type" in value && value.type === "parameter";
+  }
+
+  /**
+   * Check if an expression contains a non-deterministic function (RAND, TIMESTAMP, etc.)
+   */
+  private containsNonDeterministicFunction(expr: Expression): boolean {
+    if (expr.type === "function" && expr.functionName) {
+      const nonDeterministicFunctions = ["RAND", "TIMESTAMP"];
+      if (nonDeterministicFunctions.includes(expr.functionName.toUpperCase())) {
+        return true;
+      }
+      // Check if any argument contains a non-deterministic function
+      if (expr.args) {
+        return expr.args.some(arg => this.containsNonDeterministicFunction(arg));
+      }
+    }
+    // Check binary expressions
+    if (expr.type === "binary") {
+      return this.containsNonDeterministicFunction(expr.left!) || this.containsNonDeterministicFunction(expr.right!);
+    }
+    // Check unary expressions
+    if (expr.type === "unary" && expr.operand) {
+      return this.containsNonDeterministicFunction(expr.operand);
+    }
+    return false;
   }
 
   /**
