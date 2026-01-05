@@ -56,6 +56,18 @@ TCK_TEST_ALL=1 npm test
 # Find tests that now pass (extracts just the relevant output)
 npm run tck:check-fixed
 
+# List all failing tests by category
+npm run tck:failing
+
+# List only expected-error tests (tests where we should reject the query)
+npm run tck:failing -- --errors
+
+# Show detailed list with queries
+npm run tck:failing -- --errors --full
+
+# Filter by category
+npm run tck:failing -- --category merge
+
 # Test a specific TCK test with details
 npm run tck 'Delete4|1' -- -v --sql -f
 
@@ -131,7 +143,9 @@ These tests verify that our implementation correctly rejects invalid Cypher.
 
 ## Expected Error Tests Breakdown
 
-Of the 1297 failing tests, **~72 are expected-error tests** where we should reject the query but currently don't.
+Of the 1297 failing tests, **69 are expected-error tests** where we should reject the query but currently don't.
+
+To list them: `npm run tck:failing -- --errors`
 
 ### By Error Type
 

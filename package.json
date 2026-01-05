@@ -28,6 +28,7 @@
     "test:coverage": "vitest run --coverage",
     "dev": "tsx watch src/server.ts",
     "tck": "npx tsx test/tck/run-test.ts",
+    "tck:failing": "npx tsx test/tck/list-failing-tests.ts",
     "tck:check-fixed": "TCK_TEST_ALL=1 npm test 2>&1 | grep -A 50 'from FAILING_TESTS that now PASS'",
     "prepublishOnly": "npm run build"
   },

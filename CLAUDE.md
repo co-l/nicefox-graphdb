@@ -56,6 +56,17 @@ npm run tck 'Counting matches'     # Match by name
 npm run tck 'Match3' -- --list     # List all Match3 tests
 ```
 
+### List Failing Tests
+
+See all currently failing TCK tests for TDD workflow:
+
+```bash
+npm run tck:failing               # Summary by category
+npm run tck:failing -- --full     # Detailed list with queries
+npm run tck:failing -- --errors   # Only tests expecting errors
+npm run tck:failing -- --category match  # Filter by category
+```
+
 ## Next Implementation Priorities
 
 See `README.md` for the full support table. Priority candidates for implementation:
