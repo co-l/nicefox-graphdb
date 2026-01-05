@@ -6029,25 +6029,31 @@ END FROM (SELECT json_group_array(${valueExpr}) as sv))`,
         return this.translateInCondition(condition);
       }
 
-      case "listPredicate": {
-        // List predicate in WHERE clause - convert WhereCondition to Expression format
-        // and reuse the expression translator
-        const expr: Expression = {
-          type: "listPredicate",
-          predicateType: condition.predicateType,
-          variable: condition.variable,
-          listExpr: condition.listExpr,
-          filterCondition: condition.filterCondition,
-        };
-        const result = this.translateListPredicate(expr);
-        return {
-          sql: result.sql,
-          params: result.params,
-        };
-      }
+       case "listPredicate": {
+         // List predicate in WHERE clause - convert WhereCondition to Expression format
+         // and reuse the expression translator
+         const expr: Expression = {
+           type: "listPredicate",
+           predicateType: condition.predicateType,
+           variable: condition.variable,
+           listExpr: condition.listExpr,
+           filterCondition: condition.filterCondition,
+         };
+         const result = this.translateListPredicate(expr);
+         return {
+           sql: result.sql,
+           params: result.params,
+         };
+       }
 
-      default:
-        throw new Error(`Unknown condition type: ${condition.type}`);
+       case "patternMatch": {
+         // Pattern condition in WHERE clause: (a)-[:T]->(b)
+         // This is like EXISTS but without the EXISTS keyword
+         return this.translatePatternCondition(condition);
+       }
+
+       default:
+         throw new Error(`Unknown condition type: ${condition.type}`);
     }
   }
 
@@ -6120,10 +6126,149 @@ END FROM (SELECT json_group_array(${valueExpr}) as sv))`,
       sql = `${nodeInfo.alias}.id IS NOT NULL`;
     }
 
-    return { sql, params };
-  }
+     return { sql, params };
+   }
 
-  private translateInCondition(condition: WhereCondition): { sql: string; params: unknown[] } {
+   private translatePatternCondition(condition: WhereCondition): { sql: string; params: unknown[] } {
+     const patterns = condition.patterns;
+     if (!patterns || patterns.length === 0) {
+       throw new Error("Pattern condition must have patterns");
+     }
+
+     const params: unknown[] = [];
+     const conditions: string[] = [];
+
+     // Process each pattern in the chain
+     for (let i = 0; i < patterns.length; i++) {
+       const pattern = patterns[i];
+
+       if (this.isRelationshipPattern(pattern)) {
+         const rel = pattern as RelationshipPattern;
+         
+         // Get the source variable's info from context
+         const sourceVar = rel.source.variable;
+         const sourceInfo = sourceVar ? this.ctx.variables.get(sourceVar) : null;
+         
+         if (!sourceInfo) {
+           throw new Error(`Pattern condition references unknown variable: ${sourceVar}`);
+         }
+         
+         // Get or create info for the target variable
+         let targetInfo = rel.target.variable ? this.ctx.variables.get(rel.target.variable) : null;
+         
+         if (!rel.target.variable) {
+           // Anonymous target node - create a new alias for it
+           const targetAlias = `n${this.ctx.aliasCounter++}`;
+           this.ctx.variables.set(`_anon_${targetAlias}`, {
+             type: "node",
+             alias: targetAlias,
+           });
+           targetInfo = this.ctx.variables.get(`_anon_${targetAlias}`)!;
+         }
+         
+         if (!targetInfo) {
+           throw new Error(`Pattern condition references unknown target variable: ${rel.target.variable}`);
+         }
+         
+         // Handle relationship hops (e.g., [:R*2..5] or [:R*])
+         if (rel.edge.minHops !== undefined || rel.edge.maxHops !== undefined) {
+           // For variable-length relationships, use a recursive CTE
+           const minHops = rel.edge.minHops ?? 1;
+           const maxHops = rel.edge.maxHops ?? 10;
+           
+           // Build edge type filter - use literals in CTE to avoid parameter issues
+           let edgeTypeFilterBase = "";
+           let edgeTypeFilterRecursive = "";
+           
+           if (rel.edge.type) {
+             // Use literal for CTE
+             const escapedType = rel.edge.type.replace(/'/g, "''");
+             edgeTypeFilterBase = ` AND type = '${escapedType}'`;
+             edgeTypeFilterRecursive = ` AND type = '${escapedType}'`;
+           } else if (rel.edge.types && rel.edge.types.length > 0) {
+             const quotedTypes = rel.edge.types.map(t => `'${t.replace(/'/g, "''")}'`).join(", ");
+             edgeTypeFilterBase = ` AND type IN (${quotedTypes})`;
+             edgeTypeFilterRecursive = ` AND type IN (${quotedTypes})`;
+           }
+           
+           // Build the reachability subquery
+           const reachSql = `EXISTS (
+             WITH RECURSIVE var_length_path(source_id, target_id, hops) AS (
+               SELECT source_id, target_id, 1
+               FROM edges
+               WHERE source_id = ${sourceInfo.alias}.id${edgeTypeFilterBase}
+               UNION ALL
+               SELECT vlp.source_id, e.target_id, vlp.hops + 1
+               FROM var_length_path vlp
+               JOIN edges e ON vlp.target_id = e.source_id${edgeTypeFilterRecursive}
+               WHERE vlp.hops < ${maxHops}
+             )
+             SELECT 1
+             FROM var_length_path
+             WHERE target_id = ${targetInfo.alias}.id AND hops >= ${minHops}
+           )`;
+           
+           conditions.push(reachSql);
+         } else {
+           // Single-hop relationship
+           const edgeAlias = `e${this.ctx.aliasCounter++}`;
+           
+           if (rel.edge.direction === "left") {
+             conditions.push(`EXISTS (SELECT 1 FROM edges ${edgeAlias} WHERE ${edgeAlias}.target_id = ${sourceInfo.alias}.id AND ${edgeAlias}.source_id = ${targetInfo.alias}.id`);
+           } else {
+             conditions.push(`EXISTS (SELECT 1 FROM edges ${edgeAlias} WHERE ${edgeAlias}.source_id = ${sourceInfo.alias}.id AND ${edgeAlias}.target_id = ${targetInfo.alias}.id`);
+           }
+           
+           // Filter by edge type if specified
+           if (rel.edge.type) {
+             conditions[conditions.length - 1] += ` AND ${edgeAlias}.type = ?`;
+             params.push(rel.edge.type);
+           } else if (rel.edge.types && rel.edge.types.length > 0) {
+             const placeholders = rel.edge.types.map(() => "?").join(", ");
+             conditions[conditions.length - 1] += ` AND ${edgeAlias}.type IN (${placeholders})`;
+             params.push(...rel.edge.types);
+           }
+           
+           conditions[conditions.length - 1] += ")";
+         }
+         
+         // Check target labels if specified
+         if (rel.target.label) {
+           const labels = Array.isArray(rel.target.label) ? rel.target.label : [rel.target.label];
+           // Use EXISTS with json_each to check if label is in the array
+           const labelConditions = labels.map(l => 
+             `EXISTS(SELECT 1 FROM json_each(${targetInfo.alias}.label) WHERE value = '${l.replace(/'/g, "''")}')`
+           );
+           conditions.push(`(${labelConditions.join(" OR ")})`);
+         }
+       } else {
+         // Node pattern only
+         const node = pattern as NodePattern;
+         const nodeVar = node.variable;
+         const nodeInfo = nodeVar ? this.ctx.variables.get(nodeVar) : null;
+         
+         if (!nodeInfo) {
+           throw new Error(`Pattern condition references unknown variable: ${nodeVar}`);
+         }
+         
+         // Check labels if specified
+         if (node.label) {
+           const labels = Array.isArray(node.label) ? node.label : [node.label];
+           // Use EXISTS with json_each to check if label is in the array
+           const labelConditions = labels.map(l =>
+             `EXISTS(SELECT 1 FROM json_each(${nodeInfo.alias}.label) WHERE value = '${l.replace(/'/g, "''")}')`
+           );
+           conditions.push(`(${labelConditions.join(" OR ")})`);
+         }
+       }
+     }
+
+     // Combine all conditions
+     const sql = conditions.length > 0 ? `(${conditions.join(" AND ")})` : "1 = 1";
+     return { sql, params };
+   }
+
+   private translateInCondition(condition: WhereCondition): { sql: string; params: unknown[] } {
     const left = this.translateWhereExpression(condition.left!);
     const params = [...left.params];
     

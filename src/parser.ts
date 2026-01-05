@@ -74,14 +74,15 @@ export type PropertyValue =
   | PropertyValue[];
 
 export interface WhereCondition {
-  type: "comparison" | "and" | "or" | "not" | "contains" | "startsWith" | "endsWith" | "isNull" | "isNotNull" | "exists" | "in" | "listPredicate";
+  type: "comparison" | "and" | "or" | "not" | "contains" | "startsWith" | "endsWith" | "isNull" | "isNotNull" | "exists" | "in" | "listPredicate" | "patternMatch";
   left?: Expression;
   right?: Expression;
   operator?: "=" | "<>" | "<" | ">" | "<=" | ">=";
   conditions?: WhereCondition[];
   condition?: WhereCondition;
-  // For EXISTS pattern
+  // For EXISTS pattern and pattern conditions
   pattern?: NodePattern | RelationshipPattern;
+  patterns?: (NodePattern | RelationshipPattern)[]; // For pattern chains in WHERE
   // For IN operator - the list of values
   list?: Expression;
   // For list predicates (ALL, ANY, NONE, SINGLE)
@@ -1807,41 +1808,79 @@ export class Parser {
     return left;
   }
 
-  private parseNotCondition(): WhereCondition {
-    if (this.checkKeyword("NOT")) {
-      this.advance();
-      const condition = this.parseNotCondition();
-      return { type: "not", condition };
-    }
+   private parseNotCondition(): WhereCondition {
+     if (this.checkKeyword("NOT")) {
+       this.advance();
+       const condition = this.parseNotCondition();
+       return { type: "not", condition };
+     }
 
-    return this.parsePrimaryCondition();
-  }
+     return this.parsePrimaryCondition();
+   }
 
-  private parsePrimaryCondition(): WhereCondition {
-    // Handle EXISTS pattern
-    if (this.checkKeyword("EXISTS")) {
-      return this.parseExistsCondition();
-    }
+   /**
+    * Detect if we're looking at a pattern (e.g., (a)-[:R]->(b)).
+    * A pattern starts with ( and after the matching ), we expect - or <- (not a keyword like AND, OR, etc).
+    */
+   private isPatternStart(): boolean {
+     if (!this.check("LPAREN")) return false;
 
-    // Handle list predicates: ALL, ANY, NONE, SINGLE
-    const listPredicates = ["ALL", "ANY", "NONE", "SINGLE"];
-    if (this.peek().type === "KEYWORD" && listPredicates.includes(this.peek().value)) {
-      const nextToken = this.tokens[this.pos + 1];
-      if (nextToken && nextToken.type === "LPAREN") {
-        return this.parseListPredicateCondition();
-      }
-    }
+     // Find the matching closing paren
+     let depth = 0;
+     let pos = this.pos;
+     while (pos < this.tokens.length) {
+       const token = this.tokens[pos];
+       if (token.type === "LPAREN") depth++;
+       else if (token.type === "RPAREN") {
+         depth--;
+         if (depth === 0) {
+           // Check what comes after the closing paren
+           const nextPos = pos + 1;
+           if (nextPos < this.tokens.length) {
+             const nextToken = this.tokens[nextPos];
+             // A pattern is followed by - or <- (never a keyword)
+             return nextToken.type === "DASH" || nextToken.type === "ARROW_LEFT";
+           }
+           return false;
+         }
+       }
+       pos++;
+     }
+     return false;
+   }
 
-    // Handle parenthesized conditions
-    if (this.check("LPAREN")) {
-      this.advance(); // consume (
-      const condition = this.parseOrCondition(); // parse the inner condition
-      this.expect("RPAREN"); // consume )
-      return condition;
-    }
+   private parsePrimaryCondition(): WhereCondition {
+     // Handle EXISTS pattern
+     if (this.checkKeyword("EXISTS")) {
+       return this.parseExistsCondition();
+     }
 
-    return this.parseComparisonCondition();
-  }
+     // Handle list predicates: ALL, ANY, NONE, SINGLE
+     const listPredicates = ["ALL", "ANY", "NONE", "SINGLE"];
+     if (this.peek().type === "KEYWORD" && listPredicates.includes(this.peek().value)) {
+       const nextToken = this.tokens[this.pos + 1];
+       if (nextToken && nextToken.type === "LPAREN") {
+         return this.parseListPredicateCondition();
+       }
+     }
+
+     // Handle parenthesized conditions or patterns
+     if (this.check("LPAREN")) {
+       // Lookahead to determine if this is a pattern or a parenthesized condition
+       if (this.isPatternStart()) {
+         // Parse as pattern condition
+         const patterns = this.parsePatternChain();
+         return { type: "patternMatch", patterns };
+       }
+       // Otherwise parse as parenthesized condition
+       this.advance(); // consume (
+       const condition = this.parseOrCondition(); // parse the inner condition
+       this.expect("RPAREN"); // consume )
+       return condition;
+     }
+
+     return this.parseComparisonCondition();
+   }
 
   private parseListPredicateCondition(): WhereCondition {
     // Parse list predicate as a condition (for use in WHERE clause)
