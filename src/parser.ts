@@ -519,13 +519,38 @@ class Tokenizer {
         this.pos++;
         this.column++;
         const escaped = this.input[this.pos];
-        if (escaped === "n") value += "\n";
-        else if (escaped === "t") value += "\t";
-        else if (escaped === "\\") value += "\\";
-        else if (escaped === quote) value += quote;
-        else value += escaped;
-        this.pos++;
-        this.column++;
+        if (escaped === "n") { value += "\n"; this.pos++; this.column++; }
+        else if (escaped === "t") { value += "\t"; this.pos++; this.column++; }
+        else if (escaped === "r") { value += "\r"; this.pos++; this.column++; }
+        else if (escaped === "b") { value += "\b"; this.pos++; this.column++; }
+        else if (escaped === "f") { value += "\f"; this.pos++; this.column++; }
+        else if (escaped === "\\") { value += "\\"; this.pos++; this.column++; }
+        else if (escaped === quote) { value += quote; this.pos++; this.column++; }
+        else if (escaped === "u") {
+          // Unicode escape: \uXXXX (4 hex digits required)
+          this.pos++;
+          this.column++;
+          const hexStart = this.pos;
+          let hex = "";
+          for (let i = 0; i < 4; i++) {
+            if (this.pos >= this.input.length) {
+              throw new SyntaxError(`Invalid unicode escape sequence: incomplete \\u escape at position ${hexStart - 2}`);
+            }
+            const c = this.input[this.pos];
+            if (!/[0-9a-fA-F]/.test(c)) {
+              throw new SyntaxError(`Invalid unicode escape sequence: \\u${hex}${c}`);
+            }
+            hex += c;
+            this.pos++;
+            this.column++;
+          }
+          value += String.fromCharCode(parseInt(hex, 16));
+        }
+        else {
+          value += escaped;
+          this.pos++;
+          this.column++;
+        }
       } else {
         value += char;
         this.pos++;
