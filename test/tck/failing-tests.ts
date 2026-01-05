@@ -365,7 +365,7 @@ export const FAILING_TESTS = new Set<string>([
   // "clauses/return > Return7 - Return all variables|2",
   // "clauses/return-skip-limit > ReturnSkipLimit1 - Skip|10",
   // "clauses/return-skip-limit > ReturnSkipLimit1 - Skip|11", // Fixed: SKIP negative value validation
-  "clauses/return-skip-limit > ReturnSkipLimit1 - Skip|3",
+  "clauses/return-skip-limit > ReturnSkipLimit1 - Skip|3", // WITH...SKIP...WITH count(*) aggregation bug
   // "clauses/return-skip-limit > ReturnSkipLimit1 - Skip|5",
   // "clauses/return-skip-limit > ReturnSkipLimit1 - Skip|6",
   // "clauses/return-skip-limit > ReturnSkipLimit1 - Skip|7", // Fixed: SKIP negative value validation

@@ -670,7 +670,7 @@ describe("Parser", () => {
       const query = expectSuccess("MATCH (n:Person) RETURN n LIMIT 10");
       const returnClause = query.clauses[1] as ReturnClause;
 
-      expect(returnClause.limit).toBe(10);
+      expect(returnClause.limit).toEqual({ type: "literal", value: 10 });
     });
 
     it("parses RETURN COUNT(n) with alias and LIMIT", () => {
@@ -679,7 +679,7 @@ describe("Parser", () => {
 
       expect(returnClause.items[0].expression.functionName).toBe("COUNT");
       expect(returnClause.items[0].alias).toBe("total");
-      expect(returnClause.limit).toBe(1);
+      expect(returnClause.limit).toEqual({ type: "literal", value: 1 });
     });
 
     it("parses COUNT(*) - count all rows", () => {
@@ -743,22 +743,22 @@ describe("Parser", () => {
       const returnClause = query.clauses[1] as ReturnClause;
 
       expect(returnClause.orderBy).toHaveLength(1);
-      expect(returnClause.limit).toBe(10);
+      expect(returnClause.limit).toEqual({ type: "literal", value: 10 });
     });
 
     it("parses RETURN with SKIP", () => {
       const query = expectSuccess("MATCH (n:Person) RETURN n SKIP 5");
       const returnClause = query.clauses[1] as ReturnClause;
 
-      expect(returnClause.skip).toBe(5);
+      expect(returnClause.skip).toEqual({ type: "literal", value: 5 });
     });
 
     it("parses SKIP with LIMIT", () => {
       const query = expectSuccess("MATCH (n:Person) RETURN n SKIP 10 LIMIT 5");
       const returnClause = query.clauses[1] as ReturnClause;
 
-      expect(returnClause.skip).toBe(10);
-      expect(returnClause.limit).toBe(5);
+      expect(returnClause.skip).toEqual({ type: "literal", value: 10 });
+      expect(returnClause.limit).toEqual({ type: "literal", value: 5 });
     });
 
     it("parses ORDER BY with SKIP and LIMIT", () => {
@@ -766,8 +766,8 @@ describe("Parser", () => {
       const returnClause = query.clauses[1] as ReturnClause;
 
       expect(returnClause.orderBy).toHaveLength(1);
-      expect(returnClause.skip).toBe(10);
-      expect(returnClause.limit).toBe(5);
+      expect(returnClause.skip).toEqual({ type: "literal", value: 10 });
+      expect(returnClause.limit).toEqual({ type: "literal", value: 5 });
     });
 
     it("allows keywords as aliases", () => {
@@ -848,7 +848,7 @@ describe("Parser", () => {
 
       expect(returnClause.distinct).toBe(true);
       expect(returnClause.orderBy).toHaveLength(1);
-      expect(returnClause.limit).toBe(10);
+      expect(returnClause.limit).toEqual({ type: "literal", value: 10 });
     });
 
     it("parses RETURN without DISTINCT (distinct is undefined)", () => {
@@ -1235,7 +1235,7 @@ describe("Parser", () => {
       
       const withClause = query.clauses[1] as WithClause;
       expect(withClause.type).toBe("WITH");
-      expect(withClause.limit).toBe(10);
+      expect(withClause.limit).toEqual({ type: "literal", value: 10 });
     });
 
     it("parses WITH clause with SKIP", () => {
@@ -1243,7 +1243,7 @@ describe("Parser", () => {
       
       const withClause = query.clauses[1] as WithClause;
       expect(withClause.type).toBe("WITH");
-      expect(withClause.skip).toBe(5);
+      expect(withClause.skip).toEqual({ type: "literal", value: 5 });
     });
 
     it("parses WITH clause with ORDER BY, SKIP, and LIMIT", () => {
@@ -1251,8 +1251,8 @@ describe("Parser", () => {
       
       const withClause = query.clauses[1] as WithClause;
       expect(withClause.orderBy).toHaveLength(1);
-      expect(withClause.skip).toBe(5);
-      expect(withClause.limit).toBe(10);
+      expect(withClause.skip).toEqual({ type: "literal", value: 5 });
+      expect(withClause.limit).toEqual({ type: "literal", value: 10 });
     });
 
     it("parses WITH followed by MATCH (query chaining)", () => {

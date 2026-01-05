@@ -186,8 +186,7 @@ describe("Translator", () => {
     it("respects LIMIT clause", () => {
       const result = translateCypher("MATCH (n:Person) RETURN n LIMIT 10");
 
-      expect(result.statements[0].sql).toContain("LIMIT ?");
-      expect(result.statements[0].params).toContain(10);
+      expect(result.statements[0].sql).toContain("LIMIT 10");
     });
 
     it("handles COUNT function", () => {
@@ -233,17 +232,14 @@ describe("Translator", () => {
     it("generates OFFSET for SKIP", () => {
       const result = translateCypher("MATCH (n:Person) RETURN n SKIP 5");
 
-      expect(result.statements[0].sql).toContain("OFFSET");
-      expect(result.statements[0].params).toContain(5);
+      expect(result.statements[0].sql).toContain("OFFSET 5");
     });
 
     it("generates LIMIT and OFFSET for SKIP with LIMIT", () => {
       const result = translateCypher("MATCH (n:Person) RETURN n SKIP 10 LIMIT 5");
 
-      expect(result.statements[0].sql).toContain("LIMIT");
-      expect(result.statements[0].sql).toContain("OFFSET");
-      expect(result.statements[0].params).toContain(5);
-      expect(result.statements[0].params).toContain(10);
+      expect(result.statements[0].sql).toContain("LIMIT 5");
+      expect(result.statements[0].sql).toContain("OFFSET 10");
     });
 
     it("generates ORDER BY with SKIP and LIMIT", () => {

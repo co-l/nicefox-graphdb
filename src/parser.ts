@@ -212,8 +212,8 @@ export interface ReturnClause {
   distinct?: boolean;
   items: ReturnItem[];
   orderBy?: { expression: Expression; direction: "ASC" | "DESC" }[];
-  skip?: number;
-  limit?: number;
+  skip?: Expression;
+  limit?: Expression;
 }
 
 export interface WithClause {
@@ -221,8 +221,8 @@ export interface WithClause {
   distinct?: boolean;
   items: ReturnItem[];
   orderBy?: { expression: Expression; direction: "ASC" | "DESC" }[];
-  skip?: number;
-  limit?: number;
+  skip?: Expression;
+  limit?: Expression;
   where?: WhereCondition;
 }
 
@@ -1215,33 +1215,35 @@ export class Parser {
     }
 
     // Parse SKIP
-    let skip: number | undefined;
+    let skip: Expression | undefined;
     if (this.checkKeyword("SKIP")) {
       this.advance();
-      const skipToken = this.expect("NUMBER");
-      const skipValue = this.parseNumber(skipToken.value);
-      if (!Number.isInteger(skipValue)) {
-        throw new Error("SKIP: InvalidArgumentType - expected an integer value");
+      skip = this.parseExpression();
+      // Validate if it's a literal number
+      if (skip.type === "literal" && typeof skip.value === "number") {
+        if (!Number.isInteger(skip.value)) {
+          throw new Error("SKIP: InvalidArgumentType - expected an integer value");
+        }
+        if (skip.value < 0) {
+          throw new Error("SKIP: NegativeIntegerArgument - cannot be negative");
+        }
       }
-      if (skipValue < 0) {
-        throw new Error("SKIP: NegativeIntegerArgument - cannot be negative");
-      }
-      skip = skipValue;
     }
 
     // Parse LIMIT
-    let limit: number | undefined;
+    let limit: Expression | undefined;
     if (this.checkKeyword("LIMIT")) {
       this.advance();
-      const limitToken = this.expect("NUMBER");
-      const limitValue = this.parseNumber(limitToken.value);
-      if (!Number.isInteger(limitValue)) {
-        throw new Error("LIMIT: InvalidArgumentType - expected an integer value");
+      limit = this.parseExpression();
+      // Validate if it's a literal number
+      if (limit.type === "literal" && typeof limit.value === "number") {
+        if (!Number.isInteger(limit.value)) {
+          throw new Error("LIMIT: InvalidArgumentType - expected an integer value");
+        }
+        if (limit.value < 0) {
+          throw new Error("LIMIT: NegativeIntegerArgument - cannot be negative");
+        }
       }
-      if (limitValue < 0) {
-        throw new Error("LIMIT: NegativeIntegerArgument - cannot be negative");
-      }
-      limit = limitValue;
     }
 
     return { type: "RETURN", distinct, items, orderBy, skip, limit };
@@ -1315,33 +1317,35 @@ export class Parser {
     }
 
     // Parse SKIP
-    let skip: number | undefined;
+    let skip: Expression | undefined;
     if (this.checkKeyword("SKIP")) {
       this.advance();
-      const skipToken = this.expect("NUMBER");
-      const skipValue = this.parseNumber(skipToken.value);
-      if (!Number.isInteger(skipValue)) {
-        throw new Error("SKIP: InvalidArgumentType - expected an integer value");
+      skip = this.parseExpression();
+      // Validate if it's a literal number
+      if (skip.type === "literal" && typeof skip.value === "number") {
+        if (!Number.isInteger(skip.value)) {
+          throw new Error("SKIP: InvalidArgumentType - expected an integer value");
+        }
+        if (skip.value < 0) {
+          throw new Error("SKIP: NegativeIntegerArgument - cannot be negative");
+        }
       }
-      if (skipValue < 0) {
-        throw new Error("SKIP: NegativeIntegerArgument - cannot be negative");
-      }
-      skip = skipValue;
     }
 
     // Parse LIMIT
-    let limit: number | undefined;
+    let limit: Expression | undefined;
     if (this.checkKeyword("LIMIT")) {
       this.advance();
-      const limitToken = this.expect("NUMBER");
-      const limitValue = this.parseNumber(limitToken.value);
-      if (!Number.isInteger(limitValue)) {
-        throw new Error("LIMIT: InvalidArgumentType - expected an integer value");
+      limit = this.parseExpression();
+      // Validate if it's a literal number
+      if (limit.type === "literal" && typeof limit.value === "number") {
+        if (!Number.isInteger(limit.value)) {
+          throw new Error("LIMIT: InvalidArgumentType - expected an integer value");
+        }
+        if (limit.value < 0) {
+          throw new Error("LIMIT: NegativeIntegerArgument - cannot be negative");
+        }
       }
-      if (limitValue < 0) {
-        throw new Error("LIMIT: NegativeIntegerArgument - cannot be negative");
-      }
-      limit = limitValue;
     }
 
     // Parse optional WHERE clause after WITH items

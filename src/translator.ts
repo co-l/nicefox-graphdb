@@ -115,6 +115,29 @@ export class Translator {
     return { statements, returnColumns };
   }
 
+  /**
+   * Validate and translate a SKIP or LIMIT expression
+   * Throws an error if the value is negative
+   */
+  private translateSkipLimitExpression(expr: Expression, name: "SKIP" | "LIMIT"): { sql: string; params: unknown[] } {
+    // For literal values, validation is done at parse time
+    // For parameters, we need to validate here
+    if (expr.type === "parameter") {
+      const paramValue = this.ctx.paramValues[expr.name!];
+      if (typeof paramValue === "number") {
+        if (!Number.isInteger(paramValue)) {
+          throw new Error(`${name}: InvalidArgumentType - expected an integer value`);
+        }
+        if (paramValue < 0) {
+          throw new Error(`${name}: NegativeIntegerArgument - cannot be negative`);
+        }
+      }
+    }
+    
+    const { sql, params } = this.translateExpression(expr);
+    return { sql, params };
+  }
+
   private translateClause(clause: Clause): { statements?: SqlStatement[]; returnColumns?: string[] } {
     switch (clause.type) {
       case "CREATE":
@@ -1174,8 +1197,8 @@ export class Translator {
     // Apply WITH modifiers if present
     const withDistinct = (this.ctx as any).withDistinct as boolean | undefined;
     const withOrderBy = (this.ctx as any).withOrderBy as { expression: Expression; direction: "ASC" | "DESC" }[] | undefined;
-    const withSkip = (this.ctx as any).withSkip as number | undefined;
-    const withLimit = (this.ctx as any).withLimit as number | undefined;
+    const withSkip = (this.ctx as any).withSkip as Expression | undefined;
+    const withLimit = (this.ctx as any).withLimit as Expression | undefined;
     const withWhere = (this.ctx as any).withWhere as WhereCondition | undefined;
 
     // Track which tables we need
@@ -2263,16 +2286,18 @@ export class Translator {
     
     if (effectiveLimit !== undefined || effectiveSkip !== undefined) {
       if (effectiveLimit !== undefined) {
-        sql += ` LIMIT ?`;
-        whereParams.push(effectiveLimit);
+        const { sql: limitSql, params: limitParams } = this.translateSkipLimitExpression(effectiveLimit, "LIMIT");
+        sql += ` LIMIT ${limitSql}`;
+        whereParams.push(...limitParams);
       } else if (effectiveSkip !== undefined) {
         // SKIP without LIMIT - need a large limit for SQLite
         sql += ` LIMIT -1`;
       }
 
       if (effectiveSkip !== undefined) {
-        sql += ` OFFSET ?`;
-        whereParams.push(effectiveSkip);
+        const { sql: skipSql, params: skipParams } = this.translateSkipLimitExpression(effectiveSkip, "SKIP");
+        sql += ` OFFSET ${skipSql}`;
+        whereParams.push(...skipParams);
       }
     }
 
@@ -2589,12 +2614,16 @@ export class Translator {
 
     // Handle SKIP
     if (clause.skip !== undefined) {
-      sql += ` OFFSET ${clause.skip}`;
+      const { sql: skipSql, params: skipParams } = this.translateSkipLimitExpression(clause.skip, "SKIP");
+      sql += ` OFFSET ${skipSql}`;
+      params.push(...skipParams);
     }
 
     // Handle LIMIT
     if (clause.limit !== undefined) {
-      sql += ` LIMIT ${clause.limit}`;
+      const { sql: limitSql, params: limitParams } = this.translateSkipLimitExpression(clause.limit, "LIMIT");
+      sql += ` LIMIT ${limitSql}`;
+      params.push(...limitParams);
     }
 
     return {
@@ -3472,15 +3501,17 @@ export class Translator {
     // Add LIMIT and SKIP
     if (clause.limit !== undefined || clause.skip !== undefined) {
       if (clause.limit !== undefined) {
-        sql += ` LIMIT ?`;
-        allParams.push(clause.limit);
+        const { sql: limitSql, params: limitParams } = this.translateSkipLimitExpression(clause.limit, "LIMIT");
+        sql += ` LIMIT ${limitSql}`;
+        allParams.push(...limitParams);
       } else if (clause.skip !== undefined) {
         sql += ` LIMIT -1`;
       }
 
       if (clause.skip !== undefined) {
-        sql += ` OFFSET ?`;
-        allParams.push(clause.skip);
+        const { sql: skipSql, params: skipParams } = this.translateSkipLimitExpression(clause.skip, "SKIP");
+        sql += ` OFFSET ${skipSql}`;
+        allParams.push(...skipParams);
       }
     }
 

@@ -3102,16 +3102,12 @@ export class Executor {
     let finalResults = results;
     if (returnClause) {
       if (returnClause.skip !== undefined && returnClause.skip !== null) {
-        const skipValue = typeof returnClause.skip === "number" 
-          ? returnClause.skip 
-          : (params[returnClause.skip] as number) || 0;
+        const skipValue = this.evaluateSkipLimitExpression(returnClause.skip, params);
         finalResults = finalResults.slice(skipValue);
       }
       
       if (returnClause.limit !== undefined && returnClause.limit !== null) {
-        const limitValue = typeof returnClause.limit === "number"
-          ? returnClause.limit
-          : (params[returnClause.limit] as number) || 0;
+        const limitValue = this.evaluateSkipLimitExpression(returnClause.limit, params);
         finalResults = finalResults.slice(0, limitValue);
       }
     }
@@ -3978,6 +3974,28 @@ export class Executor {
   }
 
   /**
+   * Evaluate a SKIP or LIMIT expression to a number
+   */
+  private evaluateSkipLimitExpression(expr: Expression, params: Record<string, unknown>): number {
+    if (expr.type === "literal") {
+      return expr.value as number;
+    } else if (expr.type === "parameter") {
+      return params[expr.name!] as number ?? 0;
+    } else if (expr.type === "function") {
+      // Evaluate functions like toInteger(rand()*9)
+      const row = new Map<string, unknown>();
+      const result = this.evaluateExpressionInRow(expr, row, params);
+      return typeof result === "number" ? Math.floor(result) : 0;
+    } else if (expr.type === "binary") {
+      // Evaluate binary expressions like rand() * 9
+      const row = new Map<string, unknown>();
+      const result = this.evaluateExpressionInRow(expr, row, params);
+      return typeof result === "number" ? Math.floor(result) : 0;
+    }
+    return 0;
+  }
+
+  /**
    * Evaluate an expression that should return a list
    */
   private evaluateListExpression(expr: Expression, params: Record<string, unknown>): unknown[] {
@@ -4426,16 +4444,12 @@ export class Executor {
     let finalResults = results;
     
     if (returnClause.skip !== undefined && returnClause.skip !== null) {
-      const skipValue = typeof returnClause.skip === "number" 
-        ? returnClause.skip 
-        : (params[returnClause.skip] as number) || 0;
+      const skipValue = this.evaluateSkipLimitExpression(returnClause.skip, params);
       finalResults = finalResults.slice(skipValue);
     }
     
     if (returnClause.limit !== undefined && returnClause.limit !== null) {
-      const limitValue = typeof returnClause.limit === "number"
-        ? returnClause.limit
-        : (params[returnClause.limit] as number) || 0;
+      const limitValue = this.evaluateSkipLimitExpression(returnClause.limit, params);
       finalResults = finalResults.slice(0, limitValue);
     }
     
@@ -4591,9 +4605,7 @@ export class Executor {
     // Apply WITH LIMIT if present
     let limitedResults = phase1Results;
     if (withClause.limit !== undefined) {
-      const limitVal = typeof withClause.limit === "number" 
-        ? withClause.limit 
-        : (params[withClause.limit] as number) || phase1Results.length;
+      const limitVal = this.evaluateSkipLimitExpression(withClause.limit, params);
       limitedResults = phase1Results.slice(0, limitVal);
     }
     
@@ -7311,7 +7323,7 @@ export class Executor {
         }
         
         // RETURN references created nodes, aliased vars, property aliases, or data was modified - use buildReturnResults with resolved IDs
-        return this.buildReturnResults(returnClause, filteredResolvedIds, filteredPropertyValues, propertyAliasMap, withAggregateMap, filteredEdgeTypes, allDeletedVariables);
+        return this.buildReturnResults(returnClause, filteredResolvedIds, filteredPropertyValues, propertyAliasMap, withAggregateMap, filteredEdgeTypes, allDeletedVariables, params);
       } else {
         // RETURN only references matched nodes and no mutations - use translator-based approach
         const fullQuery: Query = {
@@ -7372,7 +7384,8 @@ export class Executor {
     propertyAliasMap: Map<string, { variable: string; property: string }> = new Map(),
     withAggregateMap: Map<string, { functionName: string; argVariable: string }> = new Map(),
     allCapturedEdgeTypes: Record<string, string>[] = [],
-    allDeletedVariables: Set<string>[] = []
+    allDeletedVariables: Set<string>[] = [],
+    params: Record<string, unknown> = {}
   ): Record<string, unknown>[] {
     // Check if all return items are aggregates (like count(*))
     // If so, we should return a single aggregated row instead of per-row results
@@ -7808,15 +7821,16 @@ export class Executor {
     // Apply SKIP and LIMIT to the results
     let finalResults = results;
     
-    const skip = returnClause.skip ?? 0;
-    const limit = returnClause.limit;
-    
-    if (skip > 0) {
-      finalResults = finalResults.slice(skip);
+    if (returnClause.skip !== undefined) {
+      const skipValue = this.evaluateSkipLimitExpression(returnClause.skip, params);
+      if (skipValue > 0) {
+        finalResults = finalResults.slice(skipValue);
+      }
     }
     
-    if (limit !== undefined) {
-      finalResults = finalResults.slice(0, limit);
+    if (returnClause.limit !== undefined) {
+      const limitValue = this.evaluateSkipLimitExpression(returnClause.limit, params);
+      finalResults = finalResults.slice(0, limitValue);
     }
     
     return finalResults;
