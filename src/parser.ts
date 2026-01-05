@@ -193,6 +193,17 @@ export interface DeleteClause {
   detach?: boolean;
 }
 
+export interface RemoveItem {
+  variable: string;
+  property?: string;  // For REMOVE n.prop
+  labels?: string[];  // For REMOVE n:Label1:Label2
+}
+
+export interface RemoveClause {
+  type: "REMOVE";
+  items: RemoveItem[];
+}
+
 export interface ReturnClause {
   type: "RETURN";
   distinct?: boolean;
@@ -239,6 +250,7 @@ export type Clause =
   | MergeClause
   | SetClause
   | DeleteClause
+  | RemoveClause
   | ReturnClause
   | WithClause
   | UnwindClause
@@ -351,6 +363,7 @@ const KEYWORDS = new Set([
   "SINGLE",
   "CALL",
   "YIELD",
+  "REMOVE",
 ]);
 
 class Tokenizer {
@@ -766,6 +779,8 @@ export class Parser {
       case "DELETE":
       case "DETACH":
         return this.parseDelete();
+      case "REMOVE":
+        return this.parseRemove();
       case "RETURN":
         return this.parseReturn();
       case "WITH":
@@ -1047,6 +1062,36 @@ export class Parser {
     } while (this.check("COMMA"));
 
     return assignments;
+  }
+
+  private parseRemove(): RemoveClause {
+    this.expect("KEYWORD", "REMOVE");
+    const items: RemoveItem[] = [];
+
+    do {
+      if (items.length > 0) {
+        this.expect("COMMA");
+      }
+
+      const variable = this.expectIdentifier();
+
+      // Check for label removal: REMOVE n:Label or REMOVE n:Label1:Label2
+      if (this.check("COLON")) {
+        const labels: string[] = [];
+        while (this.check("COLON")) {
+          this.advance(); // consume ":"
+          labels.push(this.expectLabelOrType());
+        }
+        items.push({ variable, labels });
+      } else {
+        // Property removal: REMOVE n.prop
+        this.expect("DOT");
+        const property = this.expectIdentifier();
+        items.push({ variable, property });
+      }
+    } while (this.check("COMMA"));
+
+    return { type: "REMOVE", items };
   }
 
   private parseDelete(): DeleteClause {

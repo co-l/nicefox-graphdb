@@ -8,6 +8,7 @@ import {
   MergeClause,
   SetClause,
   DeleteClause,
+  RemoveClause,
   ReturnClause,
   WithClause,
   UnwindClause,
@@ -126,6 +127,8 @@ export class Translator {
         return { statements: this.translateMerge(clause) };
       case "SET":
         return { statements: this.translateSet(clause) };
+      case "REMOVE":
+        return { statements: this.translateRemove(clause as RemoveClause) };
       case "DELETE":
         return { statements: this.translateDelete(clause) };
       case "RETURN":
@@ -959,6 +962,53 @@ export class Translator {
       throw new Error(`Parameter ${expr.name} is not an object`);
     }
     throw new Error(`Expected object expression, got ${expr.type}`);
+  }
+
+  // ============================================================================
+  // REMOVE
+  // ============================================================================
+
+  private translateRemove(clause: RemoveClause): SqlStatement[] {
+    const statements: SqlStatement[] = [];
+
+    for (const item of clause.items) {
+      const varInfo = this.ctx.variables.get(item.variable);
+      if (!varInfo) {
+        // Variable doesn't exist (e.g., from OPTIONAL MATCH with no match)
+        // This is a no-op, we'll handle it at execution time
+        continue;
+      }
+
+      const table = varInfo.type === "node" ? "nodes" : "edges";
+
+      if (item.labels && item.labels.length > 0) {
+        // Remove labels from node
+        if (varInfo.type !== "node") {
+          throw new Error(`Cannot remove labels from a relationship: ${item.variable}`);
+        }
+        // Remove specific labels from the label array
+        // Build a JSON array of labels to remove
+        const labelsToRemove = JSON.stringify(item.labels);
+        statements.push({
+          sql: `UPDATE nodes SET label = (
+            SELECT json_group_array(value) FROM (
+              SELECT value FROM json_each(nodes.label)
+              WHERE value NOT IN (SELECT value FROM json_each(?))
+              ORDER BY value
+            )
+          ) WHERE id = ?`,
+          params: [labelsToRemove, varInfo.alias],
+        });
+      } else if (item.property) {
+        // Remove property
+        statements.push({
+          sql: `UPDATE ${table} SET properties = json_remove(properties, '$.${item.property}') WHERE id = ?`,
+          params: [varInfo.alias],
+        });
+      }
+    }
+
+    return statements;
   }
 
   // ============================================================================
