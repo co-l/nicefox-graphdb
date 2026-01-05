@@ -133,7 +133,7 @@ Copy these commented lines to `failing-tests.ts` to mark them as passing.
 cd /home/conrad/dev/nicefox-graphdb && GRAPHDB_PROJECT=test-debug tsx -e "
 (async () => {
   const { GraphDB } = require('./src/index.ts');
-  const db = await GraphDB();
+  const db = await GraphDB({ dataPath: ':memory:' });
   // Setup
   await db.execute('CREATE (a:A), (b:B)');
   await db.execute('MATCH (a:A), (b:B) CREATE (a)-[:T1]->(b), (b)-[:T2]->(a)');

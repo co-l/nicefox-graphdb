@@ -289,7 +289,7 @@ export const FAILING_TESTS = new Set<string>([
   // "clauses/match > Match7 - Optional match|4",
   // "clauses/match > Match7 - Optional match|8",
   // "clauses/match > Match8 - Match clause interoperation with other clauses|2",
-  "clauses/match > Match8 - Match clause interoperation with other clauses|3",
+  // "clauses/match > Match8 - Match clause interoperation with other clauses|3",
   "clauses/match > Match9 - Match deprecated scenarios|5",
   // "clauses/match > Match9 - Match deprecated scenarios|8",
   // "clauses/match > Match9 - Match deprecated scenarios|9",

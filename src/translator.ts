@@ -654,6 +654,9 @@ export class Translator {
       this.ctx.variables.set(rel.edge.variable, { type: "varLengthEdge", alias: edgeAlias });
     }
     
+    // Track the current edge scope - edges in different scopes don't need uniqueness constraints
+    const edgeScope = (this.ctx as any).edgeScope || 0;
+    
     (this.ctx as any).relationshipPatterns.push({ 
       sourceAlias, 
       targetAlias, 
@@ -672,6 +675,8 @@ export class Translator {
       targetHasLabel: !!rel.target.label,
       // Track which MATCH/OPTIONAL MATCH clause this pattern belongs to
       clauseIndex,
+      // Track edge scope for uniqueness constraints across WITH boundaries
+      edgeScope,
     });
 
     // Track the last anonymous target for chained patterns
@@ -1002,6 +1007,87 @@ export class Translator {
     const joinParams: unknown[] = []; // Parameters for JOIN ON clauses
     const whereParts: string[] = [];
     const whereParams: unknown[] = []; // Parameters for WHERE clause
+    
+    // Handle pre-WITH patterns (patterns before a WITH that doesn't pass through node/edge vars)
+    // These need to be converted to a cartesian product row source
+    const preWithPatterns = (this.ctx as any).preWithPatterns as Array<{
+      relationshipPatterns: any[];
+      anonymousNodePatterns: Array<{ alias: string; optional: boolean }>;
+      variables: Map<string, any>;
+    }> | undefined;
+    
+    if (preWithPatterns && preWithPatterns.length > 0) {
+      // Build subqueries for each pre-WITH pattern set
+      // These provide the "row multiplier" effect for the cartesian product
+      for (let i = 0; i < preWithPatterns.length; i++) {
+        const preWith = preWithPatterns[i];
+        const subqueryParts: string[] = [];
+        const subqueryWhere: string[] = [];
+        
+        if (preWith.relationshipPatterns.length > 0) {
+          // Build FROM/JOINs for the relationship patterns
+          const addedNodes = new Set<string>();
+          const addedEdges = new Set<string>();
+          
+          for (let j = 0; j < preWith.relationshipPatterns.length; j++) {
+            const pattern = preWith.relationshipPatterns[j];
+            
+            // Add source node
+            if (!addedNodes.has(pattern.sourceAlias)) {
+              if (subqueryParts.length === 0) {
+                subqueryParts.push(`nodes ${pattern.sourceAlias}`);
+              } else {
+                subqueryParts.push(`JOIN nodes ${pattern.sourceAlias} ON 1=1`);
+              }
+              addedNodes.add(pattern.sourceAlias);
+            }
+            
+            // Add edge
+            if (!addedEdges.has(pattern.edgeAlias)) {
+              const edgeJoinCol = pattern.edge.direction === "left" ? "target_id" : "source_id";
+              subqueryParts.push(`JOIN edges ${pattern.edgeAlias} ON ${pattern.edgeAlias}.${edgeJoinCol} = ${pattern.sourceAlias}.id`);
+              addedEdges.add(pattern.edgeAlias);
+            }
+            
+            // Add target node
+            if (!addedNodes.has(pattern.targetAlias)) {
+              const targetJoinCol = pattern.edge.direction === "left" ? "source_id" : "target_id";
+              subqueryParts.push(`JOIN nodes ${pattern.targetAlias} ON ${pattern.edgeAlias}.${targetJoinCol} = ${pattern.targetAlias}.id`);
+              addedNodes.add(pattern.targetAlias);
+            }
+          }
+          
+          // Add edge uniqueness constraints within the pre-WITH patterns
+          const edgeAliases = preWith.relationshipPatterns.map(p => p.edgeAlias);
+          for (let j = 0; j < edgeAliases.length; j++) {
+            for (let k = j + 1; k < edgeAliases.length; k++) {
+              if (edgeAliases[j] !== edgeAliases[k]) {
+                subqueryWhere.push(`${edgeAliases[j]}.id <> ${edgeAliases[k]}.id`);
+              }
+            }
+          }
+        } else if (preWith.anonymousNodePatterns.length > 0) {
+          // Handle anonymous node patterns
+          for (const nodePattern of preWith.anonymousNodePatterns) {
+            if (subqueryParts.length === 0) {
+              subqueryParts.push(`nodes ${nodePattern.alias}`);
+            } else {
+              subqueryParts.push(`, nodes ${nodePattern.alias}`);
+            }
+          }
+        }
+        
+        if (subqueryParts.length > 0) {
+          // Build the subquery - just needs to provide rows for cartesian product
+          let subquery = `(SELECT 1 FROM ${subqueryParts.join(" ")}`;
+          if (subqueryWhere.length > 0) {
+            subquery += ` WHERE ${subqueryWhere.join(" AND ")}`;
+          }
+          subquery += `) AS __pre_with_${i}__`;
+          fromParts.push(subquery);
+        }
+      }
+    }
     
     // Apply WITH modifiers if present
     const withDistinct = (this.ctx as any).withDistinct as boolean | undefined;
@@ -1590,9 +1676,11 @@ export class Translator {
       // BUT edges from separate MATCH clauses or disconnected patterns don't need to be distinct
       // AND if the same edge variable is used twice, no uniqueness constraint is needed (it's the same edge)
       // IMPORTANT: MATCH and OPTIONAL MATCH are separate clauses - don't enforce automatic uniqueness between them
+      // IMPORTANT: Edges separated by WITH (that doesn't pass edge variables) are in different scopes
       if (relPatterns.length > 1) {
         // Build connectivity graph to find chains of connected relationships
         // Two relationships are connected if they share a node (source/target) AND are in the same clause type
+        // AND are in the same edge scope (not separated by WITH without edge passthrough)
         // (both non-optional or both optional - we don't cross-connect MATCH with OPTIONAL MATCH)
         const edgeGroups: number[][] = []; // Groups of edge indices that are connected
         const visited = new Set<number>();
@@ -1600,7 +1688,7 @@ export class Translator {
         for (let i = 0; i < relPatterns.length; i++) {
           if (visited.has(i)) continue;
           
-          // BFS to find all connected edges within the same clause type
+          // BFS to find all connected edges within the same clause type and edge scope
           const group: number[] = [];
           const queue = [i];
           
@@ -1620,6 +1708,10 @@ export class Translator {
               // Don't connect patterns from different clause types (MATCH vs OPTIONAL MATCH)
               // This ensures edge uniqueness is only enforced within the same clause
               if (currentPattern.optional !== otherPattern.optional) continue;
+              
+              // Don't connect patterns from different edge scopes (separated by WITH)
+              // This ensures edges from before WITH don't affect edges after WITH
+              if ((currentPattern as any).edgeScope !== (otherPattern as any).edgeScope) continue;
               
               // Check if they share any node
               if (currentPattern.sourceAlias === otherPattern.sourceAlias ||
@@ -2043,6 +2135,11 @@ export class Translator {
       (this.ctx as any).withDistinct = true;
     }
     
+    // Track which node/edge variables are passed through WITH
+    // This is needed to determine scopes and handle cartesian products
+    const passedThroughNodes = new Set<string>();
+    const passedThroughEdges = new Set<string>();
+    
     // Update variable mappings for WITH items
     // Variables without aliases keep their current mappings
     // Variables with aliases create new mappings based on expression type
@@ -2052,18 +2149,34 @@ export class Translator {
       if (item.expression.type === "variable") {
         // Check for WITH * (pass through all variables)
         if (item.expression.variable === "*") {
-          // All existing variables remain in scope - nothing to do
+          // All existing variables remain in scope
+          // Mark all node/edge variables as passed through
+          for (const [varName, info] of this.ctx.variables) {
+            if (info.type === "node") {
+              passedThroughNodes.add(info.alias);
+            } else if (info.type === "edge" || info.type === "varLengthEdge") {
+              passedThroughEdges.add(info.alias);
+            }
+          }
           continue;
         }
         // Variable passthrough - keep or create mapping
         const originalVar = item.expression.variable!;
         const originalInfo = this.ctx.variables.get(originalVar);
-        if (originalInfo && alias) {
-          this.ctx.variables.set(alias, originalInfo);
-          // Preserve optional flag for the alias
-          const originalIsOptional = (this.ctx as any)[`optional_${originalInfo.alias}`];
-          if (originalIsOptional) {
-            (this.ctx as any)[`optional_${alias}`] = true;
+        if (originalInfo) {
+          if (alias) {
+            this.ctx.variables.set(alias, originalInfo);
+            // Preserve optional flag for the alias
+            const originalIsOptional = (this.ctx as any)[`optional_${originalInfo.alias}`];
+            if (originalIsOptional) {
+              (this.ctx as any)[`optional_${alias}`] = true;
+            }
+          }
+          // Track if this is a node/edge variable being passed through
+          if (originalInfo.type === "node") {
+            passedThroughNodes.add(originalInfo.alias);
+          } else if (originalInfo.type === "edge" || originalInfo.type === "varLengthEdge") {
+            passedThroughEdges.add(originalInfo.alias);
           }
         }
       } else if (alias) {
@@ -2073,6 +2186,69 @@ export class Translator {
           (this.ctx as any).withAliases = new Map();
         }
         (this.ctx as any).withAliases.set(alias, item.expression);
+      }
+    }
+    
+    // Increment edge scope when WITH doesn't pass through any edge variables
+    // This means subsequent MATCH patterns are in a new scope and shouldn't
+    // share edge uniqueness constraints with patterns from before the WITH
+    const currentEdgeScope = (this.ctx as any).edgeScope || 0;
+    if (passedThroughEdges.size === 0) {
+      (this.ctx as any).edgeScope = currentEdgeScope + 1;
+    }
+    
+    // When WITH doesn't pass through ANY node or edge variables AND no existing
+    // variables are referenced in WITH expressions, we need to:
+    // 1. Convert current patterns into a "row source" for cartesian product
+    // 2. Clear node/edge variables so subsequent MATCH gets fresh context
+    //
+    // However, if any existing variable is referenced in a WITH expression
+    // (e.g., WITH coalesce(b, c) AS x), we must NOT clear the context
+    // because the expression depends on those variables.
+    
+    // Check if any existing node/edge variable is referenced in any WITH expression
+    let variablesReferencedInExpressions = false;
+    for (const item of clause.items) {
+      if (item.expression.type !== "variable" || item.expression.variable === "*") {
+        // Check if this expression references any existing node/edge variables
+        const referencedVars = this.findVariablesInExpression(item.expression);
+        for (const varName of referencedVars) {
+          const varInfo = this.ctx.variables.get(varName);
+          if (varInfo && (varInfo.type === "node" || varInfo.type === "edge" || varInfo.type === "varLengthEdge")) {
+            variablesReferencedInExpressions = true;
+            break;
+          }
+        }
+      }
+      if (variablesReferencedInExpressions) break;
+    }
+    
+    if (passedThroughNodes.size === 0 && passedThroughEdges.size === 0 && !variablesReferencedInExpressions) {
+      // Store the current relationship patterns as a "pre-WITH" row source
+      // These will be used to generate a subquery that provides the row multiplier
+      const currentRelPatterns = (this.ctx as any).relationshipPatterns;
+      const currentAnonymousNodes = (this.ctx as any).anonymousNodePatterns;
+      
+      if (currentRelPatterns?.length > 0 || currentAnonymousNodes?.length > 0) {
+        // Store for later use in generating the cartesian product
+        if (!(this.ctx as any).preWithPatterns) {
+          (this.ctx as any).preWithPatterns = [];
+        }
+        (this.ctx as any).preWithPatterns.push({
+          relationshipPatterns: currentRelPatterns ? [...currentRelPatterns] : [],
+          anonymousNodePatterns: currentAnonymousNodes ? [...currentAnonymousNodes] : [],
+          variables: new Map(this.ctx.variables),
+        });
+        
+        // Clear the patterns and variables for fresh MATCH context
+        (this.ctx as any).relationshipPatterns = [];
+        (this.ctx as any).anonymousNodePatterns = [];
+        // Keep only non-node/edge variables (like withAliases)
+        for (const [varName, info] of this.ctx.variables) {
+          if (info.type === "node" || info.type === "edge" || info.type === "varLengthEdge" || info.type === "path") {
+            this.ctx.variables.delete(varName);
+          }
+        }
       }
     }
     
@@ -6260,6 +6436,57 @@ END FROM (SELECT json_group_array(${valueExpr}) as sv))`,
   private quoteAlias(alias: string): string {
     // SQLite uses double quotes for identifiers
     return `"${alias}"`;
+  }
+
+  private findVariablesInExpression(expr: Expression): string[] {
+    const vars: string[] = [];
+    
+    const collect = (e: any) => {
+      if (!e) return;
+      if (typeof e !== 'object') return;
+      
+      // Direct variable reference
+      if (e.type === "property" && e.variable) {
+        vars.push(e.variable);
+      } else if (e.type === "variable" && e.variable) {
+        vars.push(e.variable);
+      }
+      
+      // Recurse into function arguments
+      if (e.args && Array.isArray(e.args)) {
+        for (const arg of e.args) {
+          collect(arg);
+        }
+      }
+      
+      // Recurse into binary expressions
+      if (e.left) collect(e.left);
+      if (e.right) collect(e.right);
+      
+      // Recurse into case expressions
+      if (e.whenClauses && Array.isArray(e.whenClauses)) {
+        for (const when of e.whenClauses) {
+          collect(when.when);
+          collect(when.then);
+        }
+      }
+      if (e.elseExpr) collect(e.elseExpr);
+      
+      // Recurse into list expressions
+      if (e.listExpr) collect(e.listExpr);
+      if (e.filterExpr) collect(e.filterExpr);
+      if (e.mapExpr) collect(e.mapExpr);
+      if (e.mapExpression) collect(e.mapExpression);
+      
+      // Recurse into operand (for unary)
+      if (e.operand) collect(e.operand);
+      
+      // Recurse into expression (general nested)
+      if (e.expression) collect(e.expression);
+    };
+    
+    collect(expr);
+    return [...new Set(vars)];
   }
 
   private findVariablesInCondition(condition: WhereCondition): string[] {
