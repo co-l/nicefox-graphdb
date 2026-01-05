@@ -4116,6 +4116,77 @@ export class Executor {
     returnClause: ReturnClause | null,
     params: Record<string, unknown>
   ): Record<string, unknown>[] {
+    // Validate that variables used in ON CREATE SET / ON MATCH SET are defined
+    const validVariables = new Set<string>();
+    
+    // Collect variables from MATCH clauses
+    for (const matchClause of matchClauses) {
+      for (const pattern of matchClause.patterns) {
+        if (this.isRelationshipPattern(pattern)) {
+          const relPattern = pattern as RelationshipPattern;
+          if (relPattern.source?.variable) validVariables.add(relPattern.source.variable);
+          if (relPattern.target?.variable) validVariables.add(relPattern.target.variable);
+          if (relPattern.edge?.variable) validVariables.add(relPattern.edge.variable);
+        } else {
+          const nodePattern = pattern as NodePattern;
+          if (nodePattern.variable) validVariables.add(nodePattern.variable);
+        }
+      }
+    }
+    
+    // Collect variables from CREATE clauses
+    for (const createClause of createClauses) {
+      for (const pattern of createClause.patterns) {
+        if (this.isRelationshipPattern(pattern)) {
+          const relPattern = pattern as RelationshipPattern;
+          if (relPattern.source?.variable) validVariables.add(relPattern.source.variable);
+          if (relPattern.target?.variable) validVariables.add(relPattern.target.variable);
+          if (relPattern.edge?.variable) validVariables.add(relPattern.edge.variable);
+        } else {
+          const nodePattern = pattern as NodePattern;
+          if (nodePattern.variable) validVariables.add(nodePattern.variable);
+        }
+      }
+    }
+    
+    // Collect variables from MERGE pattern
+    for (const pattern of mergeClause.patterns) {
+      if (this.isRelationshipPattern(pattern)) {
+        const relPattern = pattern as RelationshipPattern;
+        if (relPattern.source?.variable) validVariables.add(relPattern.source.variable);
+        if (relPattern.target?.variable) validVariables.add(relPattern.target.variable);
+        if (relPattern.edge?.variable) validVariables.add(relPattern.edge.variable);
+      } else {
+        const nodePattern = pattern as NodePattern;
+        if (nodePattern.variable) validVariables.add(nodePattern.variable);
+      }
+    }
+    
+    // Collect variables from WITH clauses
+    for (const withClause of withClauses) {
+      for (const item of withClause.items) {
+        if (item.alias) validVariables.add(item.alias);
+      }
+    }
+    
+    // Validate ON CREATE SET variables
+    if (mergeClause.onCreateSet) {
+      for (const assignment of mergeClause.onCreateSet) {
+        if (!validVariables.has(assignment.variable)) {
+          throw new Error(`SyntaxError: Variable \`${assignment.variable}\` not defined`);
+        }
+      }
+    }
+    
+    // Validate ON MATCH SET variables
+    if (mergeClause.onMatchSet) {
+      for (const assignment of mergeClause.onMatchSet) {
+        if (!validVariables.has(assignment.variable)) {
+          throw new Error(`SyntaxError: Variable \`${assignment.variable}\` not defined`);
+        }
+      }
+    }
+    
     // First, execute CREATE clauses to create any prerequisite nodes
     const createdNodes = new Map<string, { id: string; label: string; properties: Record<string, unknown> }>();
     
