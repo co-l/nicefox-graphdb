@@ -322,6 +322,9 @@ export class Executor {
     
     // Semantic validation: Check if MERGE tries to use a variable already bound by MATCH
     this.validateMergeVariables(query);
+
+    // Semantic validation: SET expressions cannot reference undefined variables
+    this.validateSetClauseValueVariables(query, params);
     
     // Check if we need phased execution for MATCH + MERGE combinations
     // These need special handling for proper Cartesian product semantics
@@ -412,6 +415,212 @@ export class Executor {
         // Note: We don't add MERGE variables to matchBoundVariables
         // because MERGE (c) followed by MERGE (c) is valid
       }
+    }
+  }
+
+  /**
+   * Validate that SET assignment values do not reference undefined variables.
+   *
+   * Example (invalid):
+   *   MATCH (a) SET a.name = missing RETURN a
+   */
+  private validateSetClauseValueVariables(query: Query, params: Record<string, unknown>): void {
+    this.validateSetClauseValueVariablesInQuery(query, params);
+  }
+
+  private validateSetClauseValueVariablesInQuery(query: Query, params: Record<string, unknown>): void {
+    let scope = new Set<string>();
+
+    for (const clause of query.clauses) {
+      if (clause.type === "UNION") {
+        this.validateSetClauseValueVariablesInQuery(clause.left, params);
+        this.validateSetClauseValueVariablesInQuery(clause.right, params);
+        return;
+      }
+
+      if (clause.type === "MATCH" || clause.type === "OPTIONAL_MATCH") {
+        for (const pattern of clause.patterns) this.collectPatternVariables(pattern, scope);
+        if (clause.pathExpressions) {
+          for (const pathExpr of clause.pathExpressions) {
+            scope.add(pathExpr.variable);
+            for (const pattern of pathExpr.patterns) this.collectPatternVariables(pattern, scope);
+          }
+        }
+        continue;
+      }
+
+      if (clause.type === "CREATE") {
+        for (const pattern of clause.patterns) this.collectPatternVariables(pattern, scope);
+        continue;
+      }
+
+      if (clause.type === "MERGE") {
+        for (const pattern of clause.patterns) this.collectPatternVariables(pattern, scope);
+        if (clause.pathExpressions) {
+          for (const pathExpr of clause.pathExpressions) {
+            scope.add(pathExpr.variable);
+            for (const pattern of pathExpr.patterns) this.collectPatternVariables(pattern, scope);
+          }
+        }
+        continue;
+      }
+
+      if (clause.type === "UNWIND") {
+        scope.add(clause.alias);
+        continue;
+      }
+
+      if (clause.type === "WITH") {
+        // Reset scope to WITH projections; `WITH *` preserves incoming scope.
+        const hasStar = clause.items.some(
+          (item) => item.expression.type === "variable" && item.expression.variable === "*" && !item.alias
+        );
+
+        const nextScope = hasStar ? new Set(scope) : new Set<string>();
+        for (const item of clause.items) {
+          if (item.alias) {
+            nextScope.add(item.alias);
+          } else if (item.expression.type === "variable" && item.expression.variable && item.expression.variable !== "*") {
+            nextScope.add(item.expression.variable);
+          }
+        }
+
+        scope = nextScope;
+        continue;
+      }
+
+      if (clause.type === "SET") {
+        for (const assignment of clause.assignments) {
+          if (!scope.has(assignment.variable)) {
+            throw new Error(`SyntaxError: Variable \`${assignment.variable}\` not defined`);
+          }
+          if (assignment.value) {
+            this.validateExpressionVariablesInScope(assignment.value, scope, params);
+          }
+        }
+      }
+    }
+  }
+
+  private validateExpressionVariablesInScope(
+    expression: Expression,
+    scope: Set<string>,
+    params: Record<string, unknown>
+  ): void {
+    switch (expression.type) {
+      case "literal":
+      case "parameter":
+        return;
+
+      case "variable": {
+        const name = expression.variable ?? expression.name;
+        if (name && !scope.has(name)) {
+          throw new Error(`SyntaxError: Variable \`${name}\` not defined`);
+        }
+        return;
+      }
+
+      case "property": {
+        if (expression.variable && !scope.has(expression.variable)) {
+          throw new Error(`SyntaxError: Variable \`${expression.variable}\` not defined`);
+        }
+        return;
+      }
+
+      case "propertyAccess": {
+        if (expression.object) this.validateExpressionVariablesInScope(expression.object, scope, params);
+        return;
+      }
+
+      case "indexAccess": {
+        if (expression.array) this.validateExpressionVariablesInScope(expression.array, scope, params);
+        if (expression.index) this.validateExpressionVariablesInScope(expression.index, scope, params);
+        return;
+      }
+
+      case "unary": {
+        if (expression.operand) this.validateExpressionVariablesInScope(expression.operand, scope, params);
+        return;
+      }
+
+      case "binary":
+      case "comparison": {
+        if (expression.left) this.validateExpressionVariablesInScope(expression.left, scope, params);
+        if (expression.right) this.validateExpressionVariablesInScope(expression.right, scope, params);
+        return;
+      }
+
+      case "function": {
+        for (const arg of expression.args || []) {
+          this.validateExpressionVariablesInScope(arg, scope, params);
+        }
+        return;
+      }
+
+      case "object": {
+        for (const prop of expression.properties || []) {
+          this.validateExpressionVariablesInScope(prop.value, scope, params);
+        }
+        return;
+      }
+
+      case "case": {
+        if (expression.expression) {
+          this.validateExpressionVariablesInScope(expression.expression, scope, params);
+        }
+        for (const when of expression.whens || []) {
+          this.validateWhereConditionVariablesInScope(when.condition, scope, params);
+          this.validateExpressionVariablesInScope(when.result, scope, params);
+        }
+        if (expression.elseExpr) {
+          this.validateExpressionVariablesInScope(expression.elseExpr, scope, params);
+        }
+        return;
+      }
+
+      case "listComprehension":
+      case "listPredicate": {
+        if (expression.listExpr) this.validateExpressionVariablesInScope(expression.listExpr, scope, params);
+        const nextScope = new Set(scope);
+        if (expression.variable) nextScope.add(expression.variable);
+        if (expression.filterCondition) {
+          this.validateWhereConditionVariablesInScope(expression.filterCondition, nextScope, params);
+        }
+        if (expression.type === "listComprehension" && expression.mapExpr) {
+          this.validateExpressionVariablesInScope(expression.mapExpr, nextScope, params);
+        }
+        return;
+      }
+
+      case "labelPredicate": {
+        if (expression.variable && !scope.has(expression.variable)) {
+          throw new Error(`SyntaxError: Variable \`${expression.variable}\` not defined`);
+        }
+        return;
+      }
+    }
+  }
+
+  private validateWhereConditionVariablesInScope(
+    condition: WhereCondition,
+    scope: Set<string>,
+    params: Record<string, unknown>
+  ): void {
+    if (condition.type === "comparison") {
+      if (condition.left) this.validateExpressionVariablesInScope(condition.left, scope, params);
+      if (condition.right) this.validateExpressionVariablesInScope(condition.right, scope, params);
+      return;
+    }
+
+    if (condition.type === "and" || condition.type === "or") {
+      for (const c of condition.conditions || []) {
+        this.validateWhereConditionVariablesInScope(c, scope, params);
+      }
+      return;
+    }
+
+    if (condition.type === "not") {
+      if (condition.condition) this.validateWhereConditionVariablesInScope(condition.condition, scope, params);
     }
   }
   

@@ -382,7 +382,7 @@ export const FAILING_TESTS = new Set<string>([
   // "clauses/return-skip-limit > ReturnSkipLimit2 - Limit|6",
   // "clauses/return-skip-limit > ReturnSkipLimit2 - Limit|9",
   // "clauses/set > Set1 - Set a Property|10",
-  "clauses/set > Set1 - Set a Property|9",
+  // "clauses/set > Set1 - Set a Property|9",
   "clauses/union > Union1 - Union|5",
   "clauses/union > Union2 - Union All|5",
   "clauses/union > Union3 - Union in combination with Union All|1",
