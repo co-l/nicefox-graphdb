@@ -379,7 +379,7 @@ export const FAILING_TESTS = new Set<string>([
   // "clauses/return-skip-limit > ReturnSkipLimit2 - Limit|15",
   // "clauses/return-skip-limit > ReturnSkipLimit2 - Limit|16", // Fixed: LIMIT float value validation
   // "clauses/return-skip-limit > ReturnSkipLimit2 - Limit|17", // Fixed: LIMIT float value validation
-  "clauses/return-skip-limit > ReturnSkipLimit2 - Limit|6",
+  // "clauses/return-skip-limit > ReturnSkipLimit2 - Limit|6",
   // "clauses/return-skip-limit > ReturnSkipLimit2 - Limit|9",
   "clauses/set > Set1 - Set a Property|10",
   "clauses/set > Set1 - Set a Property|9",

@@ -2198,25 +2198,81 @@ export class Translator {
       p.edgeIsNew
     );
 
+    // Check if we need a subquery for WITH LIMIT/SKIP when RETURN is pure aggregation.
+    // When RETURN count(*) follows WITH n LIMIT 2, the LIMIT should apply to rows before
+    // aggregation, not to the aggregated result. We achieve this by wrapping the FROM in
+    // a subquery that applies the LIMIT.
+    const returnOnlyAggregates = clause.items.every(item => this.isAggregateExpression(item.expression));
+    const needsWithSubquery = returnOnlyAggregates && (withLimit !== undefined || withSkip !== undefined);
+    
     // Build final SQL
     // Apply DISTINCT from either the RETURN clause, preceding WITH, or OPTIONAL MATCH pattern
     const distinctKeyword = (clause.distinct || withDistinct || needsOptionalMatchDistinct) ? "DISTINCT " : "";
     let sql = `SELECT ${distinctKeyword}${selectParts.join(", ")}`;
 
-    if (fromParts.length > 0) {
+    if (needsWithSubquery && fromParts.length > 0) {
+      // Build inner query with LIMIT/SKIP from WITH clause
+      let innerSql = `SELECT * FROM ${fromParts.join(", ")}`;
+      if (joinParts.length > 0) {
+        innerSql += ` ${joinParts.join(" ")}`;
+      }
+      if (whereParts.length > 0) {
+        innerSql += ` WHERE ${whereParts.join(" AND ")}`;
+      }
+      
+      // Add ORDER BY if from WITH (needs to be in subquery for LIMIT to work correctly)
+      if (withOrderBy && withOrderBy.length > 0) {
+        const allAvailableAliases: string[] = [];
+        const withAliases = (this.ctx as any).withAliases as Map<string, Expression> | undefined;
+        if (withAliases) {
+          for (const aliasName of withAliases.keys()) {
+            allAvailableAliases.push(aliasName);
+          }
+        }
+        const orderParts = withOrderBy.map(({ expression, direction }) => {
+          const { sql: exprSql, params: orderParams } = this.translateOrderByExpression(expression, allAvailableAliases);
+          if (orderParams && orderParams.length > 0) {
+            whereParams.push(...orderParams);
+          }
+          return `${exprSql} ${direction}`;
+        });
+        innerSql += ` ORDER BY ${orderParts.join(", ")}`;
+      }
+      
+      // Add LIMIT/SKIP to inner query
+      if (withLimit !== undefined) {
+        const { sql: limitSql, params: limitParams } = this.translateSkipLimitExpression(withLimit, "LIMIT");
+        innerSql += ` LIMIT ${limitSql}`;
+        whereParams.push(...limitParams);
+      } else if (withSkip !== undefined) {
+        innerSql += ` LIMIT -1`;
+      }
+      if (withSkip !== undefined) {
+        const { sql: skipSql, params: skipParams } = this.translateSkipLimitExpression(withSkip, "SKIP");
+        innerSql += ` OFFSET ${skipSql}`;
+        whereParams.push(...skipParams);
+      }
+      
+      sql += ` FROM (${innerSql}) __with_subquery__`;
+      // Clear these since they've been applied in subquery
+      whereParts.length = 0;
+      joinParts.length = 0;
+    } else if (fromParts.length > 0) {
       sql += ` FROM ${fromParts.join(", ")}`;
+      if (joinParts.length > 0) {
+        sql += ` ${joinParts.join(" ")}`;
+      }
+      if (whereParts.length > 0) {
+        sql += ` WHERE ${whereParts.join(" AND ")}`;
+      }
     } else if (joinParts.length > 0) {
       // If we have JOINs but no FROM, we need a dummy FROM clause
       // This happens with OPTIONAL MATCH without a prior MATCH
       sql += ` FROM (SELECT 1) __dummy__`;
-    }
-
-    if (joinParts.length > 0) {
       sql += ` ${joinParts.join(" ")}`;
-    }
-
-    if (whereParts.length > 0) {
-      sql += ` WHERE ${whereParts.join(" AND ")}`;
+      if (whereParts.length > 0) {
+        sql += ` WHERE ${whereParts.join(" AND ")}`;
+      }
     }
 
     // Add GROUP BY for aggregation (from WITH or RETURN clauses)
@@ -2240,10 +2296,10 @@ export class Translator {
     }
     
     // Check RETURN clause for aggregation (when no WITH with aggregation)
+    const returnHasAggregates = clause.items.some(item => this.isAggregateExpression(item.expression));
+    const nonAggregateItems = clause.items.filter(item => !this.isAggregateExpression(item.expression));
+    
     if (groupByParts.length === 0) {
-      const returnHasAggregates = clause.items.some(item => this.isAggregateExpression(item.expression));
-      const nonAggregateItems = clause.items.filter(item => !this.isAggregateExpression(item.expression));
-      
       if (returnHasAggregates && nonAggregateItems.length > 0) {
         for (const item of nonAggregateItems) {
           const { sql: exprSql } = this.translateExpression(item.expression);
@@ -2256,8 +2312,23 @@ export class Translator {
       sql += ` GROUP BY ${groupByParts.join(", ")}`;
     }
 
-    // Add ORDER BY clause - use WITH orderBy if RETURN doesn't have one
-    const effectiveOrderBy = clause.orderBy && clause.orderBy.length > 0 ? clause.orderBy : withOrderBy;
+    // Determine effective LIMIT/SKIP (combine WITH and RETURN values)
+    // BUT: when RETURN has only aggregates and no grouping, WITH LIMIT/SKIP should apply
+    // to the inner query (before aggregation), not the outer result.
+    // We handle this by detecting if the WITH modifier should have been applied via subquery.
+    const withLimitAppliedViaSubquery = returnHasAggregates && nonAggregateItems.length === 0 && 
+      (withLimit !== undefined || withSkip !== undefined);
+    
+    // If WITH LIMIT was applied via subquery, don't re-apply it here
+    const effectiveLimit = clause.limit !== undefined ? clause.limit : 
+      (withLimitAppliedViaSubquery ? undefined : withLimit);
+    const effectiveSkip = clause.skip !== undefined ? clause.skip : 
+      (withLimitAppliedViaSubquery ? undefined : withSkip);
+    
+    // Similarly for ORDER BY - if it was WITH ORDER BY applied via subquery, don't re-apply
+    const effectiveOrderBy = clause.orderBy && clause.orderBy.length > 0 ? clause.orderBy : 
+      (withLimitAppliedViaSubquery ? undefined : withOrderBy);
+      
     if (effectiveOrderBy && effectiveOrderBy.length > 0) {
       // Collect all available aliases for ORDER BY: RETURN columns + WITH aliases
       const allAvailableAliases = [...returnColumns];
@@ -2280,10 +2351,7 @@ export class Translator {
       sql += ` ORDER BY ${orderParts.join(", ")}`;
     }
 
-    // Add LIMIT and OFFSET (SKIP) - combine WITH and RETURN values
-    const effectiveLimit = clause.limit !== undefined ? clause.limit : withLimit;
-    const effectiveSkip = clause.skip !== undefined ? clause.skip : withSkip;
-    
+    // Add LIMIT and OFFSET (SKIP)
     if (effectiveLimit !== undefined || effectiveSkip !== undefined) {
       if (effectiveLimit !== undefined) {
         const { sql: limitSql, params: limitParams } = this.translateSkipLimitExpression(effectiveLimit, "LIMIT");
@@ -4846,8 +4914,9 @@ END FROM (SELECT json_group_array(${valueExpr}) as sv))`,
             tables.push(...argResult.tables);
             params.push(...argResult.params);
             // SQLite doesn't have CEIL, simulate with CASE
+            // Use subquery to evaluate arg once (avoids duplicate parameter binding)
             return { 
-              sql: `CASE WHEN ${argResult.sql} = CAST(${argResult.sql} AS INTEGER) THEN CAST(${argResult.sql} AS INTEGER) ELSE CAST(${argResult.sql} AS INTEGER) + 1 END`, 
+              sql: `(SELECT CASE WHEN v = CAST(v AS INTEGER) THEN CAST(v AS INTEGER) ELSE CAST(v AS INTEGER) + 1 END FROM (SELECT ${argResult.sql} AS v))`, 
               tables, 
               params 
             };
