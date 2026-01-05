@@ -7089,6 +7089,16 @@ END FROM (SELECT json_group_array(${valueExpr}) as sv))`,
     if (expr.type === "binary") {
       return this.isAggregateExpression(expr.left!) || this.isAggregateExpression(expr.right!);
     }
+    // Check object/map literals for aggregates in property values
+    if (expr.type === "object" && expr.properties) {
+      return expr.properties.some(prop => this.isAggregateExpression(prop.value));
+    }
+    // Check comparison expressions for aggregates (note: IS NULL/IS NOT NULL have no right operand)
+    if (expr.type === "comparison") {
+      const leftHasAggregate = expr.left ? this.isAggregateExpression(expr.left) : false;
+      const rightHasAggregate = expr.right ? this.isAggregateExpression(expr.right) : false;
+      return leftHasAggregate || rightHasAggregate;
+    }
     return false;
   }
 

@@ -361,7 +361,7 @@ export const FAILING_TESTS = new Set<string>([
   // "clauses/return > Return6 - Implicit grouping with aggregates|14",
   // "clauses/return > Return6 - Implicit grouping with aggregates|15",
   // "clauses/return > Return6 - Implicit grouping with aggregates|16",
-  "clauses/return > Return6 - Implicit grouping with aggregates|6",
+  // "clauses/return > Return6 - Implicit grouping with aggregates|6",
   // "clauses/return > Return7 - Return all variables|2",
   // "clauses/return-skip-limit > ReturnSkipLimit1 - Skip|10",
   // "clauses/return-skip-limit > ReturnSkipLimit1 - Skip|11", // Fixed: SKIP negative value validation
