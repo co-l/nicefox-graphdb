@@ -342,7 +342,7 @@ export const FAILING_TESTS = new Set<string>([
   // "clauses/return-orderby > ReturnOrderBy2 - Order by a single expression (order of projection)|13",
   // "clauses/return-orderby > ReturnOrderBy2 - Order by a single expression (order of projection)|14",
   // "clauses/return-orderby > ReturnOrderBy2 - Order by a single expression (order of projection)|3",
-  "clauses/return-orderby > ReturnOrderBy2 - Order by a single expression (order of projection)|6",
+  // "clauses/return-orderby > ReturnOrderBy2 - Order by a single expression (order of projection)|6",
   "clauses/return-orderby > ReturnOrderBy3 - Order by multiple expressions (order obey priority of expressions)|1",
   "clauses/return-orderby > ReturnOrderBy4 - Order by in combination with projection|1",
   "clauses/return-orderby > ReturnOrderBy4 - Order by in combination with projection|2",
