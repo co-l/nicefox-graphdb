@@ -4103,6 +4103,10 @@ export class Executor {
 
   /**
    * Execute a MERGE clause with ON CREATE SET and/or ON MATCH SET
+   * 
+   * This needs to handle the case where MATCH returns multiple rows.
+   * For each MATCH row, we execute the MERGE (with its ON CREATE SET / ON MATCH SET)
+   * and collect results for RETURN.
    */
   private executeMergeWithSetClauses(
     matchClauses: MatchClause[],
@@ -4112,14 +4116,12 @@ export class Executor {
     returnClause: ReturnClause | null,
     params: Record<string, unknown>
   ): Record<string, unknown>[] {
-    // Track matched/created nodes 
-    const matchedNodes = new Map<string, { id: string; label: string; properties: Record<string, unknown> }>();
+    // First, execute CREATE clauses to create any prerequisite nodes
+    const createdNodes = new Map<string, { id: string; label: string; properties: Record<string, unknown> }>();
     
-    // Execute CREATE clauses first to create nodes
     for (const createClause of createClauses) {
       for (const pattern of createClause.patterns) {
         if (this.isRelationshipPattern(pattern)) {
-          // Skip relationship patterns for now - just focus on node creation
           continue;
         }
         
@@ -4137,7 +4139,7 @@ export class Executor {
           const labelStr = Array.isArray(nodePattern.label) 
             ? nodePattern.label.join(":") 
             : (nodePattern.label || "");
-          matchedNodes.set(nodePattern.variable, {
+          createdNodes.set(nodePattern.variable, {
             id,
             label: labelStr,
             properties: props,
@@ -4146,9 +4148,16 @@ export class Executor {
       }
     }
     
-    // Execute MATCH clauses to get referenced nodes
-    // First, extract id() conditions from WHERE clauses
-    const idConditions = new Map<string, string>(); // variable -> id value
+    // Execute MATCH clauses to get ALL rows (not just one)
+    // For queries like: MATCH (person:Person) MERGE (city:City) ON CREATE SET city.name = person.bornIn
+    // We need to iterate over all Person nodes
+    
+    // Build a list of all MATCH rows
+    type MatchRow = Map<string, { id: string; label: string; properties: Record<string, unknown> }>;
+    let matchRows: MatchRow[] = [new Map(createdNodes)]; // Start with created nodes in each row
+    
+    // Extract id() conditions from WHERE clauses
+    const idConditions = new Map<string, string>();
     for (const matchClause of matchClauses) {
       if (matchClause.where) {
         this.extractIdConditions(matchClause.where, idConditions, params);
@@ -4156,9 +4165,10 @@ export class Executor {
     }
     
     for (const matchClause of matchClauses) {
+      // For each pattern within a MATCH clause, we build a Cartesian product
+      // MATCH (a:A), (b:B) means: for each A node, for each B node, create a row
       for (const pattern of matchClause.patterns) {
         if (this.isRelationshipPattern(pattern)) {
-          // For now, only handle simple node patterns in MATCH before MERGE
           throw new Error("Relationship patterns in MATCH before MERGE not yet supported");
         }
         
@@ -4169,7 +4179,6 @@ export class Executor {
         const conditions: string[] = [];
         const conditionParams: unknown[] = [];
         
-        // Check if we have an id() condition for this variable
         if (nodePattern.variable && idConditions.has(nodePattern.variable)) {
           conditions.push("id = ?");
           conditionParams.push(idConditions.get(nodePattern.variable));
@@ -4186,56 +4195,298 @@ export class Executor {
           conditionParams.push(value);
         }
         
-        // Build the query - if no conditions, select all nodes (for cases like MATCH (a), (b))
         const findSql = conditions.length > 0
           ? `SELECT id, label, properties FROM nodes WHERE ${conditions.join(" AND ")}`
-          : `SELECT id, label, properties FROM nodes LIMIT 1`;
+          : `SELECT id, label, properties FROM nodes`;
         const findResult = this.db.execute(findSql, conditionParams);
         
-        if (findResult.rows.length > 0 && nodePattern.variable) {
-          const row = findResult.rows[0];
-          const labelValue = typeof row.label === "string" ? JSON.parse(row.label) : row.label;
-          matchedNodes.set(nodePattern.variable, {
-            id: row.id as string,
-            label: labelValue,
-            properties: typeof row.properties === "string" ? JSON.parse(row.properties) : row.properties,
-          });
+        // For each existing match row, create new rows for each found node (Cartesian product)
+        const newMatchRows: MatchRow[] = [];
+        for (const existingRow of matchRows) {
+          for (const sqlRow of findResult.rows) {
+            const newRow = new Map(existingRow);
+            if (nodePattern.variable) {
+              const labelValue = typeof sqlRow.label === "string" ? JSON.parse(sqlRow.label) : sqlRow.label;
+              newRow.set(nodePattern.variable, {
+                id: sqlRow.id as string,
+                label: labelValue,
+                properties: typeof sqlRow.properties === "string" ? JSON.parse(sqlRow.properties) : sqlRow.properties,
+              });
+            }
+            newMatchRows.push(newRow);
+          }
+        }
+        
+        // Update matchRows after processing each pattern
+        if (newMatchRows.length > 0) {
+          matchRows = newMatchRows;
         }
       }
     }
     
     // Process WITH clauses to handle aliasing
-    // e.g., WITH n AS a, m AS b - creates aliases that map a->n, b->m in matched nodes
     for (const withClause of withClauses) {
       for (const item of withClause.items) {
         const alias = item.alias;
         const expr = item.expression;
         
-        // Handle WITH n AS a - aliasing matched variable
         if (alias && expr.type === "variable" && expr.variable) {
           const sourceVar = expr.variable;
-          const sourceNode = matchedNodes.get(sourceVar);
-          if (sourceNode) {
-            // Create alias pointing to the same node
-            matchedNodes.set(alias, sourceNode);
+          for (const row of matchRows) {
+            const sourceNode = row.get(sourceVar);
+            if (sourceNode) {
+              row.set(alias, sourceNode);
+            }
           }
         }
       }
     }
     
-    // Now handle the MERGE pattern
+    // Now execute MERGE for each match row and collect results
+    const allResults: Record<string, unknown>[] = [];
     const patterns = mergeClause.patterns;
     
-    // Check if this is a relationship pattern or a simple node pattern
-    if (patterns.length === 1 && !this.isRelationshipPattern(patterns[0])) {
-      // Simple node MERGE
-      return this.executeMergeNode(patterns[0] as NodePattern, mergeClause, returnClause, params, matchedNodes);
-    } else if (patterns.length === 1 && this.isRelationshipPattern(patterns[0])) {
-      // Relationship MERGE
-      return this.executeMergeRelationship(patterns[0] as RelationshipPattern, mergeClause, returnClause, params, matchedNodes);
-    } else {
-      throw new Error("Complex MERGE patterns not yet supported");
+    for (const matchRow of matchRows) {
+      // Convert matchRow to the format expected by executeMergeNodeForRow
+      const matchedNodes = new Map(matchRow);
+      
+      let rowResults: Record<string, unknown>[];
+      if (patterns.length === 1 && !this.isRelationshipPattern(patterns[0])) {
+        rowResults = this.executeMergeNodeForRow(patterns[0] as NodePattern, mergeClause, returnClause, params, matchedNodes);
+      } else if (patterns.length === 1 && this.isRelationshipPattern(patterns[0])) {
+        rowResults = this.executeMergeRelationshipForRow(patterns[0] as RelationshipPattern, mergeClause, returnClause, params, matchedNodes);
+      } else {
+        throw new Error("Complex MERGE patterns not yet supported");
+      }
+      
+      allResults.push(...rowResults);
     }
+    
+    return allResults;
+  }
+  
+  /**
+   * Execute a simple node MERGE for a single input row
+   * Used when there's a MATCH before MERGE - this handles one row at a time
+   */
+  private executeMergeNodeForRow(
+    pattern: NodePattern,
+    mergeClause: MergeClause,
+    returnClause: ReturnClause | null,
+    params: Record<string, unknown>,
+    matchedNodes: Map<string, { id: string; label: string; properties: Record<string, unknown> }>
+  ): Record<string, unknown>[] {
+    const matchProps = this.resolvePropertiesWithMatchedNodes(pattern.properties || {}, params, matchedNodes);
+    
+    // Build WHERE conditions to find existing node
+    const conditions: string[] = [];
+    const conditionParams: unknown[] = [];
+    
+    if (pattern.label) {
+      const labelCondition = this.generateLabelCondition(pattern.label);
+      conditions.push(labelCondition.sql);
+      conditionParams.push(...labelCondition.params);
+    }
+    
+    for (const [key, value] of Object.entries(matchProps)) {
+      conditions.push(`json_extract(properties, '$.${key}') = ?`);
+      conditionParams.push(value);
+    }
+    
+    // Try to find existing node
+    let findResult: { rows: Record<string, unknown>[] };
+    if (conditions.length > 0) {
+      const findSql = `SELECT id, label, properties FROM nodes WHERE ${conditions.join(" AND ")}`;
+      findResult = this.db.execute(findSql, conditionParams);
+    } else {
+      findResult = this.db.execute("SELECT id, label, properties FROM nodes LIMIT 1");
+    }
+    
+    let nodeId: string;
+    let wasCreated = false;
+    
+    if (findResult.rows.length === 0) {
+      // Node doesn't exist - create it
+      nodeId = crypto.randomUUID();
+      wasCreated = true;
+      
+      const nodeProps = { ...matchProps };
+      const additionalLabels: string[] = [];
+      
+      // Apply ON CREATE SET properties
+      if (mergeClause.onCreateSet) {
+        for (const assignment of mergeClause.onCreateSet) {
+          if (assignment.labels && assignment.labels.length > 0) {
+            additionalLabels.push(...assignment.labels);
+            continue;
+          }
+          if (!assignment.value || !assignment.property) continue;
+          const value = this.evaluateExpressionWithMatchedNodes(assignment.value, params, matchedNodes);
+          nodeProps[assignment.property] = value;
+        }
+      }
+      
+      const allLabels = pattern.label 
+        ? (Array.isArray(pattern.label) ? [...pattern.label] : [pattern.label])
+        : [];
+      allLabels.push(...additionalLabels);
+      const labelJson = JSON.stringify(allLabels);
+      
+      this.db.execute(
+        "INSERT INTO nodes (id, label, properties) VALUES (?, ?, ?)",
+        [nodeId, labelJson, JSON.stringify(nodeProps)]
+      );
+    } else {
+      // Node exists - apply ON MATCH SET
+      nodeId = findResult.rows[0].id as string;
+      
+      if (mergeClause.onMatchSet) {
+        for (const assignment of mergeClause.onMatchSet) {
+          if (assignment.labels && assignment.labels.length > 0) {
+            const newLabelsJson = JSON.stringify(assignment.labels);
+            this.db.execute(
+              `UPDATE nodes SET label = (SELECT json_group_array(value) FROM (
+                SELECT DISTINCT value FROM (
+                  SELECT value FROM json_each(nodes.label)
+                  UNION ALL
+                  SELECT value FROM json_each(?)
+                ) ORDER BY value
+              )) WHERE id = ?`,
+              [newLabelsJson, nodeId]
+            );
+            continue;
+          }
+          if (!assignment.value || !assignment.property) continue;
+          const value = this.evaluateExpressionWithMatchedNodes(assignment.value, params, matchedNodes);
+          this.db.execute(
+            `UPDATE nodes SET properties = json_set(properties, '$.${assignment.property}', json(?)) WHERE id = ?`,
+            [JSON.stringify(value), nodeId]
+          );
+        }
+      }
+    }
+    
+    // Store the node in matchedNodes for RETURN processing
+    if (pattern.variable) {
+      const nodeResult = this.db.execute("SELECT id, label, properties FROM nodes WHERE id = ?", [nodeId]);
+      if (nodeResult.rows.length > 0) {
+        const row = nodeResult.rows[0];
+        matchedNodes.set(pattern.variable, {
+          id: row.id as string,
+          label: row.label as string,
+          properties: typeof row.properties === "string" ? JSON.parse(row.properties) : row.properties,
+        });
+      }
+    }
+    
+    // If there's a RETURN clause, process it
+    if (returnClause) {
+      return this.processReturnClause(returnClause, matchedNodes, params);
+    }
+    
+    return [];
+  }
+  
+  /**
+   * Execute a relationship MERGE for a single input row
+   */
+  private executeMergeRelationshipForRow(
+    pattern: RelationshipPattern,
+    mergeClause: MergeClause,
+    returnClause: ReturnClause | null,
+    params: Record<string, unknown>,
+    matchedNodes: Map<string, { id: string; label: string; properties: Record<string, unknown> }>
+  ): Record<string, unknown>[] {
+    // Delegate to the existing executeMergeRelationship for now
+    return this.executeMergeRelationship(pattern, mergeClause, returnClause, params, matchedNodes);
+  }
+  
+  /**
+   * Resolve properties with access to matched nodes for property references
+   */
+  private resolvePropertiesWithMatchedNodes(
+    props: Record<string, unknown>,
+    params: Record<string, unknown>,
+    matchedNodes: Map<string, { id: string; label: string; properties: Record<string, unknown> }>
+  ): Record<string, unknown> {
+    const resolved: Record<string, unknown> = {};
+    for (const [key, value] of Object.entries(props)) {
+      resolved[key] = this.resolvePropertyValueWithMatchedNodes(value, params, matchedNodes);
+    }
+    return resolved;
+  }
+  
+  /**
+   * Resolve a single property value with matched nodes context
+   */
+  private resolvePropertyValueWithMatchedNodes(
+    value: unknown,
+    params: Record<string, unknown>,
+    matchedNodes: Map<string, { id: string; label: string; properties: Record<string, unknown> }>
+  ): unknown {
+    if (typeof value !== "object" || value === null) {
+      return value;
+    }
+    
+    const typed = value as Expression;
+    
+    if (typed.type === "parameter" && typed.name) {
+      return params[typed.name];
+    }
+    
+    if (typed.type === "property" && typed.variable && typed.property) {
+      const nodeInfo = matchedNodes.get(typed.variable);
+      if (nodeInfo) {
+        return nodeInfo.properties[typed.property];
+      }
+      return null;
+    }
+    
+    return value;
+  }
+  
+  /**
+   * Evaluate an expression with matched nodes context
+   */
+  private evaluateExpressionWithMatchedNodes(
+    expr: Expression,
+    params: Record<string, unknown>,
+    matchedNodes: Map<string, { id: string; label: string; properties: Record<string, unknown> }>
+  ): unknown {
+    if (expr.type === "literal") {
+      return expr.value;
+    }
+    
+    if (expr.type === "parameter" && expr.name) {
+      return params[expr.name];
+    }
+    
+    if (expr.type === "property" && expr.variable && expr.property) {
+      const nodeInfo = matchedNodes.get(expr.variable);
+      if (nodeInfo) {
+        return nodeInfo.properties[expr.property];
+      }
+      return null;
+    }
+    
+    if (expr.type === "binary" && expr.left && expr.right && expr.operator) {
+      const left = this.evaluateExpressionWithMatchedNodes(expr.left, params, matchedNodes);
+      const right = this.evaluateExpressionWithMatchedNodes(expr.right, params, matchedNodes);
+      
+      const leftNum = left as number;
+      const rightNum = right as number;
+      
+      switch (expr.operator) {
+        case "+": return leftNum + rightNum;
+        case "-": return leftNum - rightNum;
+        case "*": return leftNum * rightNum;
+        case "/": return leftNum / rightNum;
+        case "%": return leftNum % rightNum;
+        default: return null;
+      }
+    }
+    
+    return null;
   }
 
   /**
