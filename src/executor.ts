@@ -319,21 +319,43 @@ export class Executor {
   ): Record<string, unknown>[] | null {
     const phases = this.detectPhases(query);
     
-    // If only one phase, standard execution can handle it
-    if (phases.length <= 1) {
+    // Check if we need phased execution for MATCH + MERGE combinations
+    // These need special handling for proper Cartesian product semantics
+    // BUT: If MERGE has ON CREATE SET or ON MATCH SET, let tryMergeExecution handle it
+    const hasMatch = query.clauses.some(c => c.type === "MATCH");
+    const hasMerge = query.clauses.some(c => c.type === "MERGE");
+    const mergeClause = query.clauses.find(c => c.type === "MERGE") as MergeClause | undefined;
+    const mergeHasSetClauses = mergeClause?.onCreateSet || mergeClause?.onMatchSet;
+    const needsMergePhasedExecution = hasMatch && hasMerge && !mergeHasSetClauses;
+    
+    // If only one phase and no MATCH+MERGE combo, standard execution can handle it
+    if (phases.length <= 1 && !needsMergePhasedExecution) {
       return null;
     }
+    
+    // For MATCH+MERGE, execute all clauses in sequence using phased execution
+    const clausesToExecute = needsMergePhasedExecution && phases.length <= 1 
+      ? [query.clauses]  // All clauses as one phase, but processed by phased executor
+      : phases;
+    
+    // Check if query has a RETURN clause
+    const hasReturn = query.clauses.some(c => c.type === "RETURN");
     
     // Execute phases sequentially
     let context = createEmptyContext();
     
     this.db.transaction(() => {
-      for (let i = 0; i < phases.length; i++) {
-        const phase = phases[i];
-        const isLastPhase = i === phases.length - 1;
+      for (let i = 0; i < clausesToExecute.length; i++) {
+        const phase = clausesToExecute[i];
+        const isLastPhase = i === clausesToExecute.length - 1;
         context = this.executePhase(phase, context, params, isLastPhase);
       }
     });
+    
+    // If no RETURN clause, return empty array (write-only query)
+    if (!hasReturn) {
+      return [];
+    }
     
     // Convert context rows to result format
     return this.contextToResults(context);
@@ -563,6 +585,8 @@ export class Executor {
     switch (clause.type) {
       case "CREATE":
         return this.executeCreateClause(clause, context, params);
+      case "MERGE":
+        return this.executeMergeClause(clause, context, params);
       case "WITH":
         return this.executeWithClause(clause, context, params);
       case "UNWIND":
@@ -610,6 +634,207 @@ export class Executor {
     
     newContext.rows = newRows;
     return newContext;
+  }
+
+  /**
+   * Execute MERGE clause
+   * 
+   * MERGE semantics:
+   * - For each input row, find nodes/edges matching the MERGE pattern
+   * - If match found, bind to existing nodes (creating Cartesian product with all matches)
+   * - If no match, create new nodes/edges
+   * 
+   * For MERGE (b) with no label/properties after MATCH (a):
+   * - If ANY nodes exist, match ALL of them → Cartesian product with input rows
+   * - If NO nodes exist, create one node per input row
+   */
+  private executeMergeClause(
+    clause: MergeClause,
+    context: PhaseContext,
+    params: Record<string, unknown>
+  ): PhaseContext {
+    const newContext = cloneContext(context);
+    const newRows: Array<Map<string, unknown>> = [];
+    
+    for (const inputRow of context.rows) {
+      for (const pattern of clause.patterns) {
+        if (this.isRelationshipPattern(pattern)) {
+          // Relationship MERGE - more complex, delegate to helper
+          const mergeRows = this.executeMergeRelationshipInContext(
+            pattern, inputRow, newContext, params
+          );
+          newRows.push(...mergeRows);
+        } else {
+          // Node MERGE
+          const mergeRows = this.executeMergeNodeInContext(
+            pattern as NodePattern, inputRow, newContext, params
+          );
+          newRows.push(...mergeRows);
+        }
+      }
+    }
+    
+    newContext.rows = newRows;
+    return newContext;
+  }
+
+  /**
+   * Execute MERGE for a node pattern within a row context
+   * Returns multiple rows if multiple nodes match (Cartesian product)
+   */
+  private executeMergeNodeInContext(
+    pattern: NodePattern,
+    inputRow: Map<string, unknown>,
+    globalContext: PhaseContext,
+    params: Record<string, unknown>
+  ): Array<Map<string, unknown>> {
+    const props = this.resolvePropertiesInContext(pattern.properties || {}, inputRow, params);
+    
+    // Build query to find existing matching nodes
+    const conditions: string[] = [];
+    const conditionParams: unknown[] = [];
+    
+    // Label condition
+    if (pattern.label) {
+      const labels = Array.isArray(pattern.label) ? pattern.label : [pattern.label];
+      for (const label of labels) {
+        conditions.push(`EXISTS (SELECT 1 FROM json_each(label) WHERE value = ?)`);
+        conditionParams.push(label);
+      }
+    }
+    
+    // Property conditions
+    for (const [key, value] of Object.entries(props)) {
+      conditions.push(`json_extract(properties, '$.${key}') = ?`);
+      conditionParams.push(value);
+    }
+    
+    // Find existing nodes
+    const findSql = conditions.length > 0
+      ? `SELECT id, label, properties FROM nodes WHERE ${conditions.join(" AND ")}`
+      : `SELECT id, label, properties FROM nodes`;
+    
+    const findResult = this.db.execute(findSql, conditionParams);
+    
+    if (findResult.rows.length > 0) {
+      // Nodes found - create Cartesian product (one output row per found node)
+      const outputRows: Array<Map<string, unknown>> = [];
+      
+      for (const row of findResult.rows) {
+        const outputRow = new Map(inputRow);
+        
+        if (pattern.variable) {
+          const nodeProps = typeof row.properties === "string" 
+            ? JSON.parse(row.properties) 
+            : row.properties;
+          const nodeObj = { ...nodeProps, _nf_id: row.id };
+          outputRow.set(pattern.variable, nodeObj);
+        }
+        
+        outputRows.push(outputRow);
+      }
+      
+      return outputRows;
+    } else {
+      // No nodes found - create one
+      const id = crypto.randomUUID();
+      const labelJson = this.normalizeLabelToJson(pattern.label);
+      
+      this.db.execute(
+        "INSERT INTO nodes (id, label, properties) VALUES (?, ?, ?)",
+        [id, labelJson, JSON.stringify(props)]
+      );
+      
+      const outputRow = new Map(inputRow);
+      if (pattern.variable) {
+        const nodeObj = { ...props, _nf_id: id };
+        outputRow.set(pattern.variable, nodeObj);
+        globalContext.nodeIds.set(pattern.variable, id);
+      }
+      
+      return [outputRow];
+    }
+  }
+
+  /**
+   * Execute MERGE for a relationship pattern within a row context
+   * Returns multiple rows if multiple matches found
+   */
+  private executeMergeRelationshipInContext(
+    pattern: RelationshipPattern,
+    inputRow: Map<string, unknown>,
+    globalContext: PhaseContext,
+    params: Record<string, unknown>
+  ): Array<Map<string, unknown>> {
+    // MERGE requires a relationship type
+    if (!pattern.edge.type) {
+      throw new Error("MERGE requires a relationship type");
+    }
+    
+    // For relationship MERGE, we need to:
+    // 1. Resolve source and target nodes (from context or create)
+    // 2. Find or create the relationship
+    
+    // Get source node
+    let sourceId: string | null = null;
+    if (pattern.source.variable && inputRow.has(pattern.source.variable)) {
+      sourceId = this.extractNodeId(inputRow.get(pattern.source.variable));
+    }
+    
+    // Get target node
+    let targetId: string | null = null;
+    if (pattern.target.variable && inputRow.has(pattern.target.variable)) {
+      targetId = this.extractNodeId(inputRow.get(pattern.target.variable));
+    }
+    
+    // If source or target not in context, we need to find/create them
+    // This is a simplified implementation - full MERGE relationship semantics is complex
+    
+    if (!sourceId || !targetId) {
+      // Can't do relationship MERGE without both endpoints
+      // Just return the input row unchanged
+      return [inputRow];
+    }
+    
+    const edgeType = pattern.edge.type || "";
+    const edgeProps = this.resolvePropertiesInContext(pattern.edge.properties || {}, inputRow, params);
+    
+    // Adjust for direction
+    const [actualSource, actualTarget] = 
+      pattern.edge.direction === "left" ? [targetId, sourceId] : [sourceId, targetId];
+    
+    // Find existing edge
+    let findSql = `SELECT id, properties FROM edges WHERE source_id = ? AND target_id = ? AND type = ?`;
+    const findParams: unknown[] = [actualSource, actualTarget, edgeType];
+    
+    const findResult = this.db.execute(findSql, findParams);
+    
+    const outputRow = new Map(inputRow);
+    
+    if (findResult.rows.length > 0) {
+      // Edge exists
+      if (pattern.edge.variable) {
+        const edgeRow = findResult.rows[0];
+        const props = typeof edgeRow.properties === "string"
+          ? JSON.parse(edgeRow.properties)
+          : edgeRow.properties;
+        outputRow.set(pattern.edge.variable, { ...props, _nf_id: edgeRow.id });
+      }
+    } else {
+      // Create edge
+      const edgeId = crypto.randomUUID();
+      this.db.execute(
+        "INSERT INTO edges (id, type, source_id, target_id, properties) VALUES (?, ?, ?, ?, ?)",
+        [edgeId, edgeType, actualSource, actualTarget, JSON.stringify(edgeProps)]
+      );
+      
+      if (pattern.edge.variable) {
+        outputRow.set(pattern.edge.variable, { ...edgeProps, _nf_id: edgeId });
+        globalContext.edgeIds.set(pattern.edge.variable, edgeId);
+      }
+    }
+    
+    return [outputRow];
   }
 
   /**
@@ -964,9 +1189,41 @@ export class Executor {
       }
     }
     
-    // For now, delegate to SQL translation for MATCH
-    // This is a complex operation that the translator handles well
-    // We'll use it and merge results back into context
+    // For queries with bound variables, we need to execute the match for each input row
+    // using that row's variable values as constraints
+    const newContext = cloneContext(context);
+    const newRows: Array<Map<string, unknown>> = [];
+    
+    if (boundVars.size > 0) {
+      // Execute match for each input row individually
+      for (const inputRow of context.rows) {
+        const matchResults = this.executeMatchForRow(clause, inputRow, boundVars, introducedVars, params);
+        
+        if (matchResults.length > 0) {
+          for (const matchResult of matchResults) {
+            const outputRow = new Map(inputRow);
+            for (const [key, value] of matchResult) {
+              outputRow.set(key, value);
+            }
+            newRows.push(outputRow);
+          }
+        } else if (clause.type === "OPTIONAL_MATCH") {
+          // No match found - add null for introduced variables
+          const outputRow = new Map(inputRow);
+          for (const varName of introducedVars) {
+            outputRow.set(varName, null);
+          }
+          newRows.push(outputRow);
+        }
+        // For regular MATCH with no results, row is excluded
+      }
+      
+      newContext.rows = newRows;
+      return newContext;
+    }
+    
+    // No bound variables - delegate to SQL translation for MATCH
+    // This handles standalone MATCH clauses well
     
     const matchQuery: Query = {
       clauses: [
@@ -980,9 +1237,6 @@ export class Executor {
     
     const translator = new Translator(params);
     const translation = translator.translate(matchQuery);
-    
-    const newContext = cloneContext(context);
-    const newRows: Array<Map<string, unknown>> = [];
     
     for (const stmt of translation.statements) {
       const result = this.db.execute(stmt.sql, stmt.params);
@@ -1020,6 +1274,104 @@ export class Executor {
     }
     
     return newContext;
+  }
+
+  /**
+   * Execute a MATCH clause for a single input row, using bound variable values as constraints
+   */
+  private executeMatchForRow(
+    clause: MatchClause,
+    inputRow: Map<string, unknown>,
+    boundVars: Set<string>,
+    introducedVars: Set<string>,
+    params: Record<string, unknown>
+  ): Array<Map<string, unknown>> {
+    const results: Array<Map<string, unknown>> = [];
+    
+    for (const pattern of clause.patterns) {
+      if (this.isRelationshipPattern(pattern)) {
+        // Relationship pattern with bound endpoints
+        const relPattern = pattern as RelationshipPattern;
+        
+        // Get bound node IDs
+        const sourceVar = relPattern.source.variable;
+        const targetVar = relPattern.target.variable;
+        const edgeVar = relPattern.edge.variable;
+        
+        let sourceId: string | null = null;
+        let targetId: string | null = null;
+        
+        if (sourceVar && boundVars.has(sourceVar)) {
+          sourceId = this.extractNodeId(inputRow.get(sourceVar));
+        }
+        if (targetVar && boundVars.has(targetVar)) {
+          targetId = this.extractNodeId(inputRow.get(targetVar));
+        }
+        
+        // If we have both bound nodes, find edges between them
+        if (sourceId && targetId) {
+          // Build edge query - for undirected pattern (a)--(b), match both directions
+          let edgeSql: string;
+          let edgeParams: unknown[];
+          
+          const edgeType = relPattern.edge.type;
+          
+          if (relPattern.edge.direction === "none") {
+            // Undirected: match edges in either direction
+            edgeSql = `SELECT id, type, source_id, target_id, properties FROM edges 
+                       WHERE ((source_id = ? AND target_id = ?) OR (source_id = ? AND target_id = ?))`;
+            edgeParams = [sourceId, targetId, targetId, sourceId];
+            if (edgeType) {
+              edgeSql += ` AND type = ?`;
+              edgeParams.push(edgeType);
+            }
+          } else if (relPattern.edge.direction === "left") {
+            // Left: (a)<--(b) means edge goes from b to a
+            edgeSql = `SELECT id, type, source_id, target_id, properties FROM edges 
+                       WHERE source_id = ? AND target_id = ?`;
+            edgeParams = [targetId, sourceId];
+            if (edgeType) {
+              edgeSql += ` AND type = ?`;
+              edgeParams.push(edgeType);
+            }
+          } else {
+            // Right: (a)-->(b) means edge goes from a to b
+            edgeSql = `SELECT id, type, source_id, target_id, properties FROM edges 
+                       WHERE source_id = ? AND target_id = ?`;
+            edgeParams = [sourceId, targetId];
+            if (edgeType) {
+              edgeSql += ` AND type = ?`;
+              edgeParams.push(edgeType);
+            }
+          }
+          
+          const edgeResult = this.db.execute(edgeSql, edgeParams);
+          
+          for (const row of edgeResult.rows) {
+            const matchRow = new Map<string, unknown>();
+            
+            if (edgeVar) {
+              const edgeProps = typeof row.properties === "string"
+                ? JSON.parse(row.properties)
+                : row.properties;
+              matchRow.set(edgeVar, { ...edgeProps, _nf_id: row.id });
+            }
+            
+            results.push(matchRow);
+          }
+        }
+      } else {
+        // Node pattern - not typically used with bound vars in OPTIONAL MATCH after WITH
+        // but handle for completeness
+        const nodePattern = pattern as NodePattern;
+        if (nodePattern.variable && boundVars.has(nodePattern.variable)) {
+          // Node is already bound - just pass through
+          results.push(new Map());
+        }
+      }
+    }
+    
+    return results;
   }
 
   /**
@@ -1264,21 +1616,52 @@ export class Executor {
     params: Record<string, unknown>
   ): PhaseContext {
     const newContext = cloneContext(context);
-    const newRows: Array<Map<string, unknown>> = [];
     
-    for (const row of context.rows) {
+    // Check if any return item contains an aggregate function
+    const hasAggregate = clause.items.some(item => 
+      this.expressionHasAggregate(item.expression)
+    );
+    
+    if (hasAggregate) {
+      // Aggregate mode: collapse all rows into one
       const outputRow = new Map<string, unknown>();
       
       for (const item of clause.items) {
         const alias = item.alias || this.getExpressionName(item.expression);
-        const value = this.evaluateExpressionInRow(item.expression, row, params);
-        outputRow.set(alias, value);
+        
+        if (this.expressionHasAggregate(item.expression)) {
+          // Evaluate aggregate across all rows
+          const value = this.evaluateAggregateExpression(item.expression, context.rows, params);
+          outputRow.set(alias, value);
+        } else {
+          // Non-aggregate: take from first row (grouping key)
+          if (context.rows.length > 0) {
+            const value = this.evaluateExpressionInRow(item.expression, context.rows[0], params);
+            outputRow.set(alias, value);
+          }
+        }
       }
       
-      newRows.push(outputRow);
+      newContext.rows = [outputRow];
+    } else {
+      // Non-aggregate mode: transform each row
+      const newRows: Array<Map<string, unknown>> = [];
+      
+      for (const row of context.rows) {
+        const outputRow = new Map<string, unknown>();
+        
+        for (const item of clause.items) {
+          const alias = item.alias || this.getExpressionName(item.expression);
+          const value = this.evaluateExpressionInRow(item.expression, row, params);
+          outputRow.set(alias, value);
+        }
+        
+        newRows.push(outputRow);
+      }
+      
+      newContext.rows = newRows;
     }
     
-    newContext.rows = newRows;
     return newContext;
   }
 
@@ -1465,8 +1848,38 @@ export class Executor {
       
       case "ID": {
         if (args.length === 0) return null;
-        const nodeId = this.evaluateExpressionInRow(args[0], row, params);
-        return nodeId;
+        const nodeVal = this.evaluateExpressionInRow(args[0], row, params);
+        // Extract _nf_id from node/edge object
+        if (typeof nodeVal === "object" && nodeVal !== null && "_nf_id" in nodeVal) {
+          return (nodeVal as Record<string, unknown>)._nf_id;
+        }
+        return nodeVal;
+      }
+      
+      case "TYPE": {
+        if (args.length === 0) return null;
+        const edgeVal = this.evaluateExpressionInRow(args[0], row, params);
+        
+        // Extract edge ID
+        let edgeId: string | null = null;
+        if (typeof edgeVal === "object" && edgeVal !== null && "_nf_id" in edgeVal) {
+          edgeId = (edgeVal as Record<string, unknown>)._nf_id as string;
+        } else if (typeof edgeVal === "string") {
+          edgeId = edgeVal;
+        }
+        
+        if (!edgeId) return null;
+        
+        // Look up edge type from database
+        const result = this.db.execute(
+          "SELECT type FROM edges WHERE id = ?",
+          [edgeId]
+        );
+        
+        if (result.rows.length > 0) {
+          return result.rows[0].type;
+        }
+        return null;
       }
       
       default:
