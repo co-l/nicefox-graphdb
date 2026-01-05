@@ -1071,6 +1071,16 @@ export class Translator {
     if (clause.distinct && clause.orderBy && clause.orderBy.length > 0) {
       this.validateDistinctOrderBy(clause);
     }
+    
+    // Validate ORDER BY with aggregation
+    // When aggregation is used in RETURN/WITH, ORDER BY expressions with mixed aggregate/non-aggregate
+    // are not allowed unless the non-aggregate parts are in an implicit GROUP BY
+    const hasAggregation = clause.items.some(item => this.isAggregateExpression(item.expression));
+    const prevWithOrderBy = (this.ctx as any).withOrderBy as { expression: Expression; direction: "ASC" | "DESC" }[] | undefined;
+    const orderByToValidate = clause.orderBy && clause.orderBy.length > 0 ? clause.orderBy : prevWithOrderBy;
+    if (hasAggregation && orderByToValidate && orderByToValidate.length > 0) {
+      this.validateAggregationOrderBy(clause, orderByToValidate);
+    }
 
     const selectParts: string[] = [];
     const returnColumns: string[] = [];
@@ -2238,7 +2248,10 @@ export class Translator {
       }
       
       const orderParts = effectiveOrderBy.map(({ expression, direction }) => {
-        const { sql: exprSql } = this.translateOrderByExpression(expression, allAvailableAliases);
+        const { sql: exprSql, params: orderParams } = this.translateOrderByExpression(expression, allAvailableAliases);
+        if (orderParams && orderParams.length > 0) {
+          whereParams.push(...orderParams);
+        }
         return `${exprSql} ${direction}`;
       });
       sql += ` ORDER BY ${orderParts.join(", ")}`;
@@ -2282,6 +2295,19 @@ export class Translator {
     
     // Check for duplicate column names within this WITH clause
     this.checkDuplicateColumnNames(clause.items);
+    
+    // Validate ORDER BY with aggregation in WITH
+    // Similar to RETURN, when WITH has aggregation, ORDER BY must only reference WITH items
+    const withHasAggregation = clause.items.some(item => this.isAggregateExpression(item.expression));
+    if (withHasAggregation && clause.orderBy && clause.orderBy.length > 0) {
+      // Convert WithClause items to ReturnItem format for validation
+      const returnClause: ReturnClause = {
+        type: "RETURN",
+        items: clause.items,
+        orderBy: clause.orderBy,
+      };
+      this.validateAggregationOrderBy(returnClause, clause.orderBy);
+    }
     
     if (!this.ctx.withClauses) {
       this.ctx.withClauses = [];
@@ -6521,7 +6547,7 @@ END FROM (SELECT json_group_array(${valueExpr}) as sv))`,
     throw new Error(`Unsupported list expression type in IN clause: ${listExpr.type}`);
   }
 
-  private translateOrderByExpression(expr: Expression, returnAliases: string[] = []): { sql: string } {
+  private translateOrderByExpression(expr: Expression, returnAliases: string[] = []): { sql: string; params?: unknown[] } {
     switch (expr.type) {
       case "property": {
         const varInfo = this.ctx.variables.get(expr.variable!);
@@ -6530,6 +6556,7 @@ END FROM (SELECT json_group_array(${valueExpr}) as sv))`,
         }
         return {
           sql: `json_extract(${varInfo.alias}.properties, '$.${expr.property}')`,
+          params: [],
         };
       }
 
@@ -6537,7 +6564,7 @@ END FROM (SELECT json_group_array(${valueExpr}) as sv))`,
         // First check if this is a return column alias (e.g., ORDER BY total)
         // SQL allows ORDER BY to reference SELECT column aliases directly
         if (returnAliases.includes(expr.variable!)) {
-          return { sql: expr.variable! };
+          return { sql: expr.variable!, params: [] };
         }
         
         // Check if this is an UNWIND variable
@@ -6551,7 +6578,7 @@ END FROM (SELECT json_group_array(${valueExpr}) as sv))`,
         if (unwindClauses) {
           const unwindClause = unwindClauses.find(u => u.variable === expr.variable);
           if (unwindClause) {
-            return { sql: `${unwindClause.alias}.value` };
+            return { sql: `${unwindClause.alias}.value`, params: [] };
           }
         }
         
@@ -6559,7 +6586,7 @@ END FROM (SELECT json_group_array(${valueExpr}) as sv))`,
         if (!varInfo) {
           throw new Error(`Unknown variable: ${expr.variable}`);
         }
-        return { sql: `${varInfo.alias}.id` };
+        return { sql: `${varInfo.alias}.id`, params: [] };
       }
 
       case "function": {
@@ -6569,19 +6596,83 @@ END FROM (SELECT json_group_array(${valueExpr}) as sv))`,
             if (!varInfo) {
               throw new Error(`Unknown variable: ${expr.args[0].variable}`);
             }
-            return { sql: `${varInfo.alias}.id` };
+            return { sql: `${varInfo.alias}.id`, params: [] };
           }
         }
         // Check if this function expression matches a return column alias
         const exprName = this.getExpressionName(expr);
         if (returnAliases.includes(exprName)) {
-          return { sql: this.quoteAlias(exprName) };
+          return { sql: this.quoteAlias(exprName), params: [] };
         }
         throw new Error(`Cannot order by function: ${expr.functionName}`);
       }
 
+      case "binary":
+      case "literal": {
+        // For complex expressions (binary, literal, etc.), translate them
+        // but substitute variables with column aliases when they are RETURN aliases
+        return this.translateOrderByComplexExpression(expr, returnAliases);
+      }
+
       default:
         throw new Error(`Cannot order by expression of type ${expr.type}`);
+    }
+  }
+  
+  /**
+   * Translate complex expressions for ORDER BY, substituting RETURN column aliases
+   */
+  private translateOrderByComplexExpression(expr: Expression, returnAliases: string[] = []): { sql: string; params: unknown[] } {
+    switch (expr.type) {
+      case "variable": {
+        // Check if this is a RETURN column alias
+        if (returnAliases.includes(expr.variable!)) {
+          return { sql: expr.variable!, params: [] };
+        }
+        // Otherwise fall back to regular translation
+        const varInfo = this.ctx.variables.get(expr.variable!);
+        if (!varInfo) {
+          // Check if it's a WITH alias
+          const withAliases = (this.ctx as any).withAliases as Map<string, Expression> | undefined;
+          if (withAliases && withAliases.has(expr.variable!)) {
+            // It's a WITH alias - use the alias name directly
+            return { sql: expr.variable!, params: [] };
+          }
+          throw new Error(`Unknown variable: ${expr.variable}`);
+        }
+        return { sql: `${varInfo.alias}.id`, params: [] };
+      }
+      
+      case "binary": {
+        const left = this.translateOrderByComplexExpression(expr.left!, returnAliases);
+        const right = this.translateOrderByComplexExpression(expr.right!, returnAliases);
+        const operator = expr.operator;
+        return {
+          sql: `(${left.sql} ${operator} ${right.sql})`,
+          params: [...left.params, ...right.params],
+        };
+      }
+      
+      case "literal": {
+        return { sql: "?", params: [expr.value] };
+      }
+      
+      case "property": {
+        const varInfo = this.ctx.variables.get(expr.variable!);
+        if (!varInfo) {
+          throw new Error(`Unknown variable: ${expr.variable}`);
+        }
+        return {
+          sql: `json_extract(${varInfo.alias}.properties, '$.${expr.property}')`,
+          params: [],
+        };
+      }
+      
+      default: {
+        // For other types, use the general translateExpression
+        // This handles functions, etc.
+        return this.translateExpression(expr);
+      }
     }
   }
 
@@ -7089,6 +7180,80 @@ END FROM (SELECT json_group_array(${valueExpr}) as sv))`,
     }
   }
 
+  /**
+   * Validate ORDER BY with aggregation in RETURN.
+   * When aggregation is used, ORDER BY can only reference:
+   * - Column aliases from RETURN
+   * - Expressions that exactly match RETURN expressions
+   * - Pure aggregate expressions (no mixing of aggregate and non-aggregate)
+   * 
+   * This prevents queries like:
+   * - RETURN count(you.age) ORDER BY me.age + count(you.age) - INVALID (me.age not grouped)
+   */
+  private validateAggregationOrderBy(clause: ReturnClause, orderBy: { expression: Expression; direction: "ASC" | "DESC" }[]): void {
+    // Build a set of available column aliases
+    const availableColumns = new Set<string>();
+    const returnedExpressions: Expression[] = [];
+    
+    for (const item of clause.items) {
+      const columnName = item.alias || this.getExpressionName(item.expression);
+      availableColumns.add(columnName);
+      returnedExpressions.push(item.expression);
+    }
+    
+    // Check each ORDER BY expression
+    for (const orderItem of orderBy) {
+      const orderExpr = orderItem.expression;
+      
+      // Check if it's a simple column alias reference
+      const orderExprName = this.getExpressionName(orderExpr);
+      if (availableColumns.has(orderExprName)) {
+        continue; // Valid - references a RETURN column
+      }
+      
+      // Check if it exactly matches a RETURN expression
+      if (this.expressionMatchesAny(orderExpr, returnedExpressions)) {
+        continue; // Valid - same expression in RETURN
+      }
+      
+      // Check if it's a pure aggregate expression (no non-aggregate parts)
+      // This is allowed even if not in RETURN
+      if (this.isPureAggregateExpression(orderExpr)) {
+        continue; // Valid - pure aggregate
+      }
+      
+      // Invalid - mixed aggregate/non-aggregate or non-aggregate on ungrouped variable
+      throw new Error(`SyntaxError: In a WITH/RETURN with DISTINCT or an aggregation, it is not possible to access variables not already contained in the WITH/RETURN`);
+    }
+  }
+  
+  /**
+   * Check if an expression is a pure aggregate (contains only aggregates, literals, and operators).
+   * No references to non-aggregated variables.
+   */
+  private isPureAggregateExpression(expr: Expression): boolean {
+    switch (expr.type) {
+      case "function": {
+        const aggregateFunctions = ["COUNT", "SUM", "AVG", "MIN", "MAX", "COLLECT", "PERCENTILEDISC", "PERCENTILECONT"];
+        if (aggregateFunctions.includes(expr.functionName?.toUpperCase() || "")) {
+          return true; // Aggregate function - pure
+        }
+        // Non-aggregate function - only pure if all args are pure aggregates or literals
+        return expr.args?.every(arg => this.isPureAggregateExpression(arg)) || false;
+      }
+      case "binary":
+        // Binary is pure if both sides are pure
+        return this.isPureAggregateExpression(expr.left!) && this.isPureAggregateExpression(expr.right!);
+      case "literal":
+        return true; // Literals are always pure
+      case "variable":
+      case "property":
+        return false; // Variable/property references are not pure aggregates
+      default:
+        return false; // Conservative - assume not pure
+    }
+  }
+  
   /**
    * Check if an expression matches any expression in the list (structurally).
    */
