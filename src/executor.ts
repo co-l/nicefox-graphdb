@@ -319,6 +319,9 @@ export class Executor {
   ): Record<string, unknown>[] | null {
     const phases = this.detectPhases(query);
     
+    // Semantic validation: Check if MERGE tries to use a variable already bound by MATCH
+    this.validateMergeVariables(query);
+    
     // Check if we need phased execution for MATCH + MERGE combinations
     // These need special handling for proper Cartesian product semantics
     // BUT: If MERGE has ON CREATE SET or ON MATCH SET, let tryMergeExecution handle it
@@ -360,6 +363,82 @@ export class Executor {
     
     // Convert context rows to result format
     return this.contextToResults(context);
+  }
+
+  /**
+   * Validate MERGE variables - cannot MERGE a variable that's already bound by MATCH
+   * 
+   * The rule is: you cannot MERGE a node pattern that is just a variable already
+   * bound by MATCH. MATCH guarantees the node exists, so MERGE would be meaningless.
+   * 
+   * However, you CAN use already-bound variables in:
+   * - Relationship MERGE endpoints: MATCH (a), (b) MERGE (a)-[:REL]->(b) is valid
+   * - Subsequent MERGE clauses: MERGE (c) MERGE (c) is valid (second one just matches)
+   */
+  private validateMergeVariables(query: Query): void {
+    // Track variables bound by MATCH clauses (not CREATE/MERGE)
+    const matchBoundVariables = new Set<string>();
+    
+    for (const clause of query.clauses) {
+      if (clause.type === "MATCH" || clause.type === "OPTIONAL_MATCH") {
+        // Collect all variables bound by MATCH
+        for (const pattern of clause.patterns) {
+          this.collectPatternVariables(pattern, matchBoundVariables);
+        }
+      } else if (clause.type === "MERGE") {
+        // Check if MERGE tries to use a MATCH-bound variable as a standalone node pattern
+        for (const pattern of clause.patterns) {
+          this.checkMergePatternForBoundVariables(pattern, matchBoundVariables);
+        }
+        // Note: We don't add MERGE variables to matchBoundVariables
+        // because MERGE (c) followed by MERGE (c) is valid
+      }
+      // Note: We don't track CREATE variables either - the semantics of
+      // CREATE (a) MERGE (a) are different but also not an error
+    }
+  }
+  
+  /**
+   * Collect all node and relationship variables from a pattern
+   */
+  private collectPatternVariables(pattern: NodePattern | RelationshipPattern, variables: Set<string>): void {
+    if (this.isRelationshipPattern(pattern)) {
+      // Relationship pattern - collect source, target, and edge variables
+      if (pattern.source?.variable) {
+        variables.add(pattern.source.variable);
+      }
+      if (pattern.target?.variable) {
+        variables.add(pattern.target.variable);
+      }
+      if (pattern.edge?.variable) {
+        variables.add(pattern.edge.variable);
+      }
+    } else {
+      // Node pattern
+      const nodePattern = pattern as NodePattern;
+      if (nodePattern.variable) {
+        variables.add(nodePattern.variable);
+      }
+    }
+  }
+  
+  /**
+   * Check if a MERGE pattern tries to use an already-bound variable
+   */
+  private checkMergePatternForBoundVariables(pattern: NodePattern | RelationshipPattern, boundVariables: Set<string>): void {
+    if (this.isRelationshipPattern(pattern)) {
+      // For relationship patterns - source and target can be bound (that's the point)
+      // but the edge variable itself cannot be already bound
+      if (pattern.edge?.variable && boundVariables.has(pattern.edge.variable)) {
+        throw new Error(`Cannot merge relationship using variable '${pattern.edge.variable}' that is already bound`);
+      }
+    } else {
+      // For simple node patterns - the node variable cannot be already bound
+      const nodePattern = pattern as NodePattern;
+      if (nodePattern.variable && boundVariables.has(nodePattern.variable)) {
+        throw new Error(`Cannot merge node using variable '${nodePattern.variable}' that is already bound`);
+      }
+    }
   }
 
   /**
@@ -689,6 +768,12 @@ export class Executor {
     globalContext: PhaseContext,
     params: Record<string, unknown>
   ): Array<Map<string, unknown>> {
+    // If variable is already bound, just use the bound value (no-op match)
+    // This is valid for cases like: MERGE (c) MERGE (c) - second MERGE just matches
+    if (pattern.variable && inputRow.has(pattern.variable)) {
+      return [new Map(inputRow)];
+    }
+    
     const props = this.resolvePropertiesInContext(pattern.properties || {}, inputRow, params);
     
     // Build query to find existing matching nodes

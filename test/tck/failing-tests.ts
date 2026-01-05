@@ -306,7 +306,7 @@ export const FAILING_TESTS = new Set<string>([
   // "clauses/match-where > MatchWhere6 - Filter optional matches|7",
   // "clauses/match-where > MatchWhere6 - Filter optional matches|8",
   // "clauses/merge > Merge1 - Merge node|12",
-  "clauses/merge > Merge1 - Merge node|15",
+  // "clauses/merge > Merge1 - Merge node|15",
   // "clauses/merge > Merge1 - Merge node|16",
   "clauses/merge > Merge1 - Merge node|17",
   "clauses/merge > Merge2 - Merge node - on create|5",
