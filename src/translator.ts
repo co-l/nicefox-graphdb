@@ -2317,6 +2317,15 @@ export class Translator {
   private translateWith(clause: WithClause): SqlStatement[] {
     // WITH clause stores its info in context for subsequent clauses
     // It creates a new "scope" by updating variable mappings
+
+    // WITH modifiers (WHERE/ORDER BY/SKIP/LIMIT/DISTINCT) apply only to the
+    // current WITH clause. Clear any previous WITH modifier state to avoid
+    // leaking them across chained WITH clauses (e.g. `WITH ... SKIP ... WITH ...`).
+    (this.ctx as any).withWhere = undefined;
+    (this.ctx as any).withOrderBy = undefined;
+    (this.ctx as any).withSkip = undefined;
+    (this.ctx as any).withLimit = undefined;
+    (this.ctx as any).withDistinct = undefined;
     
     // Check for duplicate column names within this WITH clause
     this.checkDuplicateColumnNames(clause.items);
