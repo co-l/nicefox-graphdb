@@ -15,6 +15,7 @@ import {
   UnwindClause,
   NodePattern,
   RelationshipPattern,
+  PathExpression,
   SetAssignment,
   Expression,
   PropertyValue,
@@ -754,8 +755,72 @@ export class Executor {
       }
     }
     
+    // Handle path expressions - build path objects from the merged patterns
+    if (clause.pathExpressions && clause.pathExpressions.length > 0) {
+      for (const row of newRows) {
+        for (const pathExpr of clause.pathExpressions) {
+          const path = this.buildPathFromPatterns(pathExpr.patterns, row);
+          if (path !== null) {
+            row.set(pathExpr.variable, path);
+          }
+        }
+      }
+    }
+    
     newContext.rows = newRows;
     return newContext;
+  }
+  
+  /**
+   * Build a path object from relationship patterns.
+   * Returns an array alternating [nodeProps, edgeProps, nodeProps, ...]
+   * or null if the path cannot be constructed.
+   */
+  private buildPathFromPatterns(
+    patterns: (NodePattern | RelationshipPattern)[],
+    row: Map<string, unknown>
+  ): unknown[] | null {
+    if (patterns.length === 0) return null;
+    
+    const pathElements: unknown[] = [];
+    
+    for (const pattern of patterns) {
+      if (this.isRelationshipPattern(pattern)) {
+        const relPattern = pattern as RelationshipPattern;
+        
+        // Get source node
+        const sourceVar = relPattern.source.variable;
+        const sourceNode = sourceVar ? row.get(sourceVar) : null;
+        if (!sourceNode || typeof sourceNode !== 'object') continue;
+        
+        // Add source node props (excluding internal _nf_id)
+        const sourceProps = { ...(sourceNode as Record<string, unknown>) };
+        delete sourceProps._nf_id;
+        if (pathElements.length === 0) {
+          pathElements.push(sourceProps);
+        }
+        
+        // Get edge
+        const edgeVar = relPattern.edge.variable;
+        const edge = edgeVar ? row.get(edgeVar) : null;
+        const edgeProps = edge && typeof edge === 'object' 
+          ? { ...(edge as Record<string, unknown>) }
+          : {};
+        delete (edgeProps as Record<string, unknown>)._nf_id;
+        pathElements.push(edgeProps);
+        
+        // Get target node
+        const targetVar = relPattern.target.variable;
+        const targetNode = targetVar ? row.get(targetVar) : null;
+        if (!targetNode || typeof targetNode !== 'object') continue;
+        
+        const targetProps = { ...(targetNode as Record<string, unknown>) };
+        delete targetProps._nf_id;
+        pathElements.push(targetProps);
+      }
+    }
+    
+    return pathElements.length > 0 ? pathElements : null;
   }
 
   /**
@@ -4061,12 +4126,12 @@ export class Executor {
     let matchClauses: MatchClause[] = [];
     let createClauses: CreateClause[] = [];
     let withClauses: WithClause[] = [];
-    let mergeClause: MergeClause | null = null;
+    let mergeClauses: MergeClause[] = [];
     let returnClause: ReturnClause | null = null;
     
     for (const clause of clauses) {
       if (clause.type === "MERGE") {
-        mergeClause = clause;
+        mergeClauses.push(clause);
       } else if (clause.type === "RETURN") {
         returnClause = clause;
       } else if (clause.type === "MATCH") {
@@ -4081,24 +4146,470 @@ export class Executor {
       }
     }
     
-    if (!mergeClause) {
+    if (mergeClauses.length === 0) {
       return null;
     }
     
-    // Check if this MERGE needs special handling:
+    // Check if any MERGE needs special handling:
     // 1. Has relationship patterns
     // 2. Has ON CREATE SET or ON MATCH SET
     // 3. Has RETURN clause (translator can't handle MERGE + RETURN properly for new nodes)
-    const hasRelationshipPattern = mergeClause.patterns.some(p => this.isRelationshipPattern(p));
-    const hasSetClauses = mergeClause.onCreateSet || mergeClause.onMatchSet;
+    // 4. Multiple MERGE clauses (need phased handling)
+    // 5. Has path expressions
+    const hasRelationshipPattern = mergeClauses.some(m => m.patterns.some(p => this.isRelationshipPattern(p)));
+    const hasSetClauses = mergeClauses.some(m => m.onCreateSet || m.onMatchSet);
+    const hasPathExpressions = mergeClauses.some(m => m.pathExpressions && m.pathExpressions.length > 0);
     
-    if (!hasRelationshipPattern && !hasSetClauses && !returnClause) {
-      // Simple node MERGE without SET clauses and no RETURN - let translator handle it
+    if (!hasRelationshipPattern && !hasSetClauses && !hasPathExpressions && !returnClause && mergeClauses.length === 1) {
+      // Simple single node MERGE without SET clauses, path expressions, and no RETURN - let translator handle it
       return null;
     }
     
-    // Execute MERGE with special handling
-    return this.executeMergeWithSetClauses(matchClauses, createClauses, withClauses, mergeClause, returnClause, params);
+    // For multiple MERGEs with path expressions (like MERGE (a) MERGE (b) MERGE p = (a)-[:R]->(b)),
+    // use the new multi-merge handler
+    if (mergeClauses.length > 1 && hasPathExpressions) {
+      return this.executeMultipleMergeClauses(matchClauses, createClauses, withClauses, mergeClauses, returnClause, params);
+    }
+    
+    // For single MERGE with SET clauses or relationship patterns, use the original handler
+    // This preserves the existing behavior for ON CREATE SET / ON MATCH SET
+    if (mergeClauses.length === 1) {
+      return this.executeMergeWithSetClauses(matchClauses, createClauses, withClauses, mergeClauses[0], returnClause, params);
+    }
+    
+    // For multiple MERGEs without path expressions, use the multi-merge handler
+    return this.executeMultipleMergeClauses(matchClauses, createClauses, withClauses, mergeClauses, returnClause, params);
+  }
+
+  /**
+   * Execute multiple MERGE clauses in sequence, handling path expressions
+   */
+  private executeMultipleMergeClauses(
+    matchClauses: MatchClause[],
+    createClauses: CreateClause[],
+    withClauses: WithClause[],
+    mergeClauses: MergeClause[],
+    returnClause: ReturnClause | null,
+    params: Record<string, unknown>
+  ): Record<string, unknown>[] {
+    // Track all matched/created nodes and edges
+    const matchedNodes = new Map<string, { id: string; label: string; properties: Record<string, unknown> }>();
+    const matchedEdges = new Map<string, { id: string; type: string; source_id: string; target_id: string; properties: Record<string, unknown> }>();
+    // Track paths for path expressions
+    const paths = new Map<string, unknown[]>();
+    
+    // Execute MATCH clauses first (if any)
+    for (const matchClause of matchClauses) {
+      for (const pattern of matchClause.patterns) {
+        if (!this.isRelationshipPattern(pattern)) {
+          const nodePattern = pattern as NodePattern;
+          const matchProps = this.resolveProperties(nodePattern.properties || {}, params);
+          
+          const conditions: string[] = [];
+          const conditionParams: unknown[] = [];
+          
+          if (nodePattern.label) {
+            const labelCondition = this.generateLabelCondition(nodePattern.label);
+            conditions.push(labelCondition.sql);
+            conditionParams.push(...labelCondition.params);
+          }
+          
+          for (const [key, value] of Object.entries(matchProps)) {
+            conditions.push(`json_extract(properties, '$.${key}') = ?`);
+            conditionParams.push(value);
+          }
+          
+          const sql = conditions.length > 0
+            ? `SELECT id, label, properties FROM nodes WHERE ${conditions.join(" AND ")}`
+            : "SELECT id, label, properties FROM nodes";
+          
+          const result = this.db.execute(sql, conditionParams);
+          if (result.rows.length > 0 && nodePattern.variable) {
+            const row = result.rows[0];
+            matchedNodes.set(nodePattern.variable, {
+              id: row.id as string,
+              label: row.label as string,
+              properties: typeof row.properties === "string" ? JSON.parse(row.properties) : row.properties,
+            });
+          }
+        }
+      }
+    }
+    
+    // Execute CREATE clauses (if any)
+    for (const createClause of createClauses) {
+      for (const pattern of createClause.patterns) {
+        if (!this.isRelationshipPattern(pattern)) {
+          const nodePattern = pattern as NodePattern;
+          const props = this.resolveProperties(nodePattern.properties || {}, params);
+          const id = crypto.randomUUID();
+          const labelJson = nodePattern.label ? JSON.stringify([nodePattern.label]) : "[]";
+          
+          this.db.execute(
+            "INSERT INTO nodes (id, label, properties) VALUES (?, ?, ?)",
+            [id, labelJson, JSON.stringify(props)]
+          );
+          
+          if (nodePattern.variable) {
+            matchedNodes.set(nodePattern.variable, {
+              id,
+              label: nodePattern.label as string || "",
+              properties: props,
+            });
+          }
+        }
+      }
+    }
+    
+    // Execute MERGE clauses in sequence
+    for (const mergeClause of mergeClauses) {
+      for (const pattern of mergeClause.patterns) {
+        if (this.isRelationshipPattern(pattern)) {
+          // Relationship MERGE
+          const relPattern = pattern as RelationshipPattern;
+          this.executeMergeRelationshipWithTracking(relPattern, mergeClause, matchedNodes, matchedEdges, params);
+        } else {
+          // Node MERGE
+          const nodePattern = pattern as NodePattern;
+          this.executeMergeNodeWithTracking(nodePattern, mergeClause, matchedNodes, params);
+        }
+      }
+      
+      // Handle path expressions for this MERGE clause
+      if (mergeClause.pathExpressions && mergeClause.pathExpressions.length > 0) {
+        for (const pathExpr of mergeClause.pathExpressions) {
+          const path = this.buildPathFromPatternsWithTracking(
+            pathExpr.patterns,
+            matchedNodes,
+            matchedEdges
+          );
+          if (path !== null) {
+            paths.set(pathExpr.variable, path);
+          }
+        }
+      }
+    }
+    
+    // Process RETURN clause if present
+    if (returnClause) {
+      return this.processReturnClauseWithPaths(returnClause, matchedNodes, matchedEdges, paths, params);
+    }
+    
+    return [];
+  }
+
+  /**
+   * Execute a MERGE for a node pattern, tracking the result
+   */
+  private executeMergeNodeWithTracking(
+    pattern: NodePattern,
+    mergeClause: MergeClause,
+    matchedNodes: Map<string, { id: string; label: string; properties: Record<string, unknown> }>,
+    params: Record<string, unknown>
+  ): void {
+    // If variable is already bound, use the existing node
+    if (pattern.variable && matchedNodes.has(pattern.variable)) {
+      return;
+    }
+    
+    const matchProps = this.resolvePropertiesWithMatchedNodes(pattern.properties || {}, params, matchedNodes);
+    
+    // Build WHERE conditions to find existing node
+    const conditions: string[] = [];
+    const conditionParams: unknown[] = [];
+    
+    if (pattern.label) {
+      const labelCondition = this.generateLabelCondition(pattern.label);
+      conditions.push(labelCondition.sql);
+      conditionParams.push(...labelCondition.params);
+    }
+    
+    for (const [key, value] of Object.entries(matchProps)) {
+      conditions.push(`json_extract(properties, '$.${key}') = ?`);
+      conditionParams.push(value);
+    }
+    
+    // Try to find existing node
+    let findResult: { rows: Record<string, unknown>[] };
+    if (conditions.length > 0) {
+      const findSql = `SELECT id, label, properties FROM nodes WHERE ${conditions.join(" AND ")}`;
+      findResult = this.db.execute(findSql, conditionParams);
+    } else {
+      findResult = this.db.execute("SELECT id, label, properties FROM nodes LIMIT 1");
+    }
+    
+    let nodeId: string;
+    let wasCreated = false;
+    
+    if (findResult.rows.length === 0) {
+      // Node doesn't exist - create it
+      nodeId = crypto.randomUUID();
+      wasCreated = true;
+      
+      const nodeProps = { ...matchProps };
+      
+      // Apply ON CREATE SET properties
+      if (mergeClause.onCreateSet) {
+        for (const assignment of mergeClause.onCreateSet) {
+          if (!assignment.value || !assignment.property) continue;
+          const value = this.evaluateExpressionWithMatchedNodes(assignment.value, params, matchedNodes);
+          nodeProps[assignment.property] = value;
+        }
+      }
+      
+      const labelJson = pattern.label 
+        ? (Array.isArray(pattern.label) ? JSON.stringify(pattern.label) : JSON.stringify([pattern.label]))
+        : "[]";
+      
+      this.db.execute(
+        "INSERT INTO nodes (id, label, properties) VALUES (?, ?, ?)",
+        [nodeId, labelJson, JSON.stringify(nodeProps)]
+      );
+    } else {
+      // Node exists - apply ON MATCH SET
+      nodeId = findResult.rows[0].id as string;
+      
+      if (mergeClause.onMatchSet) {
+        for (const assignment of mergeClause.onMatchSet) {
+          if (!assignment.value || !assignment.property) continue;
+          const value = this.evaluateExpressionWithMatchedNodes(assignment.value, params, matchedNodes);
+          this.db.execute(
+            `UPDATE nodes SET properties = json_set(properties, '$.${assignment.property}', json(?)) WHERE id = ?`,
+            [JSON.stringify(value), nodeId]
+          );
+        }
+      }
+    }
+    
+    // Store the node in matchedNodes
+    if (pattern.variable) {
+      const nodeResult = this.db.execute("SELECT id, label, properties FROM nodes WHERE id = ?", [nodeId]);
+      if (nodeResult.rows.length > 0) {
+        const row = nodeResult.rows[0];
+        matchedNodes.set(pattern.variable, {
+          id: row.id as string,
+          label: row.label as string,
+          properties: typeof row.properties === "string" ? JSON.parse(row.properties) : row.properties,
+        });
+      }
+    }
+  }
+
+  /**
+   * Execute a MERGE for a relationship pattern, tracking the result
+   */
+  private executeMergeRelationshipWithTracking(
+    pattern: RelationshipPattern,
+    mergeClause: MergeClause,
+    matchedNodes: Map<string, { id: string; label: string; properties: Record<string, unknown> }>,
+    matchedEdges: Map<string, { id: string; type: string; source_id: string; target_id: string; properties: Record<string, unknown> }>,
+    params: Record<string, unknown>
+  ): void {
+    // Get source and target node IDs
+    const sourceVar = pattern.source.variable;
+    const targetVar = pattern.target.variable;
+    
+    const sourceNode = sourceVar ? matchedNodes.get(sourceVar) : null;
+    const targetNode = targetVar ? matchedNodes.get(targetVar) : null;
+    
+    if (!sourceNode || !targetNode) {
+      // Can't create relationship without both endpoints
+      return;
+    }
+    
+    const edgeType = pattern.edge.type || "";
+    const edgeProps = this.resolvePropertiesWithMatchedNodes(pattern.edge.properties || {}, params, matchedNodes);
+    
+    // Adjust for direction
+    const [actualSource, actualTarget] = 
+      pattern.edge.direction === "left" ? [targetNode.id, sourceNode.id] : [sourceNode.id, targetNode.id];
+    
+    // Find existing edge
+    const findSql = `SELECT id, type, source_id, target_id, properties FROM edges WHERE source_id = ? AND target_id = ? AND type = ?`;
+    const findResult = this.db.execute(findSql, [actualSource, actualTarget, edgeType]);
+    
+    let edgeId: string;
+    
+    if (findResult.rows.length > 0) {
+      // Edge exists
+      edgeId = findResult.rows[0].id as string;
+      
+      // Apply ON MATCH SET
+      if (mergeClause.onMatchSet) {
+        for (const assignment of mergeClause.onMatchSet) {
+          if (!assignment.value || !assignment.property) continue;
+          const value = this.evaluateExpressionWithMatchedNodes(assignment.value, params, matchedNodes);
+          this.db.execute(
+            `UPDATE edges SET properties = json_set(properties, '$.${assignment.property}', json(?)) WHERE id = ?`,
+            [JSON.stringify(value), edgeId]
+          );
+        }
+      }
+    } else {
+      // Create edge
+      edgeId = crypto.randomUUID();
+      
+      // Apply ON CREATE SET to props
+      if (mergeClause.onCreateSet) {
+        for (const assignment of mergeClause.onCreateSet) {
+          if (!assignment.value || !assignment.property) continue;
+          const value = this.evaluateExpressionWithMatchedNodes(assignment.value, params, matchedNodes);
+          edgeProps[assignment.property] = value;
+        }
+      }
+      
+      this.db.execute(
+        "INSERT INTO edges (id, type, source_id, target_id, properties) VALUES (?, ?, ?, ?, ?)",
+        [edgeId, edgeType, actualSource, actualTarget, JSON.stringify(edgeProps)]
+      );
+    }
+    
+    // Store the edge in matchedEdges
+    if (pattern.edge.variable) {
+      const edgeResult = this.db.execute("SELECT id, type, source_id, target_id, properties FROM edges WHERE id = ?", [edgeId]);
+      if (edgeResult.rows.length > 0) {
+        const row = edgeResult.rows[0];
+        matchedEdges.set(pattern.edge.variable, {
+          id: row.id as string,
+          type: row.type as string,
+          source_id: row.source_id as string,
+          target_id: row.target_id as string,
+          properties: typeof row.properties === "string" ? JSON.parse(row.properties) : row.properties,
+        });
+      }
+    }
+  }
+
+  /**
+   * Build a path from patterns using tracked nodes and edges
+   */
+  private buildPathFromPatternsWithTracking(
+    patterns: (NodePattern | RelationshipPattern)[],
+    matchedNodes: Map<string, { id: string; label: string; properties: Record<string, unknown> }>,
+    matchedEdges: Map<string, { id: string; type: string; source_id: string; target_id: string; properties: Record<string, unknown> }>
+  ): unknown[] | null {
+    if (patterns.length === 0) return null;
+    
+    const pathElements: unknown[] = [];
+    
+    for (const pattern of patterns) {
+      if (this.isRelationshipPattern(pattern)) {
+        const relPattern = pattern as RelationshipPattern;
+        
+        // Get source node
+        const sourceVar = relPattern.source.variable;
+        const sourceNode = sourceVar ? matchedNodes.get(sourceVar) : null;
+        if (!sourceNode) continue;
+        
+        // Add source node props (excluding internal _nf_id)
+        if (pathElements.length === 0) {
+          pathElements.push({ ...sourceNode.properties });
+        }
+        
+        // Get edge
+        const edgeVar = relPattern.edge.variable;
+        const edge = edgeVar ? matchedEdges.get(edgeVar) : null;
+        const edgeProps = edge ? { ...edge.properties } : {};
+        pathElements.push(edgeProps);
+        
+        // Get target node
+        const targetVar = relPattern.target.variable;
+        const targetNode = targetVar ? matchedNodes.get(targetVar) : null;
+        if (!targetNode) continue;
+        
+        pathElements.push({ ...targetNode.properties });
+      }
+    }
+    
+    return pathElements.length > 0 ? pathElements : null;
+  }
+
+  /**
+   * Process RETURN clause with paths support
+   */
+  private processReturnClauseWithPaths(
+    returnClause: ReturnClause,
+    matchedNodes: Map<string, { id: string; label: string; properties: Record<string, unknown> }>,
+    matchedEdges: Map<string, { id: string; type: string; source_id: string; target_id: string; properties: Record<string, unknown> }>,
+    paths: Map<string, unknown[]>,
+    params: Record<string, unknown>
+  ): Record<string, unknown>[] {
+    const results: Record<string, unknown>[] = [];
+    const resultRow: Record<string, unknown> = {};
+    
+    for (const item of returnClause.items) {
+      const alias = item.alias || this.getExpressionName(item.expression);
+      
+      if (item.expression.type === "variable") {
+        const varName = item.expression.variable!;
+        
+        // Check if it's a path
+        const path = paths.get(varName);
+        if (path) {
+          resultRow[alias] = path;
+          continue;
+        }
+        
+        // Check if it's a node
+        const node = matchedNodes.get(varName);
+        if (node) {
+          resultRow[alias] = node.properties;
+          continue;
+        }
+        
+        // Check if it's an edge
+        const edge = matchedEdges.get(varName);
+        if (edge) {
+          resultRow[alias] = edge.properties;
+          continue;
+        }
+      } else if (item.expression.type === "property") {
+        const varName = item.expression.variable!;
+        const propName = item.expression.property!;
+        
+        const node = matchedNodes.get(varName);
+        if (node) {
+          resultRow[alias] = node.properties[propName];
+          continue;
+        }
+        
+        const edge = matchedEdges.get(varName);
+        if (edge) {
+          resultRow[alias] = edge.properties[propName];
+          continue;
+        }
+      } else if (item.expression.type === "function") {
+        const funcName = item.expression.functionName?.toUpperCase();
+        
+        if (funcName === "TYPE" && item.expression.args?.length === 1) {
+          const arg = item.expression.args[0];
+          if (arg.type === "variable") {
+            const edge = matchedEdges.get(arg.variable!);
+            if (edge) {
+              resultRow[alias] = edge.type;
+              continue;
+            }
+          }
+        } else if (funcName === "ID" && item.expression.args?.length === 1) {
+          const arg = item.expression.args[0];
+          if (arg.type === "variable") {
+            const node = matchedNodes.get(arg.variable!);
+            if (node) {
+              resultRow[alias] = node.id;
+              continue;
+            }
+            const edge = matchedEdges.get(arg.variable!);
+            if (edge) {
+              resultRow[alias] = edge.id;
+              continue;
+            }
+          }
+        }
+      }
+    }
+    
+    results.push(resultRow);
+    return results;
   }
 
   /**

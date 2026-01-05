@@ -176,6 +176,7 @@ export interface MatchClause {
 export interface MergeClause {
   type: "MERGE";
   patterns: (NodePattern | RelationshipPattern)[];
+  pathExpressions?: PathExpression[]; // Named paths: p = (a)-[r]->(b)
   onCreateSet?: SetAssignment[];
   onMatchSet?: SetAssignment[];
 }
@@ -946,7 +947,20 @@ export class Parser {
 
   private parseMerge(): MergeClause {
     this.expect("KEYWORD", "MERGE");
-    const patterns = this.parsePatternChain();
+    
+    // Parse pattern or path expression (handles p = (a)-[r]->(b) syntax)
+    const patternOrPath = this.parsePatternOrPath();
+    
+    let patterns: (NodePattern | RelationshipPattern)[] = [];
+    let pathExpressions: PathExpression[] | undefined;
+    
+    if ("type" in patternOrPath && patternOrPath.type === "path") {
+      pathExpressions = [patternOrPath];
+      // Also add the patterns from the path expression to the patterns array
+      patterns = patternOrPath.patterns;
+    } else {
+      patterns = patternOrPath as (NodePattern | RelationshipPattern)[];
+    }
 
     let onCreateSet: SetAssignment[] | undefined;
     let onMatchSet: SetAssignment[] | undefined;
@@ -966,7 +980,7 @@ export class Parser {
       }
     }
 
-    return { type: "MERGE", patterns, onCreateSet, onMatchSet };
+    return { type: "MERGE", patterns, pathExpressions, onCreateSet, onMatchSet };
   }
 
   private parseSet(): SetClause {

@@ -314,7 +314,7 @@ export const FAILING_TESTS = new Set<string>([
   // "clauses/merge > Merge3 - Merge node - on match|4",
   // "clauses/merge > Merge3 - Merge node - on match|5",
   // "clauses/merge > Merge4 - Merge node - on match and on create|1",
-  "clauses/merge > Merge5 - Merge relationships|10",
+  // "clauses/merge > Merge5 - Merge relationships|10",
   "clauses/merge > Merge5 - Merge relationships|11",
   // "clauses/merge > Merge5 - Merge relationships|13",
   // "clauses/merge > Merge5 - Merge relationships|15",
