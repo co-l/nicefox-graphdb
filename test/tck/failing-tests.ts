@@ -308,7 +308,7 @@ export const FAILING_TESTS = new Set<string>([
   // "clauses/merge > Merge1 - Merge node|12",
   // "clauses/merge > Merge1 - Merge node|15",
   // "clauses/merge > Merge1 - Merge node|16",
-  "clauses/merge > Merge1 - Merge node|17",
+  // "clauses/merge > Merge1 - Merge node|17",
   "clauses/merge > Merge2 - Merge node - on create|5",
   "clauses/merge > Merge2 - Merge node - on create|6",
   "clauses/merge > Merge3 - Merge node - on match|4",

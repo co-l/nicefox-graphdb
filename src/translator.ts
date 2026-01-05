@@ -715,6 +715,22 @@ export class Translator {
     const node = pattern as NodePattern;
     const label = node.label || "";
     const props = node.properties || {};
+    
+    // MERGE cannot use null property values (null = null is undefined in Cypher)
+    for (const [key, value] of Object.entries(props)) {
+      // Check for direct null value
+      if (value === null) {
+        throw new Error(`MERGE cannot use null property value for property '${key}'`);
+      }
+      // Check for parameter that resolves to null
+      if (this.isParameterRef(value)) {
+        const paramValue = this.ctx.paramValues[value.name];
+        if (paramValue === null) {
+          throw new Error(`MERGE cannot use null property value for property '${key}'`);
+        }
+      }
+    }
+    
     const serialized = this.serializeProperties(props);
 
     // Build condition to find existing node
