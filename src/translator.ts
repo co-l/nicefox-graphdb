@@ -1466,29 +1466,55 @@ export class Translator {
         // - If it only references already-joined tables (edge, source), add to edge's ON clause
         // - If it references the target node, we need to use an EXISTS subquery on the edge join
         //   to ensure that edges without a valid target are not matched (preventing duplicate NULL rows)
+        // - If it references nodes that will be joined LATER in the chain, defer to those edges
         // This ensures proper NULL propagation when the condition fails
         if (isOptional && (relPattern as any).optionalWhere) {
           const whereCondition = (relPattern as any).optionalWhere as WhereCondition;
           const varsInCondition = this.findVariablesInCondition(whereCondition);
           
-          // Check if any variable in the condition is the target node
-          const targetVar = Array.from(this.ctx.variables.entries()).find(([_, info]) => info.alias === relPattern.targetAlias)?.[0];
-          const referencesTarget = targetVar && varsInCondition.includes(targetVar);
+          // Check if condition references nodes that haven't been joined yet and won't be joined by this edge
+          // Build a map of variable names to their node aliases
+          const varToAlias = new Map<string, string>();
+          for (const [varName, info] of this.ctx.variables.entries()) {
+            if (info.type === "node") {
+              varToAlias.set(varName, info.alias);
+            }
+          }
           
-          if (referencesTarget) {
-            // For conditions on the target, add an EXISTS subquery to the edge join
-            // This ensures only edges with a valid target (satisfying the condition) are joined
-            const { sql: optionalWhereSql, params: optionalWhereParams } = this.translateWhere(whereCondition);
-            // Replace the target alias with a reference to the subquery's target_id
-            const edgeTargetColumn = relPattern.edge.direction === "left" ? "source_id" : "target_id";
-            const existsSql = `EXISTS(SELECT 1 FROM nodes __target__ WHERE __target__.id = ${relPattern.edgeAlias}.${edgeTargetColumn} AND ${optionalWhereSql.replace(new RegExp(relPattern.targetAlias + '\\.', 'g'), '__target__.')})`;
-            edgeOnConditions.push(existsSql);
-            edgeOnParams.push(...optionalWhereParams);
-          } else {
-            // Add to edge's ON clause
-            const { sql: optionalWhereSql, params: optionalWhereParams } = this.translateWhere(whereCondition);
-            edgeOnConditions.push(optionalWhereSql);
-            edgeOnParams.push(...optionalWhereParams);
+          // Check if any variable references a node that:
+          // 1. Is NOT already added to joins
+          // 2. Is NOT the current target (which will be added by this edge)
+          const referencesLaterNode = varsInCondition.some(varName => {
+            const alias = varToAlias.get(varName);
+            if (!alias) return false;
+            // Skip if it's already joined or is the current target
+            if (addedNodeAliases.has(alias)) return false;
+            if (alias === relPattern.targetAlias) return false;
+            return true; // References a node that will be joined later
+          });
+          
+          // If condition references nodes that come later in the chain, defer handling
+          // The condition will be handled when processing the last edge that introduces all needed vars
+          if (!referencesLaterNode) {
+            // Check if any variable in the condition is the target node
+            const targetVar = Array.from(this.ctx.variables.entries()).find(([_, info]) => info.alias === relPattern.targetAlias)?.[0];
+            const referencesTarget = targetVar && varsInCondition.includes(targetVar);
+            
+            if (referencesTarget) {
+              // For conditions on the target, add an EXISTS subquery to the edge join
+              // This ensures only edges with a valid target (satisfying the condition) are joined
+              const { sql: optionalWhereSql, params: optionalWhereParams } = this.translateWhere(whereCondition);
+              // Replace the target alias with a reference to the subquery's target_id
+              const edgeTargetColumn = relPattern.edge.direction === "left" ? "source_id" : "target_id";
+              const existsSql = `EXISTS(SELECT 1 FROM nodes __target__ WHERE __target__.id = ${relPattern.edgeAlias}.${edgeTargetColumn} AND ${optionalWhereSql.replace(new RegExp(relPattern.targetAlias + '\\.', 'g'), '__target__.')})`;
+              edgeOnConditions.push(existsSql);
+              edgeOnParams.push(...optionalWhereParams);
+            } else {
+              // Add to edge's ON clause
+              const { sql: optionalWhereSql, params: optionalWhereParams } = this.translateWhere(whereCondition);
+              edgeOnConditions.push(optionalWhereSql);
+              edgeOnParams.push(...optionalWhereParams);
+            }
           }
         }
 
