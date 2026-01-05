@@ -6515,6 +6515,11 @@ END FROM (SELECT json_group_array(${valueExpr}) as sv))`,
             return { sql: `${varInfo.alias}.id` };
           }
         }
+        // Check if this function expression matches a return column alias
+        const exprName = this.getExpressionName(expr);
+        if (returnAliases.includes(exprName)) {
+          return { sql: this.quoteAlias(exprName) };
+        }
         throw new Error(`Cannot order by function: ${expr.functionName}`);
       }
 
