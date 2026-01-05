@@ -1279,8 +1279,42 @@ export class Translator {
             // So we SKIP adding source here - it will be added after the edge join below
             // Set a flag to indicate this deferred source join
             (relPattern as any).deferSourceJoin = true;
+          } else if (isOptional && relPattern.sourceIsNew && !relPattern.edgeIsNew) {
+            // Optional pattern with new source, target not bound, but edge IS bound
+            // Example: MATCH (a)-[r]->() WITH r, a OPTIONAL MATCH (a2)<-[r]-(b2)
+            // We need to join source based on where it sits in the pre-bound edge
+            // For left-directed (a2)<-[r]-(b2): a2 is at edge.target_id
+            // For right-directed (a2)-[r]->(b2): a2 is at edge.source_id
+            const sourceOnConditions: string[] = [];
+            const sourceOnParams: unknown[] = [];
+            if (relPattern.edge.direction === "left") {
+              // Left-directed: source is at target_id side of edge
+              sourceOnConditions.push(`${relPattern.sourceAlias}.id = ${relPattern.edgeAlias}.target_id`);
+            } else {
+              // Right-directed: source is at source_id side of edge
+              sourceOnConditions.push(`${relPattern.sourceAlias}.id = ${relPattern.edgeAlias}.source_id`);
+            }
+            // Add label filter if source has one
+            const sourcePattern = (this.ctx as any)[`pattern_${relPattern.sourceAlias}`];
+            if (sourcePattern?.label) {
+              const labelMatch = this.generateLabelMatchCondition(relPattern.sourceAlias, sourcePattern.label);
+              sourceOnConditions.push(labelMatch.sql);
+              sourceOnParams.push(...labelMatch.params);
+              filteredNodeAliases.add(relPattern.sourceAlias);
+            }
+            // Since edge is pre-bound, optionalWhere won't be added to edge join
+            // Add it to source's ON clause instead
+            if ((relPattern as any).optionalWhere) {
+              const { sql: optionalWhereSql, params: optionalWhereParams } = this.translateWhere((relPattern as any).optionalWhere);
+              sourceOnConditions.push(optionalWhereSql);
+              sourceOnParams.push(...optionalWhereParams);
+              // Mark as handled so we don't try to add it elsewhere
+              (relPattern as any).optionalWhereHandled = true;
+            }
+            joinParts.push(`${joinType} nodes ${relPattern.sourceAlias} ON ${sourceOnConditions.join(" AND ")}`);
+            joinParams.push(...sourceOnParams);
           } else if (isOptional && relPattern.sourceIsNew) {
-            // Optional pattern with new source but target not bound
+            // Optional pattern with new source, target not bound, edge is also new
             // This shouldn't happen often - optional patterns usually reference existing nodes
             joinParts.push(`${joinType} nodes ${relPattern.sourceAlias} ON 1=1`);
           } else if (i === 0) {
@@ -1581,6 +1615,13 @@ export class Translator {
           // This ensures the OPTIONAL MATCH fails (returns NULL) if direction doesn't match
           if ((relPattern as any).boundEdgeDirectionConstraint) {
             targetOnConditions.push((relPattern as any).boundEdgeDirectionConstraint);
+          }
+          
+          // If optionalWhere was added to source's ON clause (for pre-bound edge case),
+          // we need to make target also fail when source fails.
+          // Add condition: source must not be NULL for target to be matched
+          if ((relPattern as any).optionalWhereHandled && relPattern.sourceIsNew) {
+            targetOnConditions.push(`${relPattern.sourceAlias}.id IS NOT NULL`);
           }
 
           joinParts.push(`${joinType} nodes ${relPattern.targetAlias} ON ${targetOnConditions.join(" AND ")}`);

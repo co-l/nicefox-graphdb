@@ -301,7 +301,7 @@ export const FAILING_TESTS = new Set<string>([
   // "clauses/match-where > MatchWhere5 - Filter on predicate resulting in null|2",
   // "clauses/match-where > MatchWhere6 - Filter optional matches|1",
   // "clauses/match-where > MatchWhere6 - Filter optional matches|2",
-  "clauses/match-where > MatchWhere6 - Filter optional matches|5",
+  // "clauses/match-where > MatchWhere6 - Filter optional matches|5",
   // "clauses/match-where > MatchWhere6 - Filter optional matches|6",
   "clauses/match-where > MatchWhere6 - Filter optional matches|7",
   "clauses/match-where > MatchWhere6 - Filter optional matches|8",
