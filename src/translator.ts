@@ -1265,6 +1265,8 @@ export class Translator {
 
     // Process return items
     const exprParams: unknown[] = [];
+    const returnAliasExpressions = new Map<string, Expression>();
+    (this.ctx as any).returnAliasExpressions = returnAliasExpressions;
     
     // Check for RETURN * (return all bound variables)
     let returnItems = clause.items;
@@ -1302,6 +1304,7 @@ export class Translator {
       exprParams.push(...itemParams);
 
       const alias = item.alias || this.getExpressionName(item.expression);
+      returnAliasExpressions.set(alias, item.expression);
       selectParts.push(`${exprSql} AS ${this.quoteAlias(alias)}`);
       returnColumns.push(alias);
     }
@@ -2347,8 +2350,9 @@ export class Translator {
         for (const item of lastWithClause.items) {
           if (!this.isAggregateExpression(item.expression)) {
             // Translate the non-aggregate expression and add to GROUP BY
-            const { sql: exprSql } = this.translateExpression(item.expression);
+            const { sql: exprSql, params: groupParams } = this.translateExpression(item.expression);
             groupByParts.push(exprSql);
+            whereParams.push(...groupParams);
           }
         }
       }
@@ -2361,8 +2365,9 @@ export class Translator {
     if (groupByParts.length === 0) {
       if (returnHasAggregates && nonAggregateItems.length > 0) {
         for (const item of nonAggregateItems) {
-          const { sql: exprSql } = this.translateExpression(item.expression);
+          const { sql: exprSql, params: groupParams } = this.translateExpression(item.expression);
           groupByParts.push(exprSql);
+          whereParams.push(...groupParams);
         }
       }
     }
@@ -2445,6 +2450,10 @@ export class Translator {
     // WITH clause stores its info in context for subsequent clauses
     // It creates a new "scope" by updating variable mappings
 
+    // Track row ordering flowing through the query to support ordered COLLECT()
+    // semantics (ORDER BY before an aggregation determines collect order).
+    const previousRowOrderBy = (this.ctx as any).rowOrderBy as WithClause["orderBy"] | undefined;
+
     // WITH modifiers (WHERE/ORDER BY/SKIP/LIMIT/DISTINCT) apply only to the
     // current WITH clause. Clear any previous WITH modifier state to avoid
     // leaking them across chained WITH clauses (e.g. `WITH ... SKIP ... WITH ...`).
@@ -2453,6 +2462,7 @@ export class Translator {
     (this.ctx as any).withSkip = undefined;
     (this.ctx as any).withLimit = undefined;
     (this.ctx as any).withDistinct = undefined;
+    (this.ctx as any).collectOrderBy = undefined;
     
     // Check for duplicate column names within this WITH clause
     this.checkDuplicateColumnNames(clause.items);
@@ -2460,6 +2470,11 @@ export class Translator {
     // Validate ORDER BY with aggregation in WITH
     // Similar to RETURN, when WITH has aggregation, ORDER BY must only reference WITH items
     const withHasAggregation = clause.items.some(item => this.isAggregateExpression(item.expression));
+    if (withHasAggregation && previousRowOrderBy && previousRowOrderBy.length > 0) {
+      // The order of incoming rows (from the previous clause) determines the
+      // ordering of collected lists in this aggregation scope.
+      (this.ctx as any).collectOrderBy = previousRowOrderBy;
+    }
     if (withHasAggregation && clause.orderBy && clause.orderBy.length > 0) {
       // Convert WithClause items to ReturnItem format for validation
       const returnClause: ReturnClause = {
@@ -2493,6 +2508,10 @@ export class Translator {
     if (clause.distinct) {
       (this.ctx as any).withDistinct = true;
     }
+
+    // Update row ordering state: ORDER BY defines order for the next clause,
+    // otherwise ordering is not guaranteed to be preserved through WITH.
+    (this.ctx as any).rowOrderBy = clause.orderBy && clause.orderBy.length > 0 ? clause.orderBy : undefined;
     
     // Track which node/edge variables are passed through WITH
     // This is needed to determine scopes and handle cartesian products
@@ -2582,11 +2601,27 @@ export class Translator {
         }
       }
       
-      // Preserve old WITH aliases that are referenced but not yet in newWithAliases
-      for (const varName of referencedVars) {
-        if (oldWithAliases.has(varName) && !newWithAliases.has(varName)) {
-          newWithAliases.set(varName, oldWithAliases.get(varName)!);
+      // Preserve referenced WITH aliases, including their transitive dependencies.
+      // This is required because we translate WITH aliases lazily: if a later WITH references
+      // an earlier alias (e.g. `collect(x)`), we still need any upstream aliases that `x`
+      // depends on (e.g. `values`) to be available when `x` is expanded.
+      const preserving = new Set<string>();
+      const preserveAlias = (aliasName: string) => {
+        if (!oldWithAliases.has(aliasName)) return;
+        if (newWithAliases.has(aliasName)) return;
+        if (preserving.has(aliasName)) return;
+        preserving.add(aliasName);
+
+        const expr = oldWithAliases.get(aliasName)!;
+        newWithAliases.set(aliasName, expr);
+
+        for (const dep of this.findVariablesInExpression(expr)) {
+          preserveAlias(dep);
         }
+      };
+
+      for (const varName of referencedVars) {
+        preserveAlias(varName);
       }
     }
     
@@ -4575,6 +4610,27 @@ END FROM (SELECT json_group_array(${valueExpr}) as sv))`,
             // For DISTINCT, SQLite doesn't support json_group_array(DISTINCT ...)
             // We use json() to parse a JSON array string built from GROUP_CONCAT(DISTINCT ...)
             const useDistinct = expr.distinct === true;
+
+            // If we have an ORDER BY flowing into this aggregation scope (from a preceding WITH),
+            // preserve it for COLLECT() so collected lists are deterministically ordered.
+            const collectOrderBy = (this.ctx as any).collectOrderBy as WithClause["orderBy"] | undefined;
+            let collectOrderClause = "";
+            let collectOrderParams: unknown[] = [];
+            if (collectOrderBy && collectOrderBy.length > 0) {
+              const availableAliases: string[] = [];
+              const withAliases = (this.ctx as any).withAliases as Map<string, Expression> | undefined;
+              if (withAliases) {
+                availableAliases.push(...withAliases.keys());
+              }
+              const orderParts = collectOrderBy.map(({ expression, direction }) => {
+                const { sql: orderSql, params: orderParams } = this.translateOrderByExpression(expression, availableAliases);
+                if (orderParams && orderParams.length > 0) {
+                  collectOrderParams.push(...orderParams);
+                }
+                return `${orderSql} ${direction}`;
+              });
+              collectOrderClause = ` ORDER BY ${orderParts.join(", ")}`;
+            }
             
             if (arg.type === "property") {
               const varInfo = this.ctx.variables.get(arg.variable!);
@@ -4590,19 +4646,48 @@ END FROM (SELECT json_group_array(${valueExpr}) as sv))`,
                 // Filter nulls: CASE WHEN value IS NULL THEN NULL ELSE json_quote(value) END
                 // GROUP_CONCAT ignores nulls
                 const extractExpr = `json_extract(${varInfo.alias}.properties, '$.${arg.property}')`;
+                params.push(...collectOrderParams);
                 return {
-                  sql: `COALESCE(json('[' || GROUP_CONCAT(DISTINCT CASE WHEN ${extractExpr} IS NOT NULL THEN json_quote(${extractExpr}) END) || ']'), json('[]'))`,
+                  sql: `COALESCE(json('[' || GROUP_CONCAT(DISTINCT CASE WHEN ${extractExpr} IS NOT NULL THEN json_quote(${extractExpr}) END${collectOrderClause}) || ']'), json('[]'))`,
                   tables,
                   params,
                 };
               }
               
+              params.push(...collectOrderParams);
               return {
-                sql: `json_group_array(json_extract(${varInfo.alias}.properties, '$.${arg.property}'))`,
+                sql: `json_group_array(json_extract(${varInfo.alias}.properties, '$.${arg.property}')${collectOrderClause})`,
                 tables,
                 params,
               };
             } else if (arg.type === "variable") {
+              // WITH alias: COLLECT(x) where x is a computed expression from a prior WITH
+              const withAliases = (this.ctx as any).withAliases as Map<string, Expression> | undefined;
+              if (withAliases && withAliases.has(arg.variable!)) {
+                const originalExpr = withAliases.get(arg.variable!)!;
+                const translated = this.translateExpression(originalExpr);
+                tables.push(...translated.tables);
+                params.push(...translated.params);
+
+                if (useDistinct) {
+                  // Note: translated.sql may include parameters; it appears twice in the SQL, so
+                  // its params must also be duplicated to match placeholder order.
+                  params.push(...translated.params, ...collectOrderParams);
+                  return {
+                    sql: `COALESCE(json('[' || GROUP_CONCAT(DISTINCT CASE WHEN ${translated.sql} IS NOT NULL THEN json_quote(${translated.sql}) END${collectOrderClause}) || ']'), json('[]'))`,
+                    tables,
+                    params,
+                  };
+                }
+
+                params.push(...collectOrderParams);
+                return {
+                  sql: `json_group_array(${translated.sql}${collectOrderClause})`,
+                  tables,
+                  params,
+                };
+              }
+
               // Check if this is an UNWIND variable (scalar values from json_each)
               const unwindClauses = (this.ctx as any).unwindClauses as Array<{
                 alias: string;
@@ -4618,14 +4703,16 @@ END FROM (SELECT json_group_array(${valueExpr}) as sv))`,
                   // For UNWIND variables, collect the raw values from json_each
                   if (useDistinct) {
                     // Filter nulls using CASE WHEN ... IS NOT NULL
+                    params.push(...collectOrderParams);
                     return {
-                      sql: `COALESCE(json('[' || GROUP_CONCAT(DISTINCT CASE WHEN ${unwindClause.alias}.value IS NOT NULL THEN json_quote(${unwindClause.alias}.value) END) || ']'), json('[]'))`,
+                      sql: `COALESCE(json('[' || GROUP_CONCAT(DISTINCT CASE WHEN ${unwindClause.alias}.value IS NOT NULL THEN json_quote(${unwindClause.alias}.value) END${collectOrderClause}) || ']'), json('[]'))`,
                       tables,
                       params,
                     };
                   }
+                  params.push(...collectOrderParams);
                   return {
-                    sql: `json_group_array(${unwindClause.alias}.value)`,
+                    sql: `json_group_array(${unwindClause.alias}.value${collectOrderClause})`,
                     tables,
                     params,
                   };
@@ -4639,8 +4726,9 @@ END FROM (SELECT json_group_array(${valueExpr}) as sv))`,
               tables.push(varInfo.alias);
               // Neo4j 3.5 format: collect just the properties objects
               // Use CASE WHEN to filter nulls
+              params.push(...collectOrderParams);
               return {
-                sql: `json_group_array(CASE WHEN ${varInfo.alias}.id IS NOT NULL THEN json(${varInfo.alias}.properties) END)`,
+                sql: `json_group_array(CASE WHEN ${varInfo.alias}.id IS NOT NULL THEN json(${varInfo.alias}.properties) END${collectOrderClause})`,
                 tables,
                 params,
               };
@@ -4649,8 +4737,9 @@ END FROM (SELECT json_group_array(${valueExpr}) as sv))`,
               const objResult = this.translateObjectLiteral(arg);
               tables.push(...objResult.tables);
               params.push(...objResult.params);
+              params.push(...collectOrderParams);
               return {
-                sql: `json_group_array(${objResult.sql})`,
+                sql: `json_group_array(${objResult.sql}${collectOrderClause})`,
                 tables,
                 params,
               };
@@ -5091,26 +5180,76 @@ END FROM (SELECT json_group_array(${valueExpr}) as sv))`,
         // RANGE: generate a list of numbers
         if (expr.functionName === "RANGE") {
           if (expr.args && expr.args.length >= 2) {
+            for (const arg of expr.args.slice(0, Math.min(3, expr.args.length))) {
+              if (arg.type === "literal" && (typeof arg.value === "boolean" || arg.value === null)) {
+                throw new Error("range() arguments must be integers");
+              }
+            }
+
             const startResult = this.translateFunctionArg(expr.args[0]);
             const endResult = this.translateFunctionArg(expr.args[1]);
-            params.push(...startResult.params, ...endResult.params);
+            tables.push(...startResult.tables, ...endResult.tables);
             
             // Check for optional step parameter
-            let stepValue = "1";
+            let stepResult: { sql: string; tables: string[]; params: unknown[] } | undefined;
             if (expr.args.length >= 3) {
-              const stepResult = this.translateFunctionArg(expr.args[2]);
-              params.push(...stepResult.params);
-              stepValue = stepResult.sql;
+              // Prevent infinite recursion for literal zero step.
+              const stepExpr = expr.args[2];
+              if (stepExpr.type === "literal" && typeof stepExpr.value === "number" && stepExpr.value === 0) {
+                throw new Error("range() step cannot be 0");
+              }
+              stepResult = this.translateFunctionArg(expr.args[2]);
+              tables.push(...stepResult.tables);
             }
             
-            // Use recursive CTE to generate range
-            // This is a subquery that generates the array
+            const startRawSql = startResult.sql;
+            const endRawSql = endResult.sql;
+            const stepRawSql = stepResult ? stepResult.sql : "1";
+
+            // Params must match SQL order: start, step (optional), end.
+            params.push(...startResult.params);
+            if (stepResult) params.push(...stepResult.params);
+            params.push(...endResult.params);
+
+            // Use recursive CTE to generate range.
+            // - Validate argument types (error on non-integer).
+            // - Match Cypher behavior: if step doesn't move start toward end, return empty list.
+            // - Keep start/step/end as columns so placeholders appear only once.
+            // - Cast output to INTEGER to ensure JSON integers (not 0.0, 1.0, ...).
             return { 
-              sql: `(WITH RECURSIVE r(n) AS (
-  VALUES(${startResult.sql})
+              sql: `(WITH __args__(start_raw, step_raw, end_raw) AS (
+  SELECT ${startRawSql}, ${stepRawSql}, ${endRawSql}
+),
+__range__(start, step, end) AS (
+  SELECT
+    CASE WHEN typeof(start_raw) = 'integer'
+      THEN CAST(start_raw AS INTEGER)
+      ELSE json_extract('notjson', '$')
+    END,
+    CASE WHEN typeof(step_raw) = 'integer'
+      THEN CAST(step_raw AS INTEGER)
+      ELSE json_extract('notjson', '$')
+    END,
+    CASE WHEN typeof(end_raw) = 'integer'
+      THEN CAST(end_raw AS INTEGER)
+      ELSE json_extract('notjson', '$')
+    END
+  FROM __args__
+),
+r(n) AS (
+  SELECT start FROM __range__
+  WHERE step != 0 AND (
+    (step > 0 AND start <= end) OR
+    (step < 0 AND start >= end)
+  )
   UNION ALL
-  SELECT n + ${stepValue} FROM r WHERE n + ${stepValue} <= ${endResult.sql}
-) SELECT json_group_array(n) FROM r)`, 
+  SELECT n + step FROM r, __range__
+  WHERE (
+    (step > 0 AND n + step <= end) OR
+    (step < 0 AND n + step >= end)
+  )
+)
+SELECT COALESCE(json_group_array(CAST(n AS INTEGER)), json_array()) FROM r)`, 
               tables, 
               params 
             };
@@ -5870,6 +6009,10 @@ END FROM (SELECT json_group_array(${valueExpr}) as sv))`,
         }
         // Convert booleans to 1/0 for SQLite
         const value = expr.value === true ? 1 : expr.value === false ? 0 : expr.value;
+        // Preserve float-literal formatting (e.g., 0.0, -0.0, 1.0) so SQLite treats them as REAL.
+        if (typeof value === "number" && expr.numberLiteralKind === "float" && expr.raw) {
+          return { sql: expr.raw, tables, params };
+        }
         // Inline numeric literals to preserve integer division behavior
         // (SQLite treats bound parameters as floats)
         if (typeof value === "number" && Number.isInteger(value)) {
@@ -6280,6 +6423,35 @@ END FROM (SELECT json_group_array(${valueExpr}) as sv))`,
     const leftSql = this.wrapForComparison(expr.left!, leftResult.sql);
     const rightSql = this.wrapForComparison(expr.right!, rightResult.sql);
 
+    // Ensure temporal comparisons (datetime/time with offset) sort consistently with ORDER BY.
+    // We apply the same order-key normalization used for ORDER BY, but avoid wrapping
+    // aggregates in scalar subqueries (which would change their meaning).
+    const temporalOps = new Set(["<", "<=", ">", ">="]);
+    if (temporalOps.has(expr.comparisonOperator!)) {
+      const wrapTemporal = (valueSql: string) => {
+        if (valueSql.includes("?")) {
+          // Avoid duplicating placeholders embedded in the normalization expression.
+          return `(SELECT ${this.buildDateTimeWithOffsetOrderBy("__t__.v")} FROM (SELECT ${valueSql} AS v) __t__)`;
+        }
+        return this.buildDateTimeWithOffsetOrderBy(valueSql);
+      };
+      return {
+        sql: `(${wrapTemporal(leftSql)} ${expr.comparisonOperator} ${wrapTemporal(rightSql)})`,
+        tables,
+        params,
+      };
+    }
+
+    // Structural equality for lists: compare canonical JSON instead of raw text.
+    // This avoids false negatives due to formatting differences (e.g. whitespace).
+    if ((expr.comparisonOperator === "=" || expr.comparisonOperator === "<>") && this.isListExpression(expr.left!) && this.isListExpression(expr.right!)) {
+      return {
+        sql: `(json(${leftSql}) ${expr.comparisonOperator} json(${rightSql}))`,
+        tables,
+        params,
+      };
+    }
+
     return {
       sql: `(${leftSql} ${expr.comparisonOperator} ${rightSql})`,
       tables,
@@ -6516,6 +6688,19 @@ END FROM (SELECT json_group_array(${valueExpr}) as sv))`,
         const left = this.translateListComprehensionExpr(condition.left!, compVar, tableAlias);
         const right = this.translateListComprehensionExpr(condition.right!, compVar, tableAlias);
         params.push(...left.params, ...right.params);
+        const temporalOps = new Set(["<", "<=", ">", ">="]);
+        if (temporalOps.has(condition.operator!)) {
+          const wrapTemporal = (valueSql: string) => {
+            if (valueSql.includes("?")) {
+              return `(SELECT ${this.buildDateTimeWithOffsetOrderBy("__t__.v")} FROM (SELECT ${valueSql} AS v) __t__)`;
+            }
+            return this.buildDateTimeWithOffsetOrderBy(valueSql);
+          };
+          return {
+            sql: `${wrapTemporal(left.sql)} ${condition.operator} ${wrapTemporal(right.sql)}`,
+            params,
+          };
+        }
         return {
           sql: `${left.sql} ${condition.operator} ${right.sql}`,
           params,
@@ -7132,6 +7317,62 @@ END FROM (SELECT json_group_array(${valueExpr}) as sv))`,
     throw new Error(`Unsupported list expression type in IN clause: ${listExpr.type}`);
   }
 
+  private buildTimeWithOffsetOrderBy(valueSql: string): string {
+    const v = valueSql;
+    const tzPos = `(CASE WHEN instr(${v}, '+') > 0 THEN instr(${v}, '+') WHEN instr(${v}, '-') > 0 THEN instr(${v}, '-') ELSE 0 END)`;
+    const isTimeWithOffset = `(typeof(${v}) = 'text' AND ${tzPos} > 0 AND substr(${v}, 3, 1) = ':' AND substr(${v}, ${tzPos} + 3, 1) = ':')`;
+
+    const hour = `CAST(substr(${v}, 1, 2) AS INTEGER)`;
+    const minute = `CAST(substr(${v}, 4, 2) AS INTEGER)`;
+    const hasSeconds = `(substr(${v}, 6, 1) = ':')`;
+    const second = `(CASE WHEN ${hasSeconds} THEN CAST(substr(${v}, 7, 2) AS INTEGER) ELSE 0 END)`;
+    const hasFraction = `(${hasSeconds} AND substr(${v}, 9, 1) = '.')`;
+    const fracRaw = `substr(${v}, 10, (${tzPos} - 10))`;
+    const frac9 = `substr(${fracRaw}, 1, 9)`;
+    const fracPadded = `(${frac9} || substr('000000000', 1, (9 - length(${frac9}))))`;
+    const nanos = `(CASE WHEN ${hasFraction} THEN CAST(${fracPadded} AS INTEGER) ELSE 0 END)`;
+
+    const tzSign = `substr(${v}, ${tzPos}, 1)`;
+    const tzHour = `CAST(substr(${v}, ${tzPos} + 1, 2) AS INTEGER)`;
+    const tzMinute = `CAST(substr(${v}, ${tzPos} + 4, 2) AS INTEGER)`;
+    const offsetSeconds = `(((${tzHour} * 3600) + (${tzMinute} * 60)) * (CASE WHEN ${tzSign} = '-' THEN -1 ELSE 1 END))`;
+    const localSeconds = `((${hour} * 3600) + (${minute} * 60) + ${second})`;
+    const utcSeconds = `(${localSeconds} - ${offsetSeconds})`;
+    const utcSecondsNorm = `(((${utcSeconds}) % 86400) + 86400) % 86400`;
+    const utcNanosKey = `((${utcSecondsNorm} * 1000000000) + ${nanos})`;
+
+    return `CASE WHEN ${isTimeWithOffset} THEN ${utcNanosKey} ELSE ${v} END`;
+  }
+
+  private buildDateTimeWithOffsetOrderBy(valueSql: string): string {
+    const v = valueSql;
+    const tzPos = `(length(${v}) - 5)`;
+    const tzSign = `substr(${v}, ${tzPos}, 1)`;
+    const tzHour = `CAST(substr(${v}, ${tzPos} + 1, 2) AS INTEGER)`;
+    const tzMinute = `CAST(substr(${v}, ${tzPos} + 4, 2) AS INTEGER)`;
+    const offsetMinutes = `(((${tzHour} * 60) + ${tzMinute}) * (CASE WHEN ${tzSign} = '-' THEN -1 ELSE 1 END))`;
+    const utcModifier = `printf('%+d minutes', (0 - ${offsetMinutes}))`;
+
+    const isDateTimeWithOffset =
+      `(typeof(${v}) = 'text' AND length(${v}) >= 22 AND ` +
+      `substr(${v}, 5, 1) = '-' AND substr(${v}, 8, 1) = '-' AND substr(${v}, 11, 1) = 'T' AND ` +
+      `(${tzSign} = '+' OR ${tzSign} = '-') AND substr(${v}, ${tzPos} + 3, 1) = ':')`;
+
+    const localBase = `substr(${v}, 1, 10) || ' ' || substr(${v}, 12, 8)`;
+    const utcBase = `datetime(${localBase}, ${utcModifier})`;
+    const utcIso = `replace(${utcBase}, ' ', 'T')`;
+
+    const dotPos = `instr(${v}, '.')`;
+    const hasFraction = `(${dotPos} > 0 AND ${dotPos} < ${tzPos})`;
+    const fracRaw = `substr(${v}, ${dotPos} + 1, (${tzPos} - ${dotPos} - 1))`;
+    const frac9 = `substr(${fracRaw}, 1, 9)`;
+    const fracPadded = `(${frac9} || substr('000000000', 1, (9 - length(${frac9}))))`;
+    const nanosPart = `(CASE WHEN ${hasFraction} THEN ${fracPadded} ELSE '000000000' END)`;
+
+    const utcKey = `(${utcIso} || '.' || ${nanosPart})`;
+    return `CASE WHEN ${isDateTimeWithOffset} THEN ${utcKey} ELSE ${this.buildTimeWithOffsetOrderBy(v)} END`;
+  }
+
   private translateOrderByExpression(expr: Expression, returnAliases: string[] = []): { sql: string; params?: unknown[] } {
     switch (expr.type) {
       case "property": {
@@ -7140,7 +7381,9 @@ END FROM (SELECT json_group_array(${valueExpr}) as sv))`,
           throw new Error(`Unknown variable: ${expr.variable}`);
         }
         return {
-          sql: `json_extract(${varInfo.alias}.properties, '$.${expr.property}')`,
+          sql: this.buildDateTimeWithOffsetOrderBy(
+            `json_extract(${varInfo.alias}.properties, '$.${expr.property}')`
+          ),
           params: [],
         };
       }
@@ -7168,61 +7411,12 @@ END FROM (SELECT json_group_array(${valueExpr}) as sv))`,
           }
         }
 
-        const buildTimeWithOffsetOrderBy = (valueSql: string): string => {
-          const v = valueSql;
-          const tzPos = `(CASE WHEN instr(${v}, '+') > 0 THEN instr(${v}, '+') WHEN instr(${v}, '-') > 0 THEN instr(${v}, '-') ELSE 0 END)`;
-          const isTimeWithOffset = `(typeof(${v}) = 'text' AND ${tzPos} > 0 AND substr(${v}, 3, 1) = ':' AND substr(${v}, ${tzPos} + 3, 1) = ':')`;
-
-          const hour = `CAST(substr(${v}, 1, 2) AS INTEGER)`;
-          const minute = `CAST(substr(${v}, 4, 2) AS INTEGER)`;
-          const hasSeconds = `(substr(${v}, 6, 1) = ':')`;
-          const second = `(CASE WHEN ${hasSeconds} THEN CAST(substr(${v}, 7, 2) AS INTEGER) ELSE 0 END)`;
-          const hasFraction = `(${hasSeconds} AND substr(${v}, 9, 1) = '.')`;
-          const fracRaw = `substr(${v}, 10, (${tzPos} - 10))`;
-          const frac9 = `substr(${fracRaw}, 1, 9)`;
-          const fracPadded = `(${frac9} || substr('000000000', 1, (9 - length(${frac9}))))`;
-          const nanos = `(CASE WHEN ${hasFraction} THEN CAST(${fracPadded} AS INTEGER) ELSE 0 END)`;
-
-          const tzSign = `substr(${v}, ${tzPos}, 1)`;
-          const tzHour = `CAST(substr(${v}, ${tzPos} + 1, 2) AS INTEGER)`;
-          const tzMinute = `CAST(substr(${v}, ${tzPos} + 4, 2) AS INTEGER)`;
-          const offsetSeconds = `(((${tzHour} * 3600) + (${tzMinute} * 60)) * (CASE WHEN ${tzSign} = '-' THEN -1 ELSE 1 END))`;
-          const localSeconds = `((${hour} * 3600) + (${minute} * 60) + ${second})`;
-          const utcSeconds = `(${localSeconds} - ${offsetSeconds})`;
-          const utcSecondsNorm = `(((${utcSeconds}) % 86400) + 86400) % 86400`;
-          const utcNanosKey = `((${utcSecondsNorm} * 1000000000) + ${nanos})`;
-
-          return `CASE WHEN ${isTimeWithOffset} THEN ${utcNanosKey} ELSE ${v} END`;
-        };
-
-        const buildDateTimeWithOffsetOrderBy = (valueSql: string): string => {
-          const v = valueSql;
-          const tzPos = `(length(${v}) - 5)`;
-          const tzSign = `substr(${v}, ${tzPos}, 1)`;
-          const tzHour = `CAST(substr(${v}, ${tzPos} + 1, 2) AS INTEGER)`;
-          const tzMinute = `CAST(substr(${v}, ${tzPos} + 4, 2) AS INTEGER)`;
-          const offsetMinutes = `(((${tzHour} * 60) + ${tzMinute}) * (CASE WHEN ${tzSign} = '-' THEN -1 ELSE 1 END))`;
-          const utcModifier = `printf('%+d minutes', (0 - ${offsetMinutes}))`;
-
-          const isDateTimeWithOffset =
-            `(typeof(${v}) = 'text' AND length(${v}) >= 22 AND ` +
-            `substr(${v}, 5, 1) = '-' AND substr(${v}, 8, 1) = '-' AND substr(${v}, 11, 1) = 'T' AND ` +
-            `(${tzSign} = '+' OR ${tzSign} = '-') AND substr(${v}, ${tzPos} + 3, 1) = ':')`;
-
-          const localBase = `substr(${v}, 1, 10) || ' ' || substr(${v}, 12, 8)`;
-          const utcBase = `datetime(${localBase}, ${utcModifier})`;
-          const utcIso = `replace(${utcBase}, ' ', 'T')`;
-
-          const dotPos = `instr(${v}, '.')`;
-          const hasFraction = `(${dotPos} > 0 AND ${dotPos} < ${tzPos})`;
-          const fracRaw = `substr(${v}, ${dotPos} + 1, (${tzPos} - ${dotPos} - 1))`;
-          const frac9 = `substr(${fracRaw}, 1, 9)`;
-          const fracPadded = `(${frac9} || substr('000000000', 1, (9 - length(${frac9}))))`;
-          const nanosPart = `(CASE WHEN ${hasFraction} THEN ${fracPadded} ELSE '000000000' END)`;
-
-          const utcKey = `(${utcIso} || '.' || ${nanosPart})`;
-          return `CASE WHEN ${isDateTimeWithOffset} THEN ${utcKey} ELSE ${buildTimeWithOffsetOrderBy(v)} END`;
-        };
+        const returnAliasExpressions = (this.ctx as any).returnAliasExpressions as Map<string, Expression> | undefined;
+        const returnExpr = returnAliasExpressions?.get(expr.variable!);
+        if (returnExpr?.type === "property") {
+          const { sql, params } = this.translateOrderByExpression(returnExpr, returnAliases);
+          return { sql, params: params ?? [] };
+        }
 
         // Check if this is an UNWIND variable
         const unwindClauses = (this.ctx as any).unwindClauses as Array<{
@@ -7235,7 +7429,7 @@ END FROM (SELECT json_group_array(${valueExpr}) as sv))`,
         if (unwindClauses) {
           const unwindClause = unwindClauses.find(u => u.variable === expr.variable);
           if (unwindClause) {
-            return { sql: buildDateTimeWithOffsetOrderBy(`${unwindClause.alias}.value`), params: [] };
+            return { sql: this.buildDateTimeWithOffsetOrderBy(`${unwindClause.alias}.value`), params: [] };
           }
         }
 
@@ -7489,6 +7683,16 @@ END FROM (SELECT json_group_array(${valueExpr}) as sv))`,
       }
       case "literal": {
         const value = expr.value === true ? 1 : expr.value === false ? 0 : expr.value;
+        if (typeof value === "number" && expr.numberLiteralKind === "float" && expr.raw) {
+          return { sql: expr.raw, tables, params };
+        }
+        if (typeof value === "number" && Number.isInteger(value)) {
+          return { sql: String(value), tables, params };
+        }
+        if (Array.isArray(value) || (typeof value === "object" && value !== null)) {
+          params.push(JSON.stringify(value));
+          return { sql: "?", tables, params };
+        }
         params.push(value);
         return { sql: "?", tables, params };
       }
@@ -7502,6 +7706,27 @@ END FROM (SELECT json_group_array(${valueExpr}) as sv))`,
         return { sql: "?", tables, params };
       }
       case "variable": {
+        // WITH alias: treat as the underlying expression (same precedence as translateExpression)
+        const withAliases = (this.ctx as any).withAliases as Map<string, Expression> | undefined;
+        if (withAliases && withAliases.has(expr.variable!)) {
+          return this.translateExpression(withAliases.get(expr.variable!)!);
+        }
+
+        // UNWIND variable: access the json_each value column
+        const unwindClauses = (this.ctx as any).unwindClauses as Array<{
+          alias: string;
+          variable: string;
+          jsonExpr: string;
+          params: unknown[];
+        }> | undefined;
+        if (unwindClauses) {
+          const unwindClause = unwindClauses.find(u => u.variable === expr.variable);
+          if (unwindClause) {
+            tables.push(unwindClause.alias);
+            return { sql: `${unwindClause.alias}.value`, tables, params };
+          }
+        }
+
         const varInfo = this.ctx.variables.get(expr.variable!);
         if (!varInfo) {
           throw new Error(`Unknown variable: ${expr.variable}`);
@@ -7584,6 +7809,19 @@ END FROM (SELECT json_group_array(${valueExpr}) as sv))`,
       } else if (e.type === "variable" && e.variable) {
         vars.push(e.variable);
       }
+
+      const collectCondition = (cond: any) => {
+        if (!cond || typeof cond !== "object") return;
+        if (cond.left) collect(cond.left);
+        if (cond.right) collect(cond.right);
+        if (cond.list) collect(cond.list);
+        if (cond.listExpr) collect(cond.listExpr);
+        if (cond.filterCondition) collectCondition(cond.filterCondition);
+        if (cond.condition) collectCondition(cond.condition);
+        if (cond.conditions && Array.isArray(cond.conditions)) {
+          for (const c of cond.conditions) collectCondition(c);
+        }
+      };
       
       // Recurse into function arguments
       if (e.args && Array.isArray(e.args)) {
@@ -7597,10 +7835,11 @@ END FROM (SELECT json_group_array(${valueExpr}) as sv))`,
       if (e.right) collect(e.right);
       
       // Recurse into case expressions
-      if (e.whenClauses && Array.isArray(e.whenClauses)) {
-        for (const when of e.whenClauses) {
-          collect(when.when);
-          collect(when.then);
+      const whens = e.whens || e.whenClauses;
+      if (whens && Array.isArray(whens)) {
+        for (const when of whens) {
+          collect(when.condition ?? when.when);
+          collect(when.result ?? when.then);
         }
       }
       if (e.elseExpr) collect(e.elseExpr);
@@ -7608,6 +7847,7 @@ END FROM (SELECT json_group_array(${valueExpr}) as sv))`,
       // Recurse into list expressions
       if (e.listExpr) collect(e.listExpr);
       if (e.filterExpr) collect(e.filterExpr);
+      if (e.filterCondition) collectCondition(e.filterCondition);
       if (e.mapExpr) collect(e.mapExpr);
       if (e.mapExpression) collect(e.mapExpression);
       

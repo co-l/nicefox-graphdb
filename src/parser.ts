@@ -120,6 +120,8 @@ export interface Expression {
   variable?: string;
   property?: string;
   value?: PropertyValue;
+  raw?: string;
+  numberLiteralKind?: "integer" | "float";
   name?: string;
   functionName?: string;
   args?: Expression[];
@@ -388,6 +390,38 @@ class Tokenizer {
     this.input = input;
   }
 
+  private canStartNegativeNumber(): boolean {
+    const prev = this.tokens[this.tokens.length - 1];
+    if (!prev) return true;
+
+    // Allow "-1" to be tokenized as a single NUMBER only where a new expression
+    // can start. Otherwise (e.g., "x-1") it must be DASH + NUMBER.
+    switch (prev.type) {
+      case "LPAREN":
+      case "COMMA":
+      case "LBRACKET":
+      case "LBRACE":
+      case "COLON":
+      case "EQUALS":
+      case "NOT_EQUALS":
+      case "LT":
+      case "LTE":
+      case "GT":
+      case "GTE":
+      case "PLUS":
+      case "DASH":
+      case "STAR":
+      case "SLASH":
+      case "PERCENT":
+      case "CARET":
+      case "PIPE":
+      case "KEYWORD":
+        return true;
+      default:
+        return false;
+    }
+  }
+
   tokenize(): Token[] {
     while (this.pos < this.input.length) {
       this.skipWhitespace();
@@ -495,7 +529,11 @@ class Tokenizer {
     // Number - includes floats starting with . like .5
     // Check this before single char tokens so ".5" is parsed as number not DOT
     // But don't match "..3" as ".3" - only match if there's no preceding dot
-    if (this.isDigit(char) || (char === "-" && this.isDigit(this.input[this.pos + 1])) || (char === "." && this.isDigit(this.input[this.pos + 1]) && (this.pos === 0 || this.input[this.pos - 1] !== "."))) {
+    if (
+      this.isDigit(char) ||
+      (char === "-" && this.isDigit(this.input[this.pos + 1]) && this.canStartNegativeNumber()) ||
+      (char === "." && this.isDigit(this.input[this.pos + 1]) && (this.pos === 0 || this.input[this.pos - 1] !== "."))
+    ) {
       return this.readNumber(startPos, startLine, startColumn);
     }
 
@@ -2472,7 +2510,8 @@ export class Parser {
 
     if (token.type === "NUMBER") {
       this.advance();
-      return { type: "literal", value: this.parseNumber(token.value) };
+      const numberLiteralKind = token.value.includes(".") ? "float" : "integer";
+      return { type: "literal", value: this.parseNumber(token.value), raw: token.value, numberLiteralKind };
     }
 
     if (token.type === "KEYWORD") {
