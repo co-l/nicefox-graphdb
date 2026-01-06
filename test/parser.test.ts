@@ -2080,4 +2080,28 @@ describe("Parser", () => {
       expect(expr.predicateType).toBe("ALL");
     });
   });
+
+  describe("Comments", () => {
+    it("ignores line comments (//)", () => {
+      const query = expectSuccess(
+        "CREATE (:A {num: 1, num2: 4}), //num + num2 = 5\n" +
+          "       (:A {num: 5, num2: 2})  //num + num2 = 7"
+      );
+      const clause = query.clauses[0] as CreateClause;
+      expect(clause.type).toBe("CREATE");
+      expect(clause.patterns).toHaveLength(2);
+    });
+
+    it("ignores block comments (/* */)", () => {
+      const query = expectSuccess("RETURN 1 /* inline */ + 2 AS x");
+      const clause = query.clauses[0] as ReturnClause;
+      expect(clause.type).toBe("RETURN");
+      expect(clause.items[0].alias).toBe("x");
+    });
+
+    it("errors on unterminated block comments", () => {
+      const err = expectError("RETURN 1 /*");
+      expect(err.message).toContain("Unterminated block comment");
+    });
+  });
 });

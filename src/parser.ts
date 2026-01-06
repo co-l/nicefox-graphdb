@@ -424,7 +424,7 @@ class Tokenizer {
 
   tokenize(): Token[] {
     while (this.pos < this.input.length) {
-      this.skipWhitespace();
+      this.skipTrivia();
       if (this.pos >= this.input.length) break;
 
       const token = this.nextToken();
@@ -442,6 +442,74 @@ class Tokenizer {
     });
 
     return this.tokens;
+  }
+
+  private skipTrivia(): void {
+    while (this.pos < this.input.length) {
+      this.skipWhitespace();
+      if (this.pos >= this.input.length) return;
+
+      const char = this.input[this.pos];
+      const next = this.input[this.pos + 1];
+
+      // Line comment: // ... (until end of line)
+      if (char === "/" && next === "/") {
+        this.pos += 2;
+        this.column += 2;
+        while (this.pos < this.input.length) {
+          const c = this.input[this.pos];
+          if (c === "\n" || c === "\r") break;
+          this.pos++;
+          this.column++;
+        }
+        continue;
+      }
+
+      // Block comment: /* ... */
+      if (char === "/" && next === "*") {
+        const commentStart = this.pos;
+        this.pos += 2;
+        this.column += 2;
+        while (this.pos < this.input.length) {
+          const c = this.input[this.pos];
+          const n = this.input[this.pos + 1];
+
+          if (c === "*" && n === "/") {
+            this.pos += 2;
+            this.column += 2;
+            break;
+          }
+
+          if (c === "\n") {
+            this.pos++;
+            this.line++;
+            this.column = 1;
+            continue;
+          }
+
+          if (c === "\r") {
+            this.pos++;
+            if (this.input[this.pos] === "\n") {
+              this.pos++;
+            }
+            this.line++;
+            this.column = 1;
+            continue;
+          }
+
+          this.pos++;
+          this.column++;
+        }
+
+        if (this.pos >= this.input.length && !(this.input[this.pos - 2] === "*" && this.input[this.pos - 1] === "/")) {
+          throw new Error(`Unterminated block comment at position ${commentStart}`);
+        }
+
+        continue;
+      }
+
+      return;
+    }
   }
 
   private skipWhitespace(): void {
