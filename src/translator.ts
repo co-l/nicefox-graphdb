@@ -6157,6 +6157,8 @@ SELECT COALESCE(json_group_array(CAST(n AS INTEGER)), json_array()) FROM r)`,
     // Check if this is list concatenation (+ operator with arrays)
     const leftIsList = this.isListExpression(expr.left!);
     const rightIsList = this.isListExpression(expr.right!);
+    const leftIsStringLiteral = expr.left?.type === "literal" && typeof expr.left.value === "string";
+    const rightIsStringLiteral = expr.right?.type === "literal" && typeof expr.right.value === "string";
     
     
     if (expr.operator === "+" && leftIsList && rightIsList) {
@@ -6183,7 +6185,13 @@ SELECT COALESCE(json_group_array(CAST(n AS INTEGER)), json_array()) FROM r)`,
         params,
       };
     }
-    
+
+    if (expr.operator === "+" && !leftIsList && !rightIsList && (leftIsStringLiteral || rightIsStringLiteral)) {
+      const leftSql = this.wrapForArithmetic(expr.left!, leftResult.sql);
+      const rightSql = this.wrapForArithmetic(expr.right!, rightResult.sql);
+      return { sql: `(${leftSql} || ${rightSql})`, tables, params };
+    }
+
     // For property + literal list (where left is property and right is known list)
     // Must check before scalar+list since property is not detected as list
     if (expr.operator === "+" && expr.left!.type === "property" && rightIsList) {
@@ -7624,6 +7632,13 @@ SELECT COALESCE(json_group_array(CAST(n AS INTEGER)), json_array()) FROM r)`,
         const left = this.translateOrderByComplexExpression(expr.left!, returnAliases);
         const right = this.translateOrderByComplexExpression(expr.right!, returnAliases);
         const operator = expr.operator;
+        if (
+          operator === "+" &&
+          ((expr.left?.type === "literal" && typeof expr.left.value === "string") ||
+            (expr.right?.type === "literal" && typeof expr.right.value === "string"))
+        ) {
+          return { sql: `(${left.sql} || ${right.sql})`, params: [...left.params, ...right.params] };
+        }
         return {
           sql: `(${left.sql} ${operator} ${right.sql})`,
           params: [...left.params, ...right.params],

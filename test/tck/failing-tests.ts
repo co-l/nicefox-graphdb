@@ -475,7 +475,7 @@ export const FAILING_TESTS = new Set<string>([
   // "clauses/with-orderBy > WithOrderBy2 - Order by a single expression|20:2",
   // "clauses/with-orderBy > WithOrderBy2 - Order by a single expression|2:1",
   // "clauses/with-orderBy > WithOrderBy2 - Order by a single expression|21:1",
-  "clauses/with-orderBy > WithOrderBy2 - Order by a single expression|21:2",
+  // "clauses/with-orderBy > WithOrderBy2 - Order by a single expression|21:2",
   // "clauses/with-orderBy > WithOrderBy2 - Order by a single expression|2:2",
   // "clauses/with-orderBy > WithOrderBy2 - Order by a single expression|23:1",
   // "clauses/with-orderBy > WithOrderBy2 - Order by a single expression|23:2",
