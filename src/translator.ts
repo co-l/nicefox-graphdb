@@ -1563,6 +1563,27 @@ export class Translator {
                   const { sql: exprSql } = this.translateExpression(expr);
                   (relPattern as any).sourceExpression = exprSql;
                 }
+              } else if (!relPattern.edgeIsNew) {
+                // Non-optional pattern with new source but bound edge
+                // Example: MATCH ()-[r]->() WITH r MATCH ()-[r]->() 
+                // The source node should be constrained to the bound edge's source/target
+                const sourceOnConditions: string[] = [];
+                if (relPattern.edge.direction === "left") {
+                  // Left-directed: source is at target_id side of edge
+                  sourceOnConditions.push(`${relPattern.sourceAlias}.id = ${relPattern.edgeAlias}.target_id`);
+                } else {
+                  // Right-directed: source is at source_id side of edge
+                  sourceOnConditions.push(`${relPattern.sourceAlias}.id = ${relPattern.edgeAlias}.source_id`);
+                }
+                // Add label filter if source has one
+                const sourcePattern = (this.ctx as any)[`pattern_${relPattern.sourceAlias}`];
+                if (sourcePattern?.label) {
+                  const labelMatch = this.generateLabelMatchCondition(relPattern.sourceAlias, sourcePattern.label);
+                  sourceOnConditions.push(labelMatch.sql);
+                  joinParams.push(...labelMatch.params);
+                  filteredNodeAliases.add(relPattern.sourceAlias);
+                }
+                joinParts.push(`JOIN nodes ${relPattern.sourceAlias} ON ${sourceOnConditions.join(" AND ")}`);
               } else {
                 joinParts.push(`JOIN nodes ${relPattern.sourceAlias} ON 1=1`);
               }

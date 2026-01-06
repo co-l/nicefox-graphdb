@@ -626,7 +626,7 @@ export const FAILING_TESTS = new Set<string>([
   // "clauses/with-where > WithWhere4 - Non-Equi-Joins on variables|2",
   // "clauses/with-where > WithWhere5 - Filter on predicate resulting in null|2",
   // "clauses/with-where > WithWhere6 - Filter on aggregates|1",
-  "clauses/with > With1 - Forward single variable|3",
+  // "clauses/with > With1 - Forward single variable|3",
   // "clauses/with > With2 - Forward single expression|1",
   // "clauses/with > With2 - Forward single expression|2",
   "clauses/with > With3 - Forward multiple expressions|1",
