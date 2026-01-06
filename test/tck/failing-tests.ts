@@ -618,7 +618,7 @@ export const FAILING_TESTS = new Set<string>([
   // "clauses/with-orderBy > WithOrderBy4 - Order by in combination with projection and aliasing|5",
   // "clauses/with-orderBy > WithOrderBy4 - Order by in combination with projection and aliasing|6",
   // "clauses/with-orderBy > WithOrderBy4 - Order by in combination with projection and aliasing|7",
-  "clauses/with-orderBy > WithOrderBy4 - Order by in combination with projection and aliasing|8",
+  // "clauses/with-orderBy > WithOrderBy4 - Order by in combination with projection and aliasing|8",
   // "clauses/with-orderBy > WithOrderBy4 - Order by in combination with projection and aliasing|9",
   // "clauses/with-skip-limit > WithSkipLimit1 - Skip|1",
   "clauses/with-skip-limit > WithSkipLimit2 - Limit|2",

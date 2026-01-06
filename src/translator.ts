@@ -1256,6 +1256,7 @@ export class Translator {
     // Apply WITH modifiers if present
     const withDistinct = (this.ctx as any).withDistinct as boolean | undefined;
     const withOrderBy = (this.ctx as any).withOrderBy as { expression: Expression; direction: "ASC" | "DESC" }[] | undefined;
+    const withOrderByAliases = (this.ctx as any).withOrderByAliases as Map<string, Expression> | undefined;
     const withSkip = (this.ctx as any).withSkip as Expression | undefined;
     const withLimit = (this.ctx as any).withLimit as Expression | undefined;
     const withWhere = (this.ctx as any).withWhere as WhereCondition | undefined;
@@ -1313,18 +1314,27 @@ export class Translator {
     // This allows ORDER BY to reference columns from previous WITH clause
     const orderByForCheck = clause.orderBy && clause.orderBy.length > 0 ? clause.orderBy : withOrderBy;
     if (orderByForCheck && orderByForCheck.length > 0) {
-      const withAliases = (this.ctx as any).withAliases as Map<string, Expression> | undefined;
-      if (withAliases) {
+      const orderByAliases =
+        clause.orderBy && clause.orderBy.length > 0
+          ? ((this.ctx as any).withAliases as Map<string, Expression> | undefined)
+          : withOrderByAliases;
+      if (orderByAliases) {
         for (const { expression: orderExpr } of orderByForCheck) {
           // Check if ORDER BY references a WITH alias not in RETURN
           if (orderExpr.type === "variable" && orderExpr.variable) {
             const aliasName = orderExpr.variable;
-            if (withAliases.has(aliasName) && !returnColumns.includes(aliasName)) {
+            if (orderByAliases.has(aliasName) && !returnColumns.includes(aliasName)) {
               // Add this WITH alias to SELECT but not to returnColumns
-              const aliasExpr = withAliases.get(aliasName)!;
-              const { sql: exprSql, params: itemParams } = this.translateExpression(aliasExpr);
-              exprParams.push(...itemParams);
-              selectParts.push(`${exprSql} AS ${this.quoteAlias(aliasName)}`);
+              const aliasExpr = orderByAliases.get(aliasName)!;
+              const prevWithAliases = (this.ctx as any).withAliases as Map<string, Expression> | undefined;
+              (this.ctx as any).withAliases = orderByAliases;
+              try {
+                const { sql: exprSql, params: itemParams } = this.translateExpression(aliasExpr);
+                exprParams.push(...itemParams);
+                selectParts.push(`${exprSql} AS ${this.quoteAlias(aliasName)}`);
+              } finally {
+                (this.ctx as any).withAliases = prevWithAliases;
+              }
             }
           }
         }
@@ -2285,20 +2295,26 @@ export class Translator {
       // Add ORDER BY if from WITH (needs to be in subquery for LIMIT to work correctly)
       if (withOrderBy && withOrderBy.length > 0) {
         const allAvailableAliases: string[] = [];
-        const withAliases = (this.ctx as any).withAliases as Map<string, Expression> | undefined;
-        if (withAliases) {
-          for (const aliasName of withAliases.keys()) {
+        const orderByAliases = withOrderByAliases ?? ((this.ctx as any).withAliases as Map<string, Expression> | undefined);
+        if (orderByAliases) {
+          for (const aliasName of orderByAliases.keys()) {
             allAvailableAliases.push(aliasName);
           }
         }
-        const orderParts = withOrderBy.map(({ expression, direction }) => {
-          const { sql: exprSql, params: orderParams } = this.translateOrderByExpression(expression, allAvailableAliases);
-          if (orderParams && orderParams.length > 0) {
-            whereParams.push(...orderParams);
-          }
-          return `${exprSql} ${direction}`;
-        });
-        innerSql += ` ORDER BY ${orderParts.join(", ")}`;
+        const prevWithAliases = (this.ctx as any).withAliases as Map<string, Expression> | undefined;
+        (this.ctx as any).withAliases = orderByAliases;
+        try {
+          const orderParts = withOrderBy.map(({ expression, direction }) => {
+            const { sql: exprSql, params: orderParams } = this.translateOrderByExpression(expression, allAvailableAliases);
+            if (orderParams && orderParams.length > 0) {
+              whereParams.push(...orderParams);
+            }
+            return `${exprSql} ${direction}`;
+          });
+          innerSql += ` ORDER BY ${orderParts.join(", ")}`;
+        } finally {
+          (this.ctx as any).withAliases = prevWithAliases;
+        }
       }
       
       // Add LIMIT/SKIP to inner query
@@ -2396,23 +2412,32 @@ export class Translator {
     if (effectiveOrderBy && effectiveOrderBy.length > 0) {
       // Collect all available aliases for ORDER BY: RETURN columns + WITH aliases
       const allAvailableAliases = [...returnColumns];
-      const withAliases = (this.ctx as any).withAliases as Map<string, Expression> | undefined;
-      if (withAliases) {
-        for (const aliasName of withAliases.keys()) {
+      const orderByAliases =
+        clause.orderBy && clause.orderBy.length > 0
+          ? ((this.ctx as any).withAliases as Map<string, Expression> | undefined)
+          : withOrderByAliases ?? ((this.ctx as any).withAliases as Map<string, Expression> | undefined);
+      if (orderByAliases) {
+        for (const aliasName of orderByAliases.keys()) {
           if (!allAvailableAliases.includes(aliasName)) {
             allAvailableAliases.push(aliasName);
           }
         }
       }
-      
-      const orderParts = effectiveOrderBy.map(({ expression, direction }) => {
-        const { sql: exprSql, params: orderParams } = this.translateOrderByExpression(expression, allAvailableAliases);
-        if (orderParams && orderParams.length > 0) {
-          whereParams.push(...orderParams);
-        }
-        return `${exprSql} ${direction}`;
-      });
-      sql += ` ORDER BY ${orderParts.join(", ")}`;
+
+      const prevWithAliases = (this.ctx as any).withAliases as Map<string, Expression> | undefined;
+      (this.ctx as any).withAliases = orderByAliases;
+      try {
+        const orderParts = effectiveOrderBy.map(({ expression, direction }) => {
+          const { sql: exprSql, params: orderParams } = this.translateOrderByExpression(expression, allAvailableAliases);
+          if (orderParams && orderParams.length > 0) {
+            whereParams.push(...orderParams);
+          }
+          return `${exprSql} ${direction}`;
+        });
+        sql += ` ORDER BY ${orderParts.join(", ")}`;
+      } finally {
+        (this.ctx as any).withAliases = prevWithAliases;
+      }
     }
 
     // Add LIMIT and OFFSET (SKIP)
@@ -2464,6 +2489,7 @@ export class Translator {
     (this.ctx as any).withLimit = undefined;
     (this.ctx as any).withDistinct = undefined;
     (this.ctx as any).collectOrderBy = undefined;
+    (this.ctx as any).withOrderByAliases = undefined;
     
     // Check for duplicate column names within this WITH clause
     this.checkDuplicateColumnNames(clause.items);
@@ -2627,6 +2653,21 @@ export class Translator {
     (this.ctx as any).withAliases = newWithAliases;
     const withAliasesStack = (((this.ctx as any).withAliasesStack as Map<string, Expression>[] | undefined) ??= []);
     withAliasesStack.push(newWithAliases);
+
+    // ORDER BY in a WITH clause can reference:
+    // - aliases defined by this WITH projection, and
+    // - aliases from the incoming scope (even if not projected forward).
+    // Keep a merged alias map specifically for translating the WITH's ORDER BY.
+    const withOrderByAliases = new Map<string, Expression>();
+    if (oldWithAliases) {
+      for (const [aliasName, expr] of oldWithAliases.entries()) {
+        withOrderByAliases.set(aliasName, expr);
+      }
+    }
+    for (const [aliasName, expr] of newWithAliases.entries()) {
+      withOrderByAliases.set(aliasName, expr);
+    }
+    (this.ctx as any).withOrderByAliases = withOrderByAliases;
     
     // Increment edge scope when WITH doesn't pass through any edge variables
     // This means subsequent MATCH patterns are in a new scope and shouldn't
