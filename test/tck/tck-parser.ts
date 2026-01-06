@@ -95,10 +95,18 @@ export function parseFeatureFile(filePath: string): ParsedFeature {
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i];
     const trimmed = line.trim();
+    const isTableLine = trimmed.startsWith("|") && trimmed.endsWith("|");
     
     // Skip comments and empty lines (unless in docstring)
     if (!inDocString && (trimmed.startsWith("#") || trimmed === "")) {
       continue;
+    }
+
+    // Parameter tables apply only to the immediately following table rows.
+    // Most step handlers `continue;` early, so we must reset this flag before
+    // processing any non-table line.
+    if (!inDocString && expectingParams && !isTableLine) {
+      expectingParams = false;
     }
     
     // Handle docstrings
@@ -357,7 +365,7 @@ export function parseFeatureFile(filePath: string): ParsedFeature {
     }
     
     // Parse tables (| col1 | col2 |)
-    if (trimmed.startsWith("|") && trimmed.endsWith("|")) {
+    if (isTableLine) {
       const cells = trimmed
         .slice(1, -1)
         .split("|")

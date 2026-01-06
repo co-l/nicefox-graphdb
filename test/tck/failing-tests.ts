@@ -387,7 +387,7 @@ export const FAILING_TESTS = new Set<string>([
   // "clauses/union > Union2 - Union All|5",
   // "clauses/union > Union3 - Union in combination with Union All|1",
   // "clauses/union > Union3 - Union in combination with Union All|2",
-  "clauses/unwind > Unwind1|12",
+  // "clauses/unwind > Unwind1|12",
   // "clauses/unwind > Unwind1|4",
   // "clauses/unwind > Unwind1|5",
   "clauses/with-orderBy > WithOrderBy1 - Order by a single variable|11",
