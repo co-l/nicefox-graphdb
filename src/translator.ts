@@ -7146,6 +7146,28 @@ END FROM (SELECT json_group_array(${valueExpr}) as sv))`,
       }
 
       case "variable": {
+        // If this is a WITH alias that ultimately resolves to a property access, order by the
+        // underlying property expression (not the alias). Property access is translated using
+        // SQLite's JSON operator `->`, which yields JSON text and would sort lexicographically.
+        const withAliases = (this.ctx as any).withAliases as Map<string, Expression> | undefined;
+        if (withAliases && withAliases.has(expr.variable!)) {
+          const visited = new Set<string>();
+          let resolved: Expression = withAliases.get(expr.variable!)!;
+          while (
+            resolved.type === "variable" &&
+            resolved.variable &&
+            withAliases.has(resolved.variable) &&
+            !visited.has(resolved.variable)
+          ) {
+            visited.add(resolved.variable);
+            resolved = withAliases.get(resolved.variable)!;
+          }
+          if (resolved.type === "property") {
+            const { sql, params } = this.translateOrderByExpression(resolved, returnAliases);
+            return { sql, params: params ?? [] };
+          }
+        }
+
         const buildTimeWithOffsetOrderBy = (valueSql: string): string => {
           const v = valueSql;
           const tzPos = `(CASE WHEN instr(${v}, '+') > 0 THEN instr(${v}, '+') WHEN instr(${v}, '-') > 0 THEN instr(${v}, '-') ELSE 0 END)`;
@@ -7266,6 +7288,27 @@ END FROM (SELECT json_group_array(${valueExpr}) as sv))`,
   private translateOrderByComplexExpression(expr: Expression, returnAliases: string[] = []): { sql: string; params: unknown[] } {
     switch (expr.type) {
       case "variable": {
+        // WITH aliases that ultimately resolve to a property access should be expanded so ordering
+        // uses the underlying property expression (otherwise we'd sort lexicographically on JSON text).
+        const withAliases = (this.ctx as any).withAliases as Map<string, Expression> | undefined;
+        if (withAliases && withAliases.has(expr.variable!)) {
+          const visited = new Set<string>();
+          let resolved: Expression = withAliases.get(expr.variable!)!;
+          while (
+            resolved.type === "variable" &&
+            resolved.variable &&
+            withAliases.has(resolved.variable) &&
+            !visited.has(resolved.variable)
+          ) {
+            visited.add(resolved.variable);
+            resolved = withAliases.get(resolved.variable)!;
+          }
+          if (resolved.type === "property") {
+            const { sql, params } = this.translateOrderByExpression(resolved, returnAliases);
+            return { sql, params: params ?? [] };
+          }
+        }
+
         // Check if this is a RETURN column alias
         if (returnAliases.includes(expr.variable!)) {
           return { sql: expr.variable!, params: [] };
