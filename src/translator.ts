@@ -7854,6 +7854,37 @@ SELECT COALESCE(json_group_array(CAST(n AS INTEGER)), json_array()) FROM r)`,
     }
   }
 
+  // Helper to check if an expression produces a boolean result (JSON boolean)
+  private isBooleanProducingExpression(expr: Expression): boolean {
+    if (expr.type === "comparison") {
+      return true;
+    }
+    if (expr.type === "literal" && typeof expr.value === "boolean") {
+      return true;
+    }
+    // NOT expression (unary) also produces boolean
+    if (expr.type === "unary" && expr.operator === "NOT") {
+      return true;
+    }
+    // AND/OR/XOR produce booleans (binary type with logical operators)
+    if (expr.type === "binary" && (expr.operator === "AND" || expr.operator === "OR" || expr.operator === "XOR")) {
+      return true;
+    }
+    return false;
+  }
+
+  // Normalize SQL for boolean comparison - ensures both sides use same representation
+  // When one side is a comparison (produces json('true')/json('false')),
+  // the other side should also be converted to JSON boolean for proper comparison
+  private normalizeForBooleanComparison(expr: Expression, sql: string): string {
+    // If it's a boolean literal (translated to 0 or 1), convert to JSON boolean
+    if (expr.type === "literal" && typeof expr.value === "boolean") {
+      return expr.value ? "json('true')" : "json('false')";
+    }
+    // Comparison expressions already produce JSON booleans
+    return sql;
+  }
+
   private translateComparisonExpression(expr: Expression): { sql: string; tables: string[]; params: unknown[] } {
     const tables: string[] = [];
     const params: unknown[] = [];
@@ -7892,8 +7923,23 @@ SELECT COALESCE(json_group_array(CAST(n AS INTEGER)), json_array()) FROM r)`,
     params.push(...leftResult.params, ...rightResult.params);
 
     // For property access in comparisons, use json_extract for proper comparison
-    const leftSql = this.wrapForComparison(expr.left!, leftResult.sql);
-    const rightSql = this.wrapForComparison(expr.right!, rightResult.sql);
+    let leftSql = this.wrapForComparison(expr.left!, leftResult.sql);
+    let rightSql = this.wrapForComparison(expr.right!, rightResult.sql);
+
+    // Handle boolean comparisons: when comparing expressions that produce booleans
+    // (IS NULL, IS NOT NULL, other comparisons, boolean literals), ensure both sides
+    // use the same representation (JSON booleans) for proper SQLite comparison
+    const op = expr.comparisonOperator;
+    if (op === "=" || op === "<>") {
+      const leftIsBoolean = this.isBooleanProducingExpression(expr.left!);
+      const rightIsBoolean = this.isBooleanProducingExpression(expr.right!);
+      
+      if (leftIsBoolean || rightIsBoolean) {
+        // Normalize both sides to JSON boolean representation
+        leftSql = this.normalizeForBooleanComparison(expr.left!, leftSql);
+        rightSql = this.normalizeForBooleanComparison(expr.right!, rightSql);
+      }
+    }
 
     // Handle NaN semantics early: In Cypher, NaN comparisons have special behavior:
     // - NaN = x is always false (including NaN = NaN), regardless of x's type
