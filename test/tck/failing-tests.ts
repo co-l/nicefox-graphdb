@@ -780,7 +780,7 @@ export const FAILING_TESTS = new Set<string>([
   // "expressions/graph > Graph3 - Node labels|8",
   // "expressions/graph > Graph3 - Node labels|9",
   // "expressions/graph > Graph4 - Edge relationship type|2",
-  "expressions/graph > Graph4 - Edge relationship type|3",
+  // "expressions/graph > Graph4 - Edge relationship type|3",
   "expressions/graph > Graph4 - Edge relationship type|5",
   // "expressions/graph > Graph4 - Edge relationship type|6:1",
   // "expressions/graph > Graph4 - Edge relationship type|6:2",

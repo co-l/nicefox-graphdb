@@ -5723,6 +5723,10 @@ SELECT COALESCE(json_group_array(CAST(n AS INTEGER)), json_array()) FROM r)`,
         if (expr.functionName === "TYPE") {
           if (expr.args && expr.args.length > 0) {
             const arg = expr.args[0];
+            // Handle type(null) - return NULL
+            if (arg.type === "literal" && arg.value === null) {
+              return { sql: "NULL", tables, params };
+            }
             if (arg.type === "variable") {
               const varInfo = this.ctx.variables.get(arg.variable!);
               if (!varInfo) {
