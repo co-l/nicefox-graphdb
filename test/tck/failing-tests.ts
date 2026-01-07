@@ -805,7 +805,7 @@ export const FAILING_TESTS = new Set<string>([
   // "expressions/graph > Graph6 - Static property access|9:4",
   // "expressions/graph > Graph6 - Static property access|9:5",
   // "expressions/graph > Graph6 - Static property access|9:6",
-  "expressions/graph > Graph7 - Dynamic property access|1",
+  // "expressions/graph > Graph7 - Dynamic property access|1",
   "expressions/graph > Graph7 - Dynamic property access|2",
   "expressions/graph > Graph8 - Property keys function|8",
   "expressions/graph > Graph9 - Retrieve all properties as a property map|3",

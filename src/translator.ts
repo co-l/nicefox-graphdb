@@ -6357,8 +6357,30 @@ SELECT COALESCE(json_group_array(CAST(n AS INTEGER)), json_array()) FROM r)`,
             const isContainerList = 
               (resolvedListArg.type === "literal" && Array.isArray(resolvedListArg.value)) ||
               (resolvedListArg.type === "function" && resolvedListArg.functionName === "LIST");
-            const isContainerMap = resolvedListArg.type === "object";
+            // Check if container is a map: explicit object literal, or node/edge variable (which are always maps)
+            let isContainerMap = resolvedListArg.type === "object";
+            if (!isContainerMap && resolvedListArg.type === "variable" && resolvedListArg.variable) {
+              const varInfo = this.ctx.variables.get(resolvedListArg.variable);
+              if (varInfo && (varInfo.type === "node" || varInfo.type === "edge")) {
+                isContainerMap = true;
+              }
+            }
             const isContainerNull = resolvedListArg.type === "literal" && resolvedListArg.value === null;
+            
+            // Helper to check if an expression produces a string
+            const isStringExpression = (arg: Expression): boolean => {
+              if (arg.type === "literal" && typeof arg.value === "string") return true;
+              // Binary + with string operands produces a string
+              if (arg.type === "binary" && arg.operator === "+") {
+                if (arg.left && arg.right) {
+                  // If either operand is a string, the result is a string (string concatenation)
+                  if (isStringExpression(arg.left) || isStringExpression(arg.right)) {
+                    return true;
+                  }
+                }
+              }
+              return false;
+            };
             
             // Type checking for container argument
             // null is allowed (accessing null returns null)
@@ -6443,7 +6465,7 @@ SELECT COALESCE(json_group_array(CAST(n AS INTEGER)), json_array()) FROM r)`,
             
             // For map access with string key, use json_extract with the key
             // For list access with integer index, use json_extract with array index
-            if (isContainerMap || (resolvedIndexArg.type === "literal" && typeof resolvedIndexArg.value === "string")) {
+            if (isContainerMap || isStringExpression(resolvedIndexArg)) {
               // Map access: use key directly
               return { sql: `json_extract(${listResult.sql}, '$.' || ${indexResult.sql})`, tables, params };
             }
