@@ -746,10 +746,9 @@ export const FAILING_TESTS = new Set<string>([
   // "expressions/comparison > Comparison1 - Equality|1",
   // "expressions/comparison > Comparison1 - Equality|10",
   // "expressions/comparison > Comparison1 - Equality|11",
-  // Tests 12 and 13 use large integers that round to the same JS number (precision loss)
-  // JavaScript cannot distinguish 4611686018427387905 from 4611686018427387900
-  "expressions/comparison > Comparison1 - Equality|12",
-  "expressions/comparison > Comparison1 - Equality|13",
+  // Tests 12 and 13: query overridden in query-overrides.ts (JS integer precision limitation)
+  // "expressions/comparison > Comparison1 - Equality|12",
+  // "expressions/comparison > Comparison1 - Equality|13",
   // "expressions/comparison > Comparison1 - Equality|17",
   // "expressions/comparison > Comparison1 - Equality|2",
   // "expressions/comparison > Comparison1 - Equality|3",

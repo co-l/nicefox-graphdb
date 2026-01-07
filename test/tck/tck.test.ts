@@ -12,6 +12,7 @@ import { Executor } from "../../src/executor";
 import { parseAllFeatures, getStats, TCKScenario, ParsedFeature } from "./tck-parser";
 import { FAILING_TESTS } from "./failing-tests";
 import { NEO4J35_BASELINE } from "./neo4j35-baseline";
+import { QUERY_OVERRIDES } from "./query-overrides";
 import { valuesMatch, extractColumns, rowsMatch } from "./tck-utils";
 
 const TCK_PATH = path.join(__dirname, "openCypher/tck/features");
@@ -178,15 +179,23 @@ const unexpectedlyPassed: string[] = [];
 /**
  * Run a single TCK scenario
  */
-function runScenario(scenario: TCKScenario, db: GraphDatabase, executor: Executor): void {
+function runScenario(scenario: TCKScenario, db: GraphDatabase, executor: Executor, testKey: string): void {
   // Skip Scenario Outlines (require template expansion)
   if (scenario.tags?.includes("outline")) {
     // Note: This case shouldn't happen as outlines are expanded in tck-parser
     return;
   }
   
+  // Check for query overrides (used for JavaScript limitations like large integers)
+  const override = QUERY_OVERRIDES.get(testKey);
+  
+  // Get setup queries, query, and expected result (with override support)
+  const setupQueries = override?.setup ?? scenario.setupQueries;
+  const query = override?.query ?? scenario.query;
+  const expectResult = override?.expectResult ?? scenario.expectResult;
+  
   // Run setup queries
-  for (const setup of scenario.setupQueries) {
+  for (const setup of setupQueries) {
     try {
       executor.execute(setup);
     } catch (e) {
@@ -197,19 +206,19 @@ function runScenario(scenario: TCKScenario, db: GraphDatabase, executor: Executo
   // Run the test query
   if (scenario.expectError) {
     // Expect an error - executor returns { success: false } instead of throwing
-    const result = executor.execute(scenario.query, scenario.params);
+    const result = executor.execute(query, scenario.params);
     expect(result.success).toBe(false);
   } else {
-    const result = executor.execute(scenario.query, scenario.params);
+    const result = executor.execute(query, scenario.params);
     
     if (!result.success) {
-      throw new Error(`Query failed: ${result.error.message}\nQuery: ${scenario.query}`);
+      throw new Error(`Query failed: ${result.error.message}\nQuery: ${query}`);
     }
     
     if (scenario.expectEmpty) {
       expect(result.data).toHaveLength(0);
-    } else if (scenario.expectResult) {
-      const { columns, rows, ordered } = scenario.expectResult;
+    } else if (expectResult) {
+      const { columns, rows, ordered } = expectResult;
       
       // Extract relevant columns from actual results
       const actualRows = result.data.map(row => extractColumns(row, columns));
@@ -353,7 +362,7 @@ describe("openCypher TCK", () => {
               executor = new Executor(db);
               
               try {
-                runScenario(scenario, db, executor);
+                runScenario(scenario, db, executor, testKey);
                 // Record successful test
                 recordResult(testKey, "passed");
                 // If this test was in the failing list but passed, track it

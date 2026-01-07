@@ -20,6 +20,7 @@ import { GraphDatabase } from "../../src/db";
 import { Executor } from "../../src/executor";
 import { parseAllFeatures, TCKScenario } from "./tck-parser";
 import { FAILING_TESTS } from "./failing-tests";
+import { QUERY_OVERRIDES } from "./query-overrides";
 import { valuesMatch, extractColumns, rowsMatch } from "./tck-utils";
 
 const __filename = fileURLToPath(import.meta.url);
@@ -68,10 +69,13 @@ for (const feature of allFeatures) {
     // Build test key like "clauses/return > Return6 - Implicit grouping|11"
     // For expanded outline scenarios, include example index: "|11:1", "|11:2", etc.
     const featurePath = feature.file.replace(TCK_PATH + "/", "").replace(".feature", "");
+    // Use category (e.g., "expressions/comparison") not full path (e.g., "expressions/comparison/Comparison1")
+    // This matches the format used in tck.test.ts and QUERY_OVERRIDES
+    const category = path.dirname(featurePath);
     const indexPart = scenario.exampleIndex !== undefined 
       ? `${scenario.index}:${scenario.exampleIndex}`
       : `${scenario.index}`;
-    const testKey = `${featurePath} > ${feature.name}|${indexPart}`;
+    const testKey = `${category} > ${feature.name}|${indexPart}`;
     const shortKey = `${feature.name}|${indexPart}`;
     
     // Extract feature base name (e.g., "Return6" from "Return6 - Implicit grouping...")
@@ -126,22 +130,33 @@ for (const { scenario, testKey } of matches) {
   console.log(`NAME: ${scenario.name}`);
   console.log(`${"=".repeat(70)}`);
   
+  // Check for query overrides (used for JavaScript limitations like large integers)
+  const override = QUERY_OVERRIDES.get(testKey);
+  if (override) {
+    console.log(`\n⚠️  Query override applied: ${override.reason}`);
+  }
+  
+  // Get setup queries, query, and expected result (with override support)
+  const setupQueries = override?.setup ?? scenario.setupQueries;
+  const query = override?.query ?? scenario.query;
+  const expectResult = override?.expectResult ?? scenario.expectResult;
+  
     if (verbose) {
       console.log(`\nSetup queries:`);
-      for (const q of scenario.setupQueries) {
+      for (const q of setupQueries) {
         console.log(`  ${q.replace(/\n/g, "\n  ")}`);
       }
       console.log(`\nTest query:`);
-      console.log(`  ${scenario.query.replace(/\n/g, "\n  ")}`);
+      console.log(`  ${query.replace(/\n/g, "\n  ")}`);
       if (scenario.params && Object.keys(scenario.params).length > 0) {
         console.log(`\nParameters:`);
         console.log(`  ${JSON.stringify(scenario.params, null, 2)}`);
       }
       
-      if (scenario.expectResult) {
-      console.log(`\nExpected columns: ${JSON.stringify(scenario.expectResult.columns)}`);
-      console.log(`Expected rows (${scenario.expectResult.rows.length}):`);
-      for (const row of scenario.expectResult.rows) {
+      if (expectResult) {
+      console.log(`\nExpected columns: ${JSON.stringify(expectResult.columns)}`);
+      console.log(`Expected rows (${expectResult.rows.length}):`);
+      for (const row of expectResult.rows) {
         console.log(`  ${JSON.stringify(row)}`);
       }
     } else if (scenario.expectEmpty) {
@@ -158,7 +173,7 @@ for (const { scenario, testKey } of matches) {
   
   try {
     // Run setup queries
-    for (const setupQuery of scenario.setupQueries) {
+    for (const setupQuery of setupQueries) {
       const result = executor.execute(setupQuery);
       if (!result.success) {
         console.log(`\n❌ Setup failed: ${(result as any).error?.message}`);
@@ -174,7 +189,7 @@ for (const { scenario, testKey } of matches) {
       try {
         const { parse } = await import("../../src/parser");
         const { Translator } = await import("../../src/translator");
-        const parsed = parse(scenario.query);
+        const parsed = parse(query);
         if (parsed.success) {
           const translator = new Translator({});
           const translated = translator.translate(parsed.query);
@@ -192,7 +207,7 @@ for (const { scenario, testKey } of matches) {
     }
     
     // Run the test query
-    const result = executor.execute(scenario.query, scenario.params);
+    const result = executor.execute(query, scenario.params);
     
     console.log(`\nResult:`);
     if (result.success) {
@@ -229,14 +244,14 @@ for (const { scenario, testKey } of matches) {
         console.log(`\n❌ FAIL: Expected empty result`);
         failed++;
       }
-    } else if (scenario.expectResult) {
+    } else if (expectResult) {
       if (!result.success) {
         console.log(`\n❌ FAIL: Query failed`);
         failed++;
       } else {
         const data = (result as any).data || [];
-        const columns = scenario.expectResult.columns;
-        const expectedRows = scenario.expectResult.rows;
+        const columns = expectResult.columns;
+        const expectedRows = expectResult.rows;
         const actualRows = data.map((row: Record<string, unknown>) => extractColumns(row, columns));
         
         // Check row count first

@@ -422,6 +422,32 @@ const { app, dbManager } = createServer({
 serve({ fetch: app.fetch, port: 3000 });
 ```
 
+## Known Limitations
+
+### Large Integer Precision
+
+JavaScript cannot precisely represent integers larger than `Number.MAX_SAFE_INTEGER` (9,007,199,254,740,991). Integers beyond this range will lose precision, which can cause unexpected behavior when comparing values.
+
+**Example of the problem:**
+```javascript
+// These two different numbers become equal in JavaScript!
+const a = 4611686018427387905;
+const b = 4611686018427387900;
+console.log(a === b); // true (both round to 4611686018427388000)
+```
+
+**Workaround:** Use strings for large integer IDs:
+```cypher
+// Instead of:
+CREATE (u:User {id: 4611686018427387905})
+
+// Use strings:
+CREATE (u:User {id: '4611686018427387905'})
+MATCH (u:User {id: '4611686018427387905'}) RETURN u
+```
+
+This limitation affects all JavaScript-based systems, including Neo4j's JavaScript driver. For IDs that may exceed the safe integer range, string representation is the recommended approach.
+
 ## License
 
 [MIT](https://github.com/co-l/nicefox-graphdb/blob/main/LICENSE) - Conrad Lelubre
