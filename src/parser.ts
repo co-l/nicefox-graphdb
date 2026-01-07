@@ -722,6 +722,32 @@ class Tokenizer {
       return { type: "NUMBER", value, position: startPos, line: startLine, column: startColumn };
     }
 
+    // Check for hexadecimal: 0x or 0X
+    if (this.input[this.pos] === "0" && (this.input[this.pos + 1] === "x" || this.input[this.pos + 1] === "X")) {
+      value += "0x";
+      this.pos += 2;
+      this.column += 2;
+      
+      // Must have at least one hex digit
+      if (!this.isHexDigit(this.input[this.pos])) {
+        throw new SyntaxError(`Invalid hexadecimal integer: incomplete hex literal`);
+      }
+      
+      // Read hex digits
+      while (this.pos < this.input.length && this.isHexDigit(this.input[this.pos])) {
+        value += this.input[this.pos];
+        this.pos++;
+        this.column++;
+      }
+      
+      // Check for invalid characters immediately following (e.g., 0x1g)
+      if (this.pos < this.input.length && this.isIdentifierChar(this.input[this.pos])) {
+        throw new SyntaxError(`Invalid hexadecimal integer: invalid character '${this.input[this.pos]}'`);
+      }
+      
+      return { type: "NUMBER", value, position: startPos, line: startLine, column: startColumn };
+    }
+
     while (this.pos < this.input.length && this.isDigit(this.input[this.pos])) {
       value += this.input[this.pos];
       this.pos++;
@@ -742,6 +768,12 @@ class Tokenizer {
     }
 
     return { type: "NUMBER", value, position: startPos, line: startLine, column: startColumn };
+  }
+
+  private isHexDigit(char: string): boolean {
+    return (char >= "0" && char <= "9") || 
+           (char >= "a" && char <= "f") || 
+           (char >= "A" && char <= "F");
   }
 
   private readIdentifier(): string {
@@ -785,13 +817,26 @@ export class Parser {
    * Throws SyntaxError for overflow.
    */
   private parseNumber(numStr: string): number {
-    // Check if it's an integer (no decimal point)
-    if (!numStr.includes('.')) {
+    // Check if it's a hexadecimal integer
+    const isHex = numStr.includes('0x') || numStr.includes('0X');
+    const isNegativeHex = isHex && numStr.startsWith('-');
+    
+    // Check if it's an integer (no decimal point and not hex, or is hex)
+    if (!numStr.includes('.') || isHex) {
       try {
-        const bigVal = BigInt(numStr);
+        let bigVal: bigint;
+        if (isHex) {
+          // For hex, we need to parse as unsigned first, then apply sign
+          const hexPart = isNegativeHex ? numStr.slice(1) : numStr; // Remove leading minus if present
+          const unsignedVal = BigInt(hexPart);
+          bigVal = isNegativeHex ? -unsignedVal : unsignedVal;
+        } else {
+          bigVal = BigInt(numStr);
+        }
         if (bigVal > INT64_MAX || bigVal < INT64_MIN) {
           throw new SyntaxError(`integer is too large: ${numStr}`);
         }
+        return Number(bigVal);
       } catch (e) {
         if (e instanceof SyntaxError) throw e;
         // BigInt parsing failed - could be too large even for BigInt
