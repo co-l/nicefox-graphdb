@@ -132,7 +132,7 @@ export interface Expression {
   whens?: CaseWhen[];
   elseExpr?: Expression;
   // Binary operation fields (arithmetic)
-  operator?: "+" | "-" | "*" | "/" | "%" | "^" | "AND" | "OR" | "NOT";
+  operator?: "+" | "-" | "*" | "/" | "%" | "^" | "AND" | "OR" | "XOR" | "NOT";
   left?: Expression;
   right?: Expression;
   // Unary operation fields
@@ -339,6 +339,7 @@ const KEYWORDS = new Set([
   "WHERE",
   "AND",
   "OR",
+  "XOR",
   "NOT",
   "IN",
   "LIMIT",
@@ -2275,18 +2276,31 @@ export class Parser {
 
   // Handle OR (lowest precedence for logical operators)
   private parseOrExpression(): Expression {
-    let left = this.parseAndExpression();
+    let left = this.parseXorExpression();
 
     while (this.checkKeyword("OR")) {
       this.advance();
-      const right = this.parseAndExpression();
+      const right = this.parseXorExpression();
       left = { type: "binary", operator: "OR", left, right };
     }
 
     return left;
   }
 
-  // Handle AND (higher precedence than OR)
+  // Handle XOR (between OR and AND in precedence)
+  private parseXorExpression(): Expression {
+    let left = this.parseAndExpression();
+
+    while (this.checkKeyword("XOR")) {
+      this.advance();
+      const right = this.parseAndExpression();
+      left = { type: "binary", operator: "XOR", left, right };
+    }
+
+    return left;
+  }
+
+  // Handle AND (higher precedence than XOR)
   private parseAndExpression(): Expression {
     let left = this.parseNotExpression();
 

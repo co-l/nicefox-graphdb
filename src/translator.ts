@@ -21,6 +21,7 @@ import {
   Expression,
   ObjectProperty,
   PropertyValue,
+  BinaryPropertyValue,
   ParameterRef,
   VariableRef,
   SetAssignment,
@@ -6606,7 +6607,7 @@ SELECT COALESCE(json_group_array(CAST(n AS INTEGER)), json_array()) FROM r)`,
       };
     }
 
-    // Handle logical operators (AND, OR)
+    // Handle logical operators (AND, OR, XOR)
     if (expr.operator === "AND" || expr.operator === "OR") {
       // Validate that both operands are boolean types
       this.validateBooleanOperand(expr.left!, expr.operator);
@@ -6616,6 +6617,27 @@ SELECT COALESCE(json_group_array(CAST(n AS INTEGER)), json_array()) FROM r)`,
         sql: `(${leftResult.sql} ${expr.operator} ${rightResult.sql})`,
         tables,
         params,
+      };
+    }
+
+    // Handle XOR - SQLite doesn't have XOR, implement as (a AND NOT b) OR (NOT a AND b)
+    // With proper NULL handling: if either operand is NULL, result is NULL
+    if (expr.operator === "XOR") {
+      this.validateBooleanOperand(expr.left!, expr.operator);
+      this.validateBooleanOperand(expr.right!, expr.operator);
+      
+      const leftSql = leftResult.sql;
+      const rightSql = rightResult.sql;
+      // XOR with NULL semantics: (a XOR b) = (a AND NOT b) OR (NOT a AND b)
+      // This naturally handles NULL: if a is NULL, (a AND NOT b) is NULL or FALSE, (NOT a AND b) is NULL or FALSE
+      // NULL OR NULL = NULL, NULL OR FALSE = NULL, so result is NULL when either input is NULL
+      // Note: params are duplicated because the formula uses each operand twice:
+      // ((left AND NOT right) OR (NOT left AND right))
+      const xorParams = [...leftResult.params, ...rightResult.params, ...leftResult.params, ...rightResult.params];
+      return {
+        sql: `((${leftSql} AND NOT ${rightSql}) OR (NOT ${leftSql} AND ${rightSql}))`,
+        tables,
+        params: xorParams,
       };
     }
 
@@ -8678,7 +8700,7 @@ SELECT COALESCE(json_group_array(CAST(n AS INTEGER)), json_array()) FROM r)`,
     );
   }
 
-  private isBinaryPropertyValue(value: PropertyValue): value is { type: "binary"; operator: string; left: PropertyValue; right: PropertyValue } {
+  private isBinaryPropertyValue(value: PropertyValue): value is BinaryPropertyValue {
     return (
       typeof value === "object" &&
       value !== null &&
