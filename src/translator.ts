@@ -5381,11 +5381,20 @@ END FROM (SELECT json_group_array(${valueExpr}) as sv))`,
                 const pathExpressions = (this.ctx as any).pathExpressions as Array<{
                   variable: string;
                   edgeAliases: string[];
+                  isVariableLength?: boolean;
+                  pathCteName?: string;
                 }> | undefined;
                 
                 if (pathExpressions) {
                   const pathInfo = pathExpressions.find(p => p.variable === arg.variable);
                   if (pathInfo) {
+                    // For variable-length paths, use the CTE's edge_ids column
+                    if (pathInfo.isVariableLength && pathInfo.pathCteName) {
+                      // edge_ids is a JSON array of edge objects with id, type, source_id, target_id, properties
+                      // We need to return the edge objects with type included for test validation
+                      return { sql: `${pathInfo.pathCteName}.edge_ids`, tables, params };
+                    }
+                    
                     tables.push(...pathInfo.edgeAliases);
                     
                     // Neo4j 3.5 format: return array of relationship properties only
