@@ -1574,8 +1574,28 @@ export class Translator {
               joinParts.push(`${joinType} nodes ${relPattern.sourceAlias} ON 1=1`);
             }
           } else if (i === 0) {
-            // First pattern is optional but source is new - add to FROM
-            fromParts.push(`nodes ${relPattern.sourceAlias}`);
+            // First pattern - source is already bound (from a previous clause)
+            // Check if source was from an optional MATCH - if so, use dummy FROM + LEFT JOIN
+            if (sourceIsOptional && isOptional) {
+              // Source is from OPTIONAL MATCH and this pattern is also optional
+              // We need a dummy FROM to preserve NULL rows, then LEFT JOIN the source
+              if (fromParts.length === 0) {
+                fromParts.push(`(SELECT 1) AS __dummy__`);
+              }
+              const onConditions: string[] = ["1=1"];
+              const onParams: unknown[] = [];
+              const sourcePattern = (this.ctx as any)[`pattern_${relPattern.sourceAlias}`];
+              if (sourcePattern?.label) {
+                const labelMatch = this.generateLabelMatchCondition(relPattern.sourceAlias, sourcePattern.label);
+                onConditions.push(labelMatch.sql);
+                onParams.push(...labelMatch.params);
+              }
+              joinParts.push(`LEFT JOIN nodes ${relPattern.sourceAlias} ON ${onConditions.join(" AND ")}`);
+              joinParams.push(...onParams);
+            } else {
+              // Source is from a required MATCH or this pattern is required - add to FROM
+              fromParts.push(`nodes ${relPattern.sourceAlias}`);
+            }
           } else {
             // Check if source was from an optional MATCH
             if (sourceIsOptional) {
@@ -5823,6 +5843,10 @@ SELECT COALESCE(json_group_array(CAST(n AS INTEGER)), json_array()) FROM r)`,
         if (expr.functionName === "PROPERTIES") {
           if (expr.args && expr.args.length > 0) {
             const arg = expr.args[0];
+            // Handle null literal - properties(null) returns null
+            if (arg.type === "literal" && arg.value === null) {
+              return { sql: "NULL", tables, params };
+            }
             if (arg.type === "variable") {
               const varInfo = this.ctx.variables.get(arg.variable!);
               if (!varInfo) {
