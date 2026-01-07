@@ -7077,8 +7077,10 @@ SELECT COALESCE(json_group_array(CAST(n AS INTEGER)), json_array()) FROM r)`,
           params.push(...leftResult.params);
           const placeholders = values.map(() => "?").join(", ");
           params.push(...toSqliteParams(values));
+          // Wrap left side in extra parentheses to ensure correct precedence (e.g., NOT has lower precedence than IN in SQL)
+          const leftSql = leftExpr.type === "unary" ? `(${leftResult.sql})` : leftResult.sql;
           return {
-            sql: `(${leftResult.sql} IN (${placeholders}))`,
+            sql: `(${leftSql} IN (${placeholders}))`,
             tables,
             params,
           };
@@ -7127,8 +7129,10 @@ SELECT COALESCE(json_group_array(CAST(n AS INTEGER)), json_array()) FROM r)`,
             params.push(...leftResult.params);
             const placeholders = paramValue.map(() => "?").join(", ");
             params.push(...toSqliteParams(paramValue));
+            // Wrap left side in extra parentheses to ensure correct precedence (e.g., NOT has lower precedence than IN in SQL)
+            const leftSql = leftExpr.type === "unary" ? `(${leftResult.sql})` : leftResult.sql;
             return {
-              sql: `(${leftResult.sql} IN (${placeholders}))`,
+              sql: `(${leftSql} IN (${placeholders}))`,
               tables,
               params,
             };
@@ -7173,8 +7177,10 @@ SELECT COALESCE(json_group_array(CAST(n AS INTEGER)), json_array()) FROM r)`,
         tables.push(...leftResult.tables);
         params.push(...leftResult.params);
         params.push(...listResult.params);
+        // Wrap left side in extra parentheses to ensure correct precedence (e.g., NOT has lower precedence than IN in SQL)
+        const leftSql = leftExpr.type === "unary" ? `(${leftResult.sql})` : leftResult.sql;
         return {
-          sql: `(${leftResult.sql} IN (SELECT value FROM json_each(${listResult.sql})))`,
+          sql: `(${leftSql} IN (SELECT value FROM json_each(${listResult.sql})))`,
           tables,
           params,
         };
