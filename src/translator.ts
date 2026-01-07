@@ -6209,10 +6209,15 @@ SELECT COALESCE(json_group_array(CAST(n AS INTEGER)), json_array()) FROM r)`,
           if (expr.args && expr.args.length > 0) {
             const elements: string[] = [];
             for (const arg of expr.args) {
-              const argResult = this.translateExpression(arg);
-              tables.push(...argResult.tables);
-              params.push(...argResult.params);
-              elements.push(argResult.sql);
+              // For boolean literals, use json('true')/json('false') to preserve type
+              if (arg.type === "literal" && typeof arg.value === "boolean") {
+                elements.push(arg.value ? "json('true')" : "json('false')");
+              } else {
+                const argResult = this.translateExpression(arg);
+                tables.push(...argResult.tables);
+                params.push(...argResult.params);
+                elements.push(argResult.sql);
+              }
             }
             return { sql: `json_array(${elements.join(", ")})`, tables, params };
           }
@@ -6335,9 +6340,9 @@ SELECT COALESCE(json_group_array(CAST(n AS INTEGER)), json_array()) FROM r)`,
               // Map access: use key directly
               return { sql: `json_extract(${listResult.sql}, '$.' || ${indexResult.sql})`, tables, params };
             }
-            // Use json_extract with array index - note: Cypher uses 0-based, SQLite json uses 0-based too
+            // Use -> operator with array index to preserve JSON types (booleans, etc.)
             // Cast index to integer to avoid "0.0" in JSON path
-            return { sql: `json_extract(${listResult.sql}, '$[' || CAST(${indexResult.sql} AS INTEGER) || ']')`, tables, params };
+            return { sql: `(${listResult.sql}) -> ('$[' || CAST(${indexResult.sql} AS INTEGER) || ']')`, tables, params };
           }
           throw new Error("INDEX requires list and index arguments");
         }
@@ -7025,20 +7030,22 @@ SELECT COALESCE(json_group_array(CAST(n AS INTEGER)), json_array()) FROM r)`,
       }
     }
 
-    // Ensure temporal comparisons (datetime/time with offset) sort consistently with ORDER BY.
-    // We apply the same order-key normalization used for ORDER BY, but avoid wrapping
-    // aggregates in scalar subqueries (which would change their meaning).
-    const temporalOps = new Set(["<", "<=", ">", ">="]);
-    if (temporalOps.has(expr.comparisonOperator!)) {
-      const wrapTemporal = (valueSql: string) => {
-        if (valueSql.includes("?")) {
-          // Avoid duplicating placeholders embedded in the normalization expression.
-          return `(SELECT ${this.buildDateTimeWithOffsetOrderBy("__t__.v")} FROM (SELECT ${valueSql} AS v) __t__)`;
-        }
-        return this.buildDateTimeWithOffsetOrderBy(valueSql);
+    // For ordering operators (<, <=, >, >=), use Cypher-compliant type-aware comparison.
+    // In Cypher, comparing incompatible types (e.g., string vs number) returns null.
+    // Only numbers (integer and real) can be compared across their subtypes.
+    const orderingOps = new Set(["<", "<=", ">", ">="]);
+    if (orderingOps.has(expr.comparisonOperator!)) {
+      // Map operator to function name
+      const opToFunc: Record<string, string> = {
+        "<": "cypher_lt",
+        "<=": "cypher_lte",
+        ">": "cypher_gt",
+        ">=": "cypher_gte",
       };
+      const func = opToFunc[expr.comparisonOperator!];
+      
       return {
-        sql: `(${wrapTemporal(leftSql)} ${expr.comparisonOperator} ${wrapTemporal(rightSql)})`,
+        sql: `${func}(${leftSql}, ${rightSql})`,
         tables,
         params,
       };
@@ -7128,8 +7135,8 @@ SELECT COALESCE(json_group_array(CAST(n AS INTEGER)), json_array()) FROM r)`,
         params.push(value);
         valueParts.push("?");
       } else if (typeof value === "boolean") {
-        params.push(value ? 1 : 0);
-        valueParts.push("?");
+        // Use json() to preserve boolean type in the array
+        valueParts.push(value ? "json('true')" : "json('false')");
       } else if (value === null) {
         valueParts.push("NULL");
       } else if (Array.isArray(value)) {
@@ -7556,6 +7563,22 @@ SELECT COALESCE(json_group_array(CAST(n AS INTEGER)), json_array()) FROM r)`,
       case "comparison": {
         const left = this.translateWhereExpression(condition.left!);
         const right = this.translateWhereExpression(condition.right!);
+        
+        // For ordering operators, use Cypher-compliant type-aware comparison
+        const orderingOps: Record<string, string> = {
+          "<": "cypher_lt",
+          "<=": "cypher_lte",
+          ">": "cypher_gt",
+          ">=": "cypher_gte",
+        };
+        const func = orderingOps[condition.operator!];
+        if (func) {
+          return {
+            sql: `${func}(${left.sql}, ${right.sql})`,
+            params: [...left.params, ...right.params],
+          };
+        }
+        
         return {
           sql: `${left.sql} ${condition.operator} ${right.sql}`,
           params: [...left.params, ...right.params],
@@ -8380,6 +8403,21 @@ SELECT COALESCE(json_group_array(CAST(n AS INTEGER)), json_array()) FROM r)`,
           return {
             sql: `(${leftResult.sql} IS NOT NULL)`,
             params: [...leftResult.params],
+          };
+        }
+        
+        // For ordering operators, use Cypher-compliant type-aware comparison
+        const orderingOps: Record<string, string> = {
+          "<": "cypher_lt",
+          "<=": "cypher_lte",
+          ">": "cypher_gt",
+          ">=": "cypher_gte",
+        };
+        const func = orderingOps[op];
+        if (func) {
+          return {
+            sql: `${func}(${leftResult.sql}, ${rightResult.sql})`,
+            params: [...leftResult.params, ...rightResult.params],
           };
         }
         

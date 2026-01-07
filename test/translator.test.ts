@@ -329,7 +329,7 @@ describe("Translator", () => {
         "MATCH (n:Person) WHERE n.age < 30 RETURN n"
       );
 
-      expect(result.statements[0].sql).toContain("< ?");
+      expect(result.statements[0].sql).toContain("cypher_lt(");
     });
 
     it("translates greater than comparison", () => {
@@ -337,7 +337,7 @@ describe("Translator", () => {
         "MATCH (n:Person) WHERE n.age > 25 RETURN n"
       );
 
-      expect(result.statements[0].sql).toContain("> ?");
+      expect(result.statements[0].sql).toContain("cypher_gt(");
     });
 
     it("translates AND conditions", () => {
@@ -1878,7 +1878,7 @@ describe("Translator", () => {
       expect(result.statements).toHaveLength(1);
       const sql = result.statements[0].sql;
       expect(sql).toContain("*");
-      expect(sql).toContain(">");
+      expect(sql).toContain("cypher_gt(");
     });
 
     it("handles arithmetic with parameter", () => {
@@ -2046,7 +2046,7 @@ describe("Translator", () => {
 
       expect(result.statements).toHaveLength(1);
       const sql = result.statements[0].sql;
-      expect(sql).toContain(">");
+      expect(sql).toContain("cypher_gt(");
       expect(sql).toMatch(/DATE\(/i);
     });
 

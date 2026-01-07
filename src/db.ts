@@ -148,9 +148,165 @@ function deepCypherEquals(a: unknown, b: unknown): number | null {
 }
 
 /**
+ * Get the Cypher type category for ordering comparisons.
+ * Returns a type string for values that can be ordered, or null for non-orderable types.
+ * 
+ * When using SQLite's -> operator for JSON extraction, values come as JSON-formatted strings:
+ * - 'true' / 'false' for booleans
+ * - '"string"' for strings (with quotes)
+ * - '123' or '3.14' for numbers (no quotes)
+ * - '[...]' for arrays
+ * - '{...}' for objects
+ */
+function getCypherTypeForOrdering(value: unknown): string | null {
+  if (value === null) return null;
+  
+  const jsType = typeof value;
+  
+  // Numbers (integer and real) are in the same ordering category
+  if (jsType === "number" || jsType === "bigint") return "number";
+  
+  // Strings - could be raw strings OR JSON-formatted values from -> operator
+  if (jsType === "string") {
+    const s = value as string;
+    
+    // Check for JSON boolean literals (from -> operator)
+    if (s === "true" || s === "false") return "boolean";
+    
+    // Check for JSON null
+    if (s === "null") return null;
+    
+    // Check for JSON array
+    if (s.startsWith("[") && s.endsWith("]")) {
+      try {
+        JSON.parse(s);
+        return "array"; // arrays are not orderable
+      } catch {
+        // Not valid JSON, treat as string
+      }
+    }
+    
+    // Check for JSON object  
+    if (s.startsWith("{") && s.endsWith("}")) {
+      try {
+        JSON.parse(s);
+        return "object"; // objects are not orderable
+      } catch {
+        // Not valid JSON, treat as string
+      }
+    }
+    
+    // Check for JSON string literal (starts and ends with quotes)
+    if (s.startsWith('"') && s.endsWith('"') && s.length >= 2) {
+      return "string";
+    }
+    
+    // Check for JSON number (no quotes, valid number)
+    if (/^-?\d+(\.\d+)?([eE][+-]?\d+)?$/.test(s)) {
+      return "number";
+    }
+    
+    // Otherwise treat as a plain string
+    return "string";
+  }
+  
+  // Booleans - SQLite stores these as integers, but if we somehow get a JS boolean
+  if (jsType === "boolean") return "boolean";
+  
+  // Objects and arrays in JS form (shouldn't normally happen with SQLite)
+  if (Array.isArray(value)) return "array";
+  if (jsType === "object") return "object";
+  
+  return null;
+}
+
+/**
+ * Check if two Cypher types are compatible for ordering comparisons (<, <=, >, >=).
+ */
+function areCypherTypesOrderable(typeA: string | null, typeB: string | null): boolean {
+  if (typeA === null || typeB === null) return false;
+  
+  // Arrays, objects, nodes, relationships are not orderable
+  if (typeA === "array" || typeB === "array") return false;
+  if (typeA === "object" || typeB === "object") return false;
+  
+  // Same type is always orderable
+  if (typeA === typeB) return true;
+  
+  // Numbers (integer/real) are orderable with each other - already handled by "number" category
+  
+  return false;
+}
+
+/**
+ * Convert a value to its comparable form.
+ * For JSON-formatted strings from -> operator, parse to get actual value.
+ */
+function toComparableValue(value: unknown, type: string): number | string | boolean {
+  if (typeof value === "string") {
+    if (type === "number") {
+      return parseFloat(value);
+    }
+    if (type === "boolean") {
+      return value === "true";
+    }
+    if (type === "string") {
+      // JSON string literal - remove outer quotes
+      if (value.startsWith('"') && value.endsWith('"')) {
+        return value.slice(1, -1);
+      }
+      return value;
+    }
+  }
+  return value as number | string | boolean;
+}
+
+/**
  * Register custom SQL functions for Cypher semantics on a database instance.
  */
 function registerCypherFunctions(db: Database.Database): void {
+  // cypher_compare: Type-aware comparison for ordering operators (<, <=, >, >=)
+  // Returns: 1 if condition is true, 0 if false, null if types are incompatible
+  db.function("cypher_lt", { deterministic: true }, (a: unknown, b: unknown) => {
+    if (a === null || a === undefined || b === null || b === undefined) return null;
+    const typeA = getCypherTypeForOrdering(a);
+    const typeB = getCypherTypeForOrdering(b);
+    if (!areCypherTypesOrderable(typeA, typeB)) return null;
+    const valA = toComparableValue(a, typeA!);
+    const valB = toComparableValue(b, typeB!);
+    return valA < valB ? 1 : 0;
+  });
+  
+  db.function("cypher_lte", { deterministic: true }, (a: unknown, b: unknown) => {
+    if (a === null || a === undefined || b === null || b === undefined) return null;
+    const typeA = getCypherTypeForOrdering(a);
+    const typeB = getCypherTypeForOrdering(b);
+    if (!areCypherTypesOrderable(typeA, typeB)) return null;
+    const valA = toComparableValue(a, typeA!);
+    const valB = toComparableValue(b, typeB!);
+    return valA <= valB ? 1 : 0;
+  });
+  
+  db.function("cypher_gt", { deterministic: true }, (a: unknown, b: unknown) => {
+    if (a === null || a === undefined || b === null || b === undefined) return null;
+    const typeA = getCypherTypeForOrdering(a);
+    const typeB = getCypherTypeForOrdering(b);
+    if (!areCypherTypesOrderable(typeA, typeB)) return null;
+    const valA = toComparableValue(a, typeA!);
+    const valB = toComparableValue(b, typeB!);
+    return valA > valB ? 1 : 0;
+  });
+  
+  db.function("cypher_gte", { deterministic: true }, (a: unknown, b: unknown) => {
+    if (a === null || a === undefined || b === null || b === undefined) return null;
+    const typeA = getCypherTypeForOrdering(a);
+    const typeB = getCypherTypeForOrdering(b);
+    if (!areCypherTypesOrderable(typeA, typeB)) return null;
+    const valA = toComparableValue(a, typeA!);
+    const valB = toComparableValue(b, typeB!);
+    return valA >= valB ? 1 : 0;
+  });
+
   // cypher_equals: Null-aware deep equality for lists and maps
   db.function("cypher_equals", { deterministic: true }, (a: unknown, b: unknown) => {
     // Handle SQL NULL
