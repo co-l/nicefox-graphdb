@@ -2235,10 +2235,8 @@ export class Parser {
 
     // No comparison operator - treat as standalone boolean expression
     // This handles cases like: WHERE false, WHERE n.active, WHERE true AND x = 1
-    // But NOT just a variable reference like (n) - that's invalid Cypher
-    if (left.type === "variable") {
-      throw new Error(`Expected comparison operator, got ${opToken.type}`);
-    }
+    // Also handles boolean variables like: WHERE result (where result is a boolean)
+    // However, bare variable references like WHERE (n) are invalid - that's checked at translation time
     return { type: "expression", left };
   }
 

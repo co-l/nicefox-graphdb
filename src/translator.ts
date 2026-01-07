@@ -2771,6 +2771,16 @@ export class Translator {
         }
       }
       
+      // Also find variables transitively referenced by expressions already in newWithAliases
+      // This handles the case where WITH lhs, rhs passes through aliases that depend on
+      // other aliases (e.g., lhs = types[i] depends on types)
+      for (const [aliasName, expr] of newWithAliases) {
+        const vars = this.findVariablesInExpression(expr);
+        for (const v of vars) {
+          referencedVars.add(v);
+        }
+      }
+      
       // Preserve referenced WITH aliases, including their transitive dependencies.
       // This is required because we translate WITH aliases lazily: if a later WITH references
       // an earlier alias (e.g. `collect(x)`), we still need any upstream aliases that `x`
@@ -7653,6 +7663,28 @@ SELECT COALESCE(json_group_array(CAST(n AS INTEGER)), json_array()) FROM r)`,
        case "expression": {
          // Standalone expression used as boolean condition
          // e.g., WHERE false, WHERE n.active, WHERE true AND x = 1
+         // Also handles boolean variables like: WHERE result (where result is a boolean FROM WITH)
+         
+         // Check if this is a bare variable that's a node/relationship - that's invalid
+         const exprToCheck = condition.left!;
+         if (exprToCheck.type === "variable") {
+           const varName = exprToCheck.variable!;
+           
+           // Check if it's a WITH alias (which could be a boolean expression)
+           const withAliases = (this.ctx as any).withAliases as Map<string, Expression> | undefined;
+           const isWithAlias = withAliases && withAliases.has(varName);
+           
+           // Check if it's a node/relationship variable
+           const varInfo = this.ctx.variables.get(varName);
+           const isGraphElement = varInfo && (varInfo.type === "node" || varInfo.type === "edge" || varInfo.type === "varLengthEdge" || varInfo.type === "path");
+           
+           // Bare node/edge/path variable in WHERE is a SyntaxError
+           // Unless it's a WITH alias (which might be boolean)
+           if (isGraphElement && !isWithAlias) {
+             throw new Error(`SyntaxError: Cannot use node/relationship variable '${varName}' as boolean condition`);
+           }
+         }
+         
          const expr = this.translateWhereExpression(condition.left!);
          return expr;
        }
@@ -8328,6 +8360,33 @@ SELECT COALESCE(json_group_array(CAST(n AS INTEGER)), json_array()) FROM r)`,
         // Delegate to translateExpression for functions
         const result = this.translateExpression(expr);
         return { sql: result.sql, params: result.params };
+      }
+
+      case "comparison": {
+        // Comparison expression like lhs < rhs
+        // This can come from a WITH alias that was defined as a comparison
+        const leftResult = this.translateWhereExpression(expr.left!);
+        const rightResult = this.translateWhereExpression(expr.right!);
+        const op = expr.comparisonOperator || "=";
+        
+        // Handle IS NULL / IS NOT NULL specially
+        if (op === "IS NULL") {
+          return {
+            sql: `(${leftResult.sql} IS NULL)`,
+            params: [...leftResult.params],
+          };
+        }
+        if (op === "IS NOT NULL") {
+          return {
+            sql: `(${leftResult.sql} IS NOT NULL)`,
+            params: [...leftResult.params],
+          };
+        }
+        
+        return {
+          sql: `(${leftResult.sql} ${op} ${rightResult.sql})`,
+          params: [...leftResult.params, ...rightResult.params],
+        };
       }
 
       case "labelPredicate": {
