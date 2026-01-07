@@ -2600,9 +2600,10 @@ export class Translator {
       if (withHasAggregates) {
         for (const item of lastWithClause.items) {
           if (!this.isAggregateExpression(item.expression)) {
-            // Translate the non-aggregate expression and add to GROUP BY
-            const { sql: exprSql, params: groupParams } = this.translateExpression(item.expression);
-            groupByParts.push(exprSql);
+            // For pattern comprehensions and other correlated expressions,
+            // use the bound variables for grouping instead of the full expression
+            const { sql: groupKeys, params: groupParams } = this.getGroupByKeys(item.expression);
+            groupByParts.push(...groupKeys);
             whereParams.push(...groupParams);
           }
         }
@@ -2616,8 +2617,10 @@ export class Translator {
     if (groupByParts.length === 0) {
       if (returnHasAggregates && nonAggregateItems.length > 0) {
         for (const item of nonAggregateItems) {
-          const { sql: exprSql, params: groupParams } = this.translateExpression(item.expression);
-          groupByParts.push(exprSql);
+          // For pattern comprehensions and other correlated expressions,
+          // use the bound variables for grouping instead of the full expression
+          const { sql: groupKeys, params: groupParams } = this.getGroupByKeys(item.expression);
+          groupByParts.push(...groupKeys);
           whereParams.push(...groupParams);
         }
       }
@@ -9911,6 +9914,72 @@ SELECT COALESCE(json_group_array(CAST(n AS INTEGER)), json_array()) FROM r)`,
     
     collect(expr);
     return [...new Set(vars)];
+  }
+
+  /**
+   * Extract the bound variables from a pattern comprehension expression.
+   * For pattern comprehensions like [p = (n)-->() | p], this returns ["n"]
+   * which is the variable from the outer context that the comprehension correlates with.
+   */
+  private getPatternComprehensionBoundVars(expr: Expression): string[] {
+    if (expr.type !== "patternComprehension" || !expr.patterns) {
+      return [];
+    }
+    
+    const patterns = expr.patterns;
+    const isRelPattern = (p: unknown): p is import("./parser").RelationshipPattern => {
+      return typeof p === "object" && p !== null && "edge" in p;
+    };
+    
+    const boundVars: string[] = [];
+    const firstPattern = patterns[0];
+    
+    if (isRelPattern(firstPattern)) {
+      // RelationshipPattern - get source variable
+      if (firstPattern.source.variable) {
+        boundVars.push(firstPattern.source.variable);
+      }
+    } else {
+      // NodePattern - get its variable
+      const nodePattern = firstPattern as import("./parser").NodePattern;
+      if (nodePattern.variable) {
+        boundVars.push(nodePattern.variable);
+      }
+    }
+    
+    return boundVars;
+  }
+
+  /**
+   * Get the SQL expressions to use for GROUP BY when the given expression
+   * is used in an aggregation context. For pattern comprehensions, this returns
+   * the bound variable's identifier instead of the full correlated subquery.
+   */
+  private getGroupByKeys(expr: Expression): { sql: string[]; params: unknown[] } {
+    // For pattern comprehensions, group by the bound variables
+    if (expr.type === "patternComprehension") {
+      const boundVars = this.getPatternComprehensionBoundVars(expr);
+      if (boundVars.length > 0) {
+        const keys: string[] = [];
+        for (const varName of boundVars) {
+          const varInfo = this.ctx.variables.get(varName);
+          if (varInfo && varInfo.type === "node") {
+            // Use node's id for grouping
+            keys.push(`${varInfo.alias}.id`);
+          } else if (varInfo && (varInfo.type === "edge" || varInfo.type === "varLengthEdge")) {
+            // Use edge's id for grouping
+            keys.push(`${varInfo.alias}.id`);
+          }
+        }
+        if (keys.length > 0) {
+          return { sql: keys, params: [] };
+        }
+      }
+    }
+    
+    // Default: translate the expression normally
+    const { sql, params } = this.translateExpression(expr);
+    return { sql: [sql], params };
   }
 
   private findVariablesInCondition(condition: WhereCondition): string[] {

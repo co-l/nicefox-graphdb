@@ -1059,7 +1059,7 @@ export const FAILING_TESTS = new Set<string>([
   // "expressions/pattern > Pattern2 - Pattern Comprehension|2",
   // "expressions/pattern > Pattern2 - Pattern Comprehension|3",
   // "expressions/pattern > Pattern2 - Pattern Comprehension|6",
-  "expressions/pattern > Pattern2 - Pattern Comprehension|8",
+  // "expressions/pattern > Pattern2 - Pattern Comprehension|8",
   // "expressions/pattern > Pattern2 - Pattern Comprehension|9",
   // "expressions/precedence > Precedence1 - On boolean values|1",
   "expressions/precedence > Precedence1 - On boolean values|11",
