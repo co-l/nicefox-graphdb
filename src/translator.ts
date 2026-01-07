@@ -9287,6 +9287,16 @@ SELECT COALESCE(json_group_array(CAST(n AS INTEGER)), json_array()) FROM r)`,
       case "binary":
         // For binary expressions, try to reconstruct a readable name
         return `${this.getExpressionName(expr.left!)} ${expr.operator} ${this.getExpressionName(expr.right!)}`;
+      case "propertyAccess": {
+        // For property access on expressions like (list[1]).name or map.key1.key2
+        const objectName = this.getExpressionName(expr.object!);
+        // Only add parentheses for complex expressions (functions, binary ops)
+        // Simple property chains like map.key1.key2 don't need parentheses
+        if (expr.object!.type === "property" || expr.object!.type === "variable") {
+          return `${objectName}.${expr.property}`;
+        }
+        return `(${objectName}).${expr.property}`;
+      }
       default:
         return "expr";
     }
