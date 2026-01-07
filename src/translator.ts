@@ -32,6 +32,27 @@ import {
 import { assertValidPropertyValue, isValidPropertyValue } from "./property-value.js";
 
 // ============================================================================
+// Helper Functions
+// ============================================================================
+
+/**
+ * Convert a value to SQLite-compatible format.
+ * SQLite cannot bind JavaScript booleans directly - they must be converted to 1/0.
+ */
+function toSqliteParam(value: unknown): unknown {
+  if (value === true) return 1;
+  if (value === false) return 0;
+  return value;
+}
+
+/**
+ * Convert an array of values to SQLite-compatible format.
+ */
+function toSqliteParams(values: unknown[]): unknown[] {
+  return values.map(toSqliteParam);
+}
+
+// ============================================================================
 // Types
 // ============================================================================
 
@@ -7055,7 +7076,7 @@ SELECT COALESCE(json_group_array(CAST(n AS INTEGER)), json_array()) FROM r)`,
           tables.push(...leftResult.tables);
           params.push(...leftResult.params);
           const placeholders = values.map(() => "?").join(", ");
-          params.push(...values);
+          params.push(...toSqliteParams(values));
           return {
             sql: `(${leftResult.sql} IN (${placeholders}))`,
             tables,
@@ -7105,7 +7126,7 @@ SELECT COALESCE(json_group_array(CAST(n AS INTEGER)), json_array()) FROM r)`,
             tables.push(...leftResult.tables);
             params.push(...leftResult.params);
             const placeholders = paramValue.map(() => "?").join(", ");
-            params.push(...paramValue);
+            params.push(...toSqliteParams(paramValue));
             return {
               sql: `(${leftResult.sql} IN (${placeholders}))`,
               tables,
@@ -9150,7 +9171,7 @@ SELECT COALESCE(json_group_array(CAST(n AS INTEGER)), json_array()) FROM r)`,
       
       // Generate placeholders for each value
       const placeholders = values.map(() => "?").join(", ");
-      params.push(...values);
+      params.push(...toSqliteParams(values));
       
       return {
         sql: `${left.sql} IN (${placeholders})`,
@@ -9166,7 +9187,7 @@ SELECT COALESCE(json_group_array(CAST(n AS INTEGER)), json_array()) FROM r)`,
           return { sql: "1 = 0", params: [] };
         }
         const placeholders = paramValue.map(() => "?").join(", ");
-        params.push(...paramValue);
+        params.push(...toSqliteParams(paramValue));
         return {
           sql: `${left.sql} IN (${placeholders})`,
           params,
