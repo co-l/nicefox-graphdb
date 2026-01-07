@@ -67,6 +67,35 @@ CREATE INDEX IF NOT EXISTS idx_edges_target ON edges(target_id);
 `;
 
 // ============================================================================
+// Helpers
+// ============================================================================
+
+/**
+ * Convert a parameter value for SQLite binding.
+ * Large integers (outside JavaScript's safe integer range) are converted to BigInt
+ * to ensure SQLite treats them as INTEGER rather than REAL (which loses precision).
+ * 
+ * Important: We convert via string representation to preserve the value that JavaScript
+ * would serialize (e.g., to JSON), rather than the internal floating-point representation
+ * which may differ for large integers.
+ */
+function convertParamForSqlite(value: unknown): unknown {
+  if (typeof value === "number" && Number.isInteger(value) && !Number.isSafeInteger(value)) {
+    // Large integer: convert to BigInt via string to preserve the serialized representation
+    // This ensures consistency with JSON.stringify() behavior
+    return BigInt(String(value));
+  }
+  return value;
+}
+
+/**
+ * Convert all params in an array for SQLite binding.
+ */
+function convertParamsForSqlite(params: unknown[]): unknown[] {
+  return params.map(convertParamForSqlite);
+}
+
+// ============================================================================
 // Database Class
 // ============================================================================
 
@@ -96,16 +125,19 @@ export class GraphDatabase {
   execute(sql: string, params: unknown[] = []): QueryResult {
     this.ensureInitialized();
 
+    // Convert large integers to BigInt for proper SQLite INTEGER binding
+    const convertedParams = convertParamsForSqlite(params);
+
     const stmt = this.db.prepare(sql);
     const trimmedSql = sql.trim().toUpperCase();
     // Check if it's a query (SELECT or WITH for CTEs)
     const isQuery = trimmedSql.startsWith("SELECT") || trimmedSql.startsWith("WITH");
 
     if (isQuery) {
-      const rows = stmt.all(...params) as Record<string, unknown>[];
+      const rows = stmt.all(...convertedParams) as Record<string, unknown>[];
       return { rows, changes: 0, lastInsertRowid: 0 };
     } else {
-      const result = stmt.run(...params);
+      const result = stmt.run(...convertedParams);
       return {
         rows: [],
         changes: result.changes,
