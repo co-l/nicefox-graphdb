@@ -6947,14 +6947,23 @@ SELECT COALESCE(json_group_array(CAST(n AS INTEGER)), json_array()) FROM r)`,
       };
     }
 
-    // Structural equality for lists: compare canonical JSON instead of raw text.
-    // This avoids false negatives due to formatting differences (e.g. whitespace).
+    // Structural equality for lists: use cypher_equals for null-aware deep comparison.
+    // In Cypher, [null] = [1] returns null (unknown), not false.
     if ((expr.comparisonOperator === "=" || expr.comparisonOperator === "<>") && this.isListExpression(expr.left!) && this.isListExpression(expr.right!)) {
-      return {
-        sql: `(json(${leftSql}) ${expr.comparisonOperator} json(${rightSql}))`,
-        tables,
-        params,
-      };
+      if (expr.comparisonOperator === "=") {
+        return {
+          sql: `cypher_equals(${leftSql}, ${rightSql})`,
+          tables,
+          params,
+        };
+      } else {
+        // <> is NOT equals: invert the result, but preserve null
+        return {
+          sql: `CASE WHEN cypher_equals(${leftSql}, ${rightSql}) IS NULL THEN NULL WHEN cypher_equals(${leftSql}, ${rightSql}) = 1 THEN 0 ELSE 1 END`,
+          tables,
+          params,
+        };
+      }
     }
 
     return {

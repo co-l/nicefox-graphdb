@@ -99,6 +99,81 @@ function convertParamsForSqlite(params: unknown[]): unknown[] {
 // Database Class
 // ============================================================================
 
+// ============================================================================
+// Custom SQL Functions for Cypher Semantics
+// ============================================================================
+
+/**
+ * Deep equality comparison with Cypher's three-valued logic.
+ * Returns: 1 (true), 0 (false), or null (unknown when comparing with null)
+ */
+function deepCypherEquals(a: unknown, b: unknown): number | null {
+  // Both null/undefined -> null (unknown if null equals null)
+  if (a === null && b === null) return null;
+  // One null -> null (unknown)
+  if (a === null || b === null) return null;
+
+  // Arrays
+  if (Array.isArray(a) && Array.isArray(b)) {
+    if (a.length !== b.length) return 0; // false
+    if (a.length === 0) return 1; // true
+
+    let hasNull = false;
+    for (let i = 0; i < a.length; i++) {
+      const cmp = deepCypherEquals(a[i], b[i]);
+      if (cmp === null) hasNull = true;
+      else if (cmp === 0) return 0; // false
+    }
+    return hasNull ? null : 1;
+  }
+
+  // Objects (maps)
+  if (typeof a === "object" && typeof b === "object" && a !== null && b !== null && !Array.isArray(a) && !Array.isArray(b)) {
+    const keysA = Object.keys(a as Record<string, unknown>).sort();
+    const keysB = Object.keys(b as Record<string, unknown>).sort();
+    if (keysA.length !== keysB.length) return 0;
+    if (keysA.join(",") !== keysB.join(",")) return 0;
+
+    let hasNull = false;
+    for (const k of keysA) {
+      const cmp = deepCypherEquals((a as Record<string, unknown>)[k], (b as Record<string, unknown>)[k]);
+      if (cmp === null) hasNull = true;
+      else if (cmp === 0) return 0;
+    }
+    return hasNull ? null : 1;
+  }
+
+  // Primitives
+  return a === b ? 1 : 0;
+}
+
+/**
+ * Register custom SQL functions for Cypher semantics on a database instance.
+ */
+function registerCypherFunctions(db: Database.Database): void {
+  // cypher_equals: Null-aware deep equality for lists and maps
+  db.function("cypher_equals", { deterministic: true }, (a: unknown, b: unknown) => {
+    // Handle SQL NULL
+    if (a === null && b === null) return null;
+    if (a === null || b === null) return null;
+
+    // Try to parse as JSON (for arrays/objects stored as JSON strings)
+    let parsedA: unknown, parsedB: unknown;
+    try {
+      parsedA = typeof a === "string" ? JSON.parse(a) : a;
+    } catch {
+      parsedA = a;
+    }
+    try {
+      parsedB = typeof b === "string" ? JSON.parse(b) : b;
+    } catch {
+      parsedB = b;
+    }
+
+    return deepCypherEquals(parsedA, parsedB);
+  });
+}
+
 export class GraphDatabase {
   private db: Database.Database;
   private initialized: boolean = false;
@@ -107,6 +182,8 @@ export class GraphDatabase {
     this.db = new Database(path);
     this.db.pragma("journal_mode = WAL");
     this.db.pragma("foreign_keys = ON");
+    // Register custom Cypher functions
+    registerCypherFunctions(this.db);
   }
 
   /**
