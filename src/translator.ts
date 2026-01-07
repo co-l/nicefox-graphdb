@@ -6822,6 +6822,23 @@ SELECT COALESCE(json_group_array(CAST(n AS INTEGER)), json_array()) FROM r)`,
     return false;
   }
 
+  /**
+   * Check if an expression could produce NaN (IEEE 754 Not a Number).
+   * In SQLite, division by zero returns NULL, but Cypher semantics require NaN.
+   * NaN has special comparison semantics: NaN = x is always false, NaN <> x is always true.
+   */
+  private couldProduceNaN(expr: Expression): boolean {
+    // Division can produce NaN (0/0) or Infinity (x/0)
+    if (expr.type === "binary" && expr.operator === "/") {
+      return true;
+    }
+    // Recursively check nested expressions
+    if (expr.type === "binary") {
+      return this.couldProduceNaN(expr.left!) || this.couldProduceNaN(expr.right!);
+    }
+    return false;
+  }
+
   private wrapForArray(expr: Expression, sql: string): string {
     // For property access, use json_extract to get the JSON array
     if (expr.type === "property") {
@@ -6948,6 +6965,55 @@ SELECT COALESCE(json_group_array(CAST(n AS INTEGER)), json_array()) FROM r)`,
     // For property access in comparisons, use json_extract for proper comparison
     const leftSql = this.wrapForComparison(expr.left!, leftResult.sql);
     const rightSql = this.wrapForComparison(expr.right!, rightResult.sql);
+
+    // Handle NaN semantics early: In Cypher, NaN comparisons have special behavior:
+    // - NaN = x is always false (including NaN = NaN), regardless of x's type
+    // - NaN <> x is always true (including NaN <> NaN), regardless of x's type
+    // - NaN < x, NaN <= x, NaN > x, NaN >= x:
+    //   - When x is numeric: returns false
+    //   - When x is non-numeric (e.g., string): returns null (type incompatibility)
+    // SQLite returns NULL for division by zero (0.0/0.0), so we need to convert NULL to the correct boolean.
+    const leftCouldBeNaN = this.couldProduceNaN(expr.left!);
+    const rightCouldBeNaN = this.couldProduceNaN(expr.right!);
+    
+    if (leftCouldBeNaN || rightCouldBeNaN) {
+      const op = expr.comparisonOperator!;
+      
+      // For = and <>, NaN semantics always apply (return false/true respectively)
+      if (op === "=") {
+        // NaN = anything is false (including NaN = NaN)
+        // If the comparison returns NULL (because of NaN), return false (0)
+        return {
+          sql: `COALESCE((${leftSql} ${op} ${rightSql}), 0)`,
+          tables,
+          params,
+        };
+      } else if (op === "<>") {
+        // NaN <> anything is true (including NaN <> NaN)
+        // If the comparison returns NULL (because of NaN), return true (1)
+        return {
+          sql: `COALESCE((${leftSql} ${op} ${rightSql}), 1)`,
+          tables,
+          params,
+        };
+      } else {
+        // For <, <=, >, >=: check if comparing to a non-numeric type
+        const leftIsString = expr.left?.type === "literal" && typeof expr.left.value === "string";
+        const rightIsString = expr.right?.type === "literal" && typeof expr.right.value === "string";
+        
+        if (leftIsString || rightIsString) {
+          // NaN compared to string via range operators returns null (type incompatibility)
+          // Let the comparison return null naturally
+        } else {
+          // NaN compared to numeric via range operators returns false
+          return {
+            sql: `COALESCE((${leftSql} ${op} ${rightSql}), 0)`,
+            tables,
+            params,
+          };
+        }
+      }
+    }
 
     // Ensure temporal comparisons (datetime/time with offset) sort consistently with ORDER BY.
     // We apply the same order-key normalization used for ORDER BY, but avoid wrapping
