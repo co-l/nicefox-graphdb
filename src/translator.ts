@@ -2247,8 +2247,15 @@ export class Translator {
       params: unknown[];
     }> | undefined;
     
+    // Get set of UNWIND clauses that were consumed by subquery aggregates
+    const consumedUnwindClauses = (this.ctx as any).consumedUnwindClauses as Set<string> | undefined;
+    
     if (unwindClauses && unwindClauses.length > 0) {
       for (const unwindClause of unwindClauses) {
+        // Skip UNWIND clauses that were consumed by subquery aggregates (MIN/MAX with type-aware comparison)
+        if (consumedUnwindClauses?.has(unwindClause.alias)) {
+          continue;
+        }
         // Use CROSS JOIN with json_each to expand the array
         if (fromParts.length === 0 && joinParts.length === 0) {
           // No FROM yet, use json_each directly
@@ -4655,7 +4662,66 @@ export class Translator {
                 const unwindClause = unwindClauses.find(u => u.variable === arg.variable);
                 if (unwindClause) {
                   tables.push(unwindClause.alias);
-                  // For UNWIND variables, aggregate the value from json_each
+                  // For MIN/MAX on UNWIND variables, use type-aware comparison
+                  // Cypher type ordering: LIST (0) < STRING (1) < NUMBER (2)
+                  // max() returns max value among highest-ranking type (numbers)
+                  // min() returns min value among lowest-ranking type (lists)
+                  if (expr.functionName === "MIN" || expr.functionName === "MAX") {
+                    const alias = unwindClause.alias;
+                    const typeRankExpr = `CASE ${alias}.type 
+                      WHEN 'array' THEN 0
+                      WHEN 'text' THEN 1
+                      WHEN 'integer' THEN 2
+                      WHEN 'real' THEN 2
+                      ELSE -1
+                    END`;
+                    
+                    // Mark this UNWIND as consumed by subquery aggregate
+                    // so it won't be added to outer FROM clause
+                    if (!(this.ctx as any).consumedUnwindClauses) {
+                      (this.ctx as any).consumedUnwindClauses = new Set<string>();
+                    }
+                    (this.ctx as any).consumedUnwindClauses.add(unwindClause.alias);
+                    
+                    if (expr.functionName === "MAX") {
+                      // For MAX: get values of highest-ranking type, return max of those
+                      return {
+                        sql: `(SELECT ${distinctKeyword}value FROM (
+                          SELECT ${alias}.value, ${typeRankExpr} as type_rank
+                          FROM json_each(${unwindClause.jsonExpr}) ${alias}
+                          WHERE ${alias}.type != 'null'
+                        )
+                        WHERE type_rank = (
+                          SELECT MAX(${typeRankExpr})
+                          FROM json_each(${unwindClause.jsonExpr}) ${alias}
+                          WHERE ${alias}.type != 'null'
+                        )
+                        ORDER BY value DESC
+                        LIMIT 1)`,
+                        tables: [], // Don't add to outer tables since we use subquery
+                        params: [...params, ...unwindClause.params, ...unwindClause.params],
+                      };
+                    } else {
+                      // For MIN: get values of lowest-ranking type, return min of those
+                      return {
+                        sql: `(SELECT ${distinctKeyword}value FROM (
+                          SELECT ${alias}.value, ${typeRankExpr} as type_rank
+                          FROM json_each(${unwindClause.jsonExpr}) ${alias}
+                          WHERE ${alias}.type != 'null'
+                        )
+                        WHERE type_rank = (
+                          SELECT MIN(${typeRankExpr})
+                          FROM json_each(${unwindClause.jsonExpr}) ${alias}
+                          WHERE ${alias}.type != 'null'
+                        )
+                        ORDER BY value ASC
+                        LIMIT 1)`,
+                        tables: [], // Don't add to outer tables since we use subquery
+                        params: [...params, ...unwindClause.params, ...unwindClause.params],
+                      };
+                    }
+                  }
+                  // For other aggregates (SUM, AVG), use standard aggregation
                   return {
                     sql: `${expr.functionName}(${distinctKeyword}${unwindClause.alias}.value)`,
                     tables,

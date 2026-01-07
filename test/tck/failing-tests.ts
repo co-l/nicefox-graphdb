@@ -637,7 +637,7 @@ export const FAILING_TESTS = new Set<string>([
   // "clauses/with > With5 - Implicit grouping with DISTINCT|2",
   // "clauses/with > With7 - WITH on WITH|1",
   // "clauses/with > With7 - WITH on WITH|2",
-  "expressions/aggregation > Aggregation2 - Min and Max|11",
+  // "expressions/aggregation > Aggregation2 - Min and Max|11",
   "expressions/aggregation > Aggregation3 - Sum|2",
   "expressions/aggregation > Aggregation6 - Percentiles|3:1",
   "expressions/aggregation > Aggregation6 - Percentiles|3:2",
