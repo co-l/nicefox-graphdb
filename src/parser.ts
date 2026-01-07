@@ -2866,7 +2866,8 @@ export class Parser {
             if (args.length > 0) {
               this.expect("COMMA");
             }
-            args.push(this.parseExpression());
+            // Use parseReturnExpression to support comparisons and logical operators in function args
+            args.push(this.parseReturnExpression());
           } while (this.check("COMMA"));
         }
 

@@ -1327,6 +1327,27 @@ export class Translator {
       }
     }
 
+    // Check if RETURN uses multiple list predicates referencing different WITH aggregate aliases.
+    // SQLite doesn't allow multiple aggregate functions in correlated subqueries, so we need
+    // to materialize the aggregates in a CTE first.
+    const withAliasesForCheck = (this.ctx as any).withAliases as Map<string, Expression> | undefined;
+    const aggregateAliasesInListPredicates = new Set<string>();
+    for (const item of clause.items) {
+      const aliases = this.collectWithAggregateAliasesFromListPredicates(item.expression, withAliasesForCheck);
+      for (const alias of aliases) {
+        aggregateAliasesInListPredicates.add(alias);
+      }
+    }
+    
+    // If we have multiple aggregate aliases used in list predicates, we need a CTE
+    const needsAggregateCTE = aggregateAliasesInListPredicates.size > 1;
+    if (needsAggregateCTE) {
+      // Mark the context so translateExpression knows to use column references instead of re-translating
+      (this.ctx as any).materializedAggregateAliases = aggregateAliasesInListPredicates;
+      // Also mark that we need to use __aggregates__ as the FROM source
+      (this.ctx as any).useAggregatesCTE = true;
+    }
+
     // Track which tables we need
     const neededTables = new Set<string>();
 
@@ -2592,12 +2613,19 @@ export class Translator {
       whereParts.length = 0;
       joinParts.length = 0;
     } else if (fromParts.length > 0) {
-      sql += ` FROM ${fromParts.join(", ")}`;
-      if (joinParts.length > 0) {
-        sql += ` ${joinParts.join(" ")}`;
-      }
-      if (whereParts.length > 0) {
-        sql += ` WHERE ${whereParts.join(" AND ")}`;
+      // Check if we should use __aggregates__ CTE instead of the normal FROM
+      const useAggregatesCTE = (this.ctx as any).useAggregatesCTE as boolean | undefined;
+      if (useAggregatesCTE) {
+        sql += ` FROM __aggregates__`;
+        // Don't add joins or where - the CTE handles aggregation
+      } else {
+        sql += ` FROM ${fromParts.join(", ")}`;
+        if (joinParts.length > 0) {
+          sql += ` ${joinParts.join(" ")}`;
+        }
+        if (whereParts.length > 0) {
+          sql += ` WHERE ${whereParts.join(" AND ")}`;
+        }
       }
     } else if (joinParts.length > 0) {
       // If we have JOINs but no FROM, we need a dummy FROM clause
@@ -2724,7 +2752,67 @@ export class Translator {
     }
 
     // Combine params in the order they appear in SQL: SELECT -> JOINs -> WHERE
-    const allParams = [...exprParams, ...joinParams, ...whereParams];
+    let allParams = [...exprParams, ...joinParams, ...whereParams];
+
+    // If we need to materialize aggregate aliases in a CTE, prepend the CTE
+    const materializedAggregates = (this.ctx as any).materializedAggregateAliases as Set<string> | undefined;
+    const useAggregatesCTE = (this.ctx as any).useAggregatesCTE as boolean | undefined;
+    if (materializedAggregates && materializedAggregates.size > 0 && useAggregatesCTE) {
+      // Build the CTE that computes the aggregates
+      const cteSelectParts: string[] = [];
+      const cteParams: unknown[] = [];
+      const withAliasesFinal = (this.ctx as any).withAliases as Map<string, Expression> | undefined;
+      
+      for (const aliasName of materializedAggregates) {
+        if (withAliasesFinal && withAliasesFinal.has(aliasName)) {
+          const originalExpr = withAliasesFinal.get(aliasName)!;
+          // Temporarily clear materializedAggregateAliases to get the actual aggregate SQL
+          (this.ctx as any).materializedAggregateAliases = undefined;
+          const { sql: aggSql, params: aggParams } = this.translateExpression(originalExpr);
+          (this.ctx as any).materializedAggregateAliases = materializedAggregates;
+          cteSelectParts.push(`${aggSql} AS "${aliasName}"`);
+          cteParams.push(...aggParams);
+        }
+      }
+      
+      if (cteSelectParts.length > 0) {
+        // Build the CTE FROM clause (same as main query's FROM)
+        // We need to replicate the UNWIND/FROM structure
+        const unwindClausesFinal = (this.ctx as any).unwindClauses as Array<{
+          alias: string;
+          variable: string;
+          jsonExpr: string;
+          params: unknown[];
+        }> | undefined;
+        
+        let cteFrom = "";
+        if (unwindClausesFinal && unwindClausesFinal.length > 0) {
+          const cteParts: string[] = [];
+          for (const unwind of unwindClausesFinal) {
+            cteParts.push(`json_each(${unwind.jsonExpr}) ${unwind.alias}`);
+            cteParams.push(...unwind.params);
+          }
+          cteFrom = cteParts.join(" CROSS JOIN ");
+        }
+        
+        // Build the CTE SQL
+        let cteSql = `WITH __aggregates__ AS (SELECT ${cteSelectParts.join(", ")}`;
+        if (cteFrom) {
+          cteSql += ` FROM ${cteFrom}`;
+        }
+        cteSql += `) `;
+        
+        // Prepend CTE to main query
+        sql = cteSql + sql;
+        
+        // Prepend CTE params (only CTE params, exprParams don't use UNWIND params since we use CTE)
+        allParams = [...cteParams];
+      }
+      
+      // Clean up context
+      (this.ctx as any).materializedAggregateAliases = undefined;
+      (this.ctx as any).useAggregatesCTE = undefined;
+    }
 
     return {
       statements: [{ sql, params: allParams }],
@@ -4342,6 +4430,13 @@ export class Translator {
 
     switch (expr.type) {
       case "variable": {
+        // Check if this is a materialized aggregate alias (from CTE)
+        const materializedAggregateAliases = (this.ctx as any).materializedAggregateAliases as Set<string> | undefined;
+        if (materializedAggregateAliases && materializedAggregateAliases.has(expr.variable!)) {
+          // Reference the column from the __aggregates__ CTE instead of re-translating
+          return { sql: `__aggregates__."${expr.variable!}"`, tables: ["__aggregates__"], params: [] };
+        }
+
         // First check if this is a WITH alias
         const withAliases = (this.ctx as any).withAliases as Map<string, Expression> | undefined;
         if (withAliases && withAliases.has(expr.variable!)) {
@@ -5262,6 +5357,27 @@ END FROM (SELECT json_group_array(${valueExpr}) as sv))`,
               params.push(...collectOrderParams);
               return {
                 sql: `json_group_array(${objResult.sql}${collectOrderClause})`,
+                tables,
+                params,
+              };
+            } else {
+              // COLLECT with arbitrary expression: collect(a = b), collect(a XOR b), etc.
+              const translated = this.translateExpression(arg);
+              tables.push(...translated.tables);
+              params.push(...translated.params);
+
+              if (useDistinct) {
+                params.push(...translated.params, ...collectOrderParams);
+                return {
+                  sql: `COALESCE(json('[' || GROUP_CONCAT(DISTINCT CASE WHEN ${translated.sql} IS NOT NULL THEN json_quote(${translated.sql}) END${collectOrderClause}) || ']'), json('[]'))`,
+                  tables,
+                  params,
+                };
+              }
+
+              params.push(...collectOrderParams);
+              return {
+                sql: `json_group_array(${translated.sql}${collectOrderClause})`,
                 tables,
                 params,
               };
@@ -8455,6 +8571,15 @@ SELECT COALESCE(json_group_array(CAST(n AS INTEGER)), json_array()) FROM r)`,
         };
       }
       
+      case "expression": {
+        // Handle bare expressions used as boolean conditions (e.g., all(x IN list WHERE x))
+        const exprResult = this.translateListComprehensionExpr(condition.left!, compVar, tableAlias);
+        return {
+          sql: exprResult.sql,
+          params: exprResult.params,
+        };
+      }
+      
       default:
         throw new Error(`Unsupported condition type in list comprehension: ${condition.type}`);
     }
@@ -10099,6 +10224,59 @@ SELECT COALESCE(json_group_array(CAST(n AS INTEGER)), json_array()) FROM r)`,
       return leftHasAggregate || rightHasAggregate;
     }
     return false;
+  }
+
+  /**
+   * Extract list predicates from an expression that reference WITH aggregate aliases.
+   * Returns a set of alias names that need to be materialized.
+   */
+  private collectWithAggregateAliasesFromListPredicates(
+    expr: Expression,
+    withAliases: Map<string, Expression> | undefined
+  ): Set<string> {
+    const aliases = new Set<string>();
+    if (!withAliases) return aliases;
+
+    const collectFromExpr = (e: Expression) => {
+      if (e.type === "listPredicate" && e.listExpr) {
+        // Check if the list expression is a variable referencing a WITH aggregate alias
+        if (e.listExpr.type === "variable" && e.listExpr.variable) {
+          const aliasExpr = withAliases.get(e.listExpr.variable);
+          if (aliasExpr && this.isAggregateExpression(aliasExpr)) {
+            aliases.add(e.listExpr.variable);
+          }
+        }
+      }
+      
+      // Recursively check sub-expressions
+      if (e.type === "binary") {
+        collectFromExpr(e.left!);
+        collectFromExpr(e.right!);
+      }
+      if (e.type === "function" && e.args) {
+        for (const arg of e.args) {
+          collectFromExpr(arg);
+        }
+      }
+      if (e.type === "comparison") {
+        if (e.left) collectFromExpr(e.left);
+        if (e.right) collectFromExpr(e.right);
+      }
+      if (e.type === "unary" && e.operand) {
+        collectFromExpr(e.operand);
+      }
+      if (e.type === "case") {
+        if (e.expression) collectFromExpr(e.expression);
+        for (const when of e.whens || []) {
+          // CaseWhen has condition (WhereCondition) and result (Expression)
+          if (when.result) collectFromExpr(when.result);
+        }
+        if (e.elseExpr) collectFromExpr(e.elseExpr);
+      }
+    };
+
+    collectFromExpr(expr);
+    return aliases;
   }
 
   /**
