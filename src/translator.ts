@@ -4683,11 +4683,28 @@ export class Translator {
                     }
                     (this.ctx as any).consumedUnwindClauses.add(unwindClause.alias);
                     
+                    // For list comparison, Cypher compares element-by-element, then by length
+                    // Generate ORDER BY that handles arrays properly while not breaking other types
+                    // Use the 'value_type' column passed from inner query to check array type
+                    const listOrderByElements = (direction: "ASC" | "DESC") => {
+                      const elemComparisons = [];
+                      // Compare first 10 elements (covers most practical cases)
+                      // Use CASE to only extract from arrays, NULL for other types
+                      for (let i = 0; i < 10; i++) {
+                        elemComparisons.push(`CASE WHEN value_type = 'array' THEN json_extract(value, '$[${i}]') ELSE NULL END ${direction}`);
+                      }
+                      // Then by length for arrays (longer list is greater for equal prefixes)
+                      elemComparisons.push(`CASE WHEN value_type = 'array' THEN json_array_length(value) ELSE 0 END ${direction}`);
+                      // Finally by raw value for all types (handles strings, numbers)
+                      elemComparisons.push(`value ${direction}`);
+                      return elemComparisons.join(", ");
+                    };
+                    
                     if (expr.functionName === "MAX") {
                       // For MAX: get values of highest-ranking type, return max of those
                       return {
                         sql: `(SELECT ${distinctKeyword}value FROM (
-                          SELECT ${alias}.value, ${typeRankExpr} as type_rank
+                          SELECT ${alias}.value, ${alias}.type as value_type, ${typeRankExpr} as type_rank
                           FROM json_each(${unwindClause.jsonExpr}) ${alias}
                           WHERE ${alias}.type != 'null'
                         )
@@ -4696,7 +4713,7 @@ export class Translator {
                           FROM json_each(${unwindClause.jsonExpr}) ${alias}
                           WHERE ${alias}.type != 'null'
                         )
-                        ORDER BY value DESC
+                        ORDER BY ${listOrderByElements("DESC")}
                         LIMIT 1)`,
                         tables: [], // Don't add to outer tables since we use subquery
                         params: [...params, ...unwindClause.params, ...unwindClause.params],
@@ -4705,7 +4722,7 @@ export class Translator {
                       // For MIN: get values of lowest-ranking type, return min of those
                       return {
                         sql: `(SELECT ${distinctKeyword}value FROM (
-                          SELECT ${alias}.value, ${typeRankExpr} as type_rank
+                          SELECT ${alias}.value, ${alias}.type as value_type, ${typeRankExpr} as type_rank
                           FROM json_each(${unwindClause.jsonExpr}) ${alias}
                           WHERE ${alias}.type != 'null'
                         )
@@ -4714,7 +4731,7 @@ export class Translator {
                           FROM json_each(${unwindClause.jsonExpr}) ${alias}
                           WHERE ${alias}.type != 'null'
                         )
-                        ORDER BY value ASC
+                        ORDER BY ${listOrderByElements("ASC")}
                         LIMIT 1)`,
                         tables: [], // Don't add to outer tables since we use subquery
                         params: [...params, ...unwindClause.params, ...unwindClause.params],
