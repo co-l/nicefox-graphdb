@@ -705,7 +705,7 @@ export const FAILING_TESTS = new Set<string>([
   // "expressions/boolean > Boolean3 - XOR logical operations|8:4",
   // "expressions/boolean > Boolean3 - XOR logical operations|8:8",
   // "expressions/boolean > Boolean3 - XOR logical operations|8:9",
-  "expressions/boolean > Boolean4 - NOT logical operations|3",
+  // "expressions/boolean > Boolean4 - NOT logical operations|3",
   // Boolean type strictness - NOT requires boolean operands
   // "expressions/boolean > Boolean4 - NOT logical operations|4:1",
   // "expressions/boolean > Boolean4 - NOT logical operations|4:2",

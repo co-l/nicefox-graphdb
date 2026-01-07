@@ -7544,6 +7544,13 @@ SELECT COALESCE(json_group_array(CAST(n AS INTEGER)), json_array()) FROM r)`,
          return this.translatePatternCondition(condition);
        }
 
+       case "expression": {
+         // Standalone expression used as boolean condition
+         // e.g., WHERE false, WHERE n.active, WHERE true AND x = 1
+         const expr = this.translateWhereExpression(condition.left!);
+         return expr;
+       }
+
        default:
          throw new Error(`Unknown condition type: ${condition.type}`);
     }

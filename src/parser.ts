@@ -80,7 +80,7 @@ export type PropertyValue =
   | PropertyValue[];
 
 export interface WhereCondition {
-  type: "comparison" | "and" | "or" | "not" | "contains" | "startsWith" | "endsWith" | "isNull" | "isNotNull" | "exists" | "in" | "listPredicate" | "patternMatch";
+  type: "comparison" | "and" | "or" | "not" | "contains" | "startsWith" | "endsWith" | "isNull" | "isNotNull" | "exists" | "in" | "listPredicate" | "patternMatch" | "expression";
   left?: Expression;
   right?: Expression;
   operator?: "=" | "<>" | "<" | ">" | "<=" | ">=";
@@ -2233,7 +2233,13 @@ export class Parser {
       return { type: "comparison", left, right, operator };
     }
 
-    throw new Error(`Expected comparison operator, got ${opToken.type}`);
+    // No comparison operator - treat as standalone boolean expression
+    // This handles cases like: WHERE false, WHERE n.active, WHERE true AND x = 1
+    // But NOT just a variable reference like (n) - that's invalid Cypher
+    if (left.type === "variable") {
+      throw new Error(`Expected comparison operator, got ${opToken.type}`);
+    }
+    return { type: "expression", left };
   }
 
   private parseInListExpression(): Expression {
