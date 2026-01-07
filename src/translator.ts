@@ -4997,6 +4997,26 @@ export class Translator {
               throw new Error(`ArgumentError: Number out of range: ${percentileNumericValue}`);
             }
             
+            // Detect swapped arguments: if first arg is a number in [0,1] range and second arg is not numeric
+            // This is an error because the signature is percentileDisc(expression, percentile)
+            let firstArgIsPercentileCandidate = false;
+            if (valueArg.type === "literal" && typeof valueArg.value === "number" && valueArg.value >= 0 && valueArg.value <= 1) {
+              firstArgIsPercentileCandidate = true;
+            } else if (valueArg.type === "parameter" && valueArg.name) {
+              const paramVal = this.ctx.paramValues[valueArg.name];
+              if (typeof paramVal === "number" && paramVal >= 0 && paramVal <= 1) {
+                firstArgIsPercentileCandidate = true;
+              }
+            }
+            const secondArgIsNotNumeric = 
+              percentileArg.type === "variable" || 
+              percentileArg.type === "property" ||
+              (percentileArg.type === "function" && percentileArg.functionName !== undefined);
+            
+            if (firstArgIsPercentileCandidate && secondArgIsNotNumeric) {
+              throw new Error(`ArgumentError: Invalid argument type for ${expr.functionName}`);
+            }
+            
             // Get the value expression (property access)
             let valueExpr: string;
             if (valueArg.type === "property") {
