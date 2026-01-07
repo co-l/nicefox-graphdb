@@ -6385,7 +6385,8 @@ SELECT COALESCE(json_group_array(CAST(n AS INTEGER)), json_array()) FROM r)`,
             // Lists require integer indices, maps allow string keys
             const isContainerList = 
               (resolvedListArg.type === "literal" && Array.isArray(resolvedListArg.value)) ||
-              (resolvedListArg.type === "function" && resolvedListArg.functionName === "LIST");
+              (resolvedListArg.type === "function" && resolvedListArg.functionName === "LIST") ||
+              (resolvedListArg.type === "parameter" && Array.isArray(this.ctx.paramValues[resolvedListArg.name!]));
             // Check if container is a map: explicit object literal, or node/edge variable (which are always maps)
             let isContainerMap = resolvedListArg.type === "object";
             if (!isContainerMap && resolvedListArg.type === "variable" && resolvedListArg.variable) {
