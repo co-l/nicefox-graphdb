@@ -8905,43 +8905,121 @@ SELECT COALESCE(json_group_array(CAST(n AS INTEGER)), json_array()) FROM r)`,
               edgeTypeFilterRecursive = ` AND type IN (${quotedTypes})`;
             }
             
-            if (targetIsAnonymous) {
-              // Anonymous target: just check if any path of required length exists from source
-              const reachSql = `EXISTS (
-                WITH RECURSIVE var_length_path(source_id, target_id, hops) AS (
-                  SELECT source_id, target_id, 1
-                  FROM edges
-                  WHERE source_id = ${sourceInfo.alias}.id${edgeTypeFilterBase}
-                  UNION ALL
-                  SELECT vlp.source_id, e.target_id, vlp.hops + 1
-                  FROM var_length_path vlp
-                  JOIN edges e ON vlp.target_id = e.source_id${edgeTypeFilterRecursive}
-                  WHERE vlp.hops < ${maxHops}
-                )
-                SELECT 1
-                FROM var_length_path
-                WHERE hops >= ${minHops}
-              )`;
-              conditions.push(reachSql);
+            // Determine direction for variable-length path traversal
+            const direction = rel.edge.direction || "right";
+            
+            if (direction === "none") {
+              // Undirected: traverse edges in both directions
+              // Track visited edges to prevent traversing the same edge twice (Cypher relationship uniqueness)
+              if (targetIsAnonymous) {
+                const reachSql = `EXISTS (
+                  WITH RECURSIVE var_length_path(current_id, hops, visited_edges) AS (
+                    SELECT CASE WHEN source_id = ${sourceInfo.alias}.id THEN target_id ELSE source_id END, 1, ',' || id || ','
+                    FROM edges
+                    WHERE (source_id = ${sourceInfo.alias}.id OR target_id = ${sourceInfo.alias}.id)${edgeTypeFilterBase}
+                    UNION ALL
+                    SELECT CASE WHEN e.source_id = vlp.current_id THEN e.target_id ELSE e.source_id END, vlp.hops + 1, vlp.visited_edges || e.id || ','
+                    FROM var_length_path vlp
+                    JOIN edges e ON (e.source_id = vlp.current_id OR e.target_id = vlp.current_id)${edgeTypeFilterRecursive}
+                    WHERE vlp.hops < ${maxHops} AND vlp.visited_edges NOT LIKE '%,' || e.id || ',%'
+                  )
+                  SELECT 1
+                  FROM var_length_path
+                  WHERE hops >= ${minHops}
+                )`;
+                conditions.push(reachSql);
+              } else {
+                const reachSql = `EXISTS (
+                  WITH RECURSIVE var_length_path(current_id, hops, visited_edges) AS (
+                    SELECT CASE WHEN source_id = ${sourceInfo.alias}.id THEN target_id ELSE source_id END, 1, ',' || id || ','
+                    FROM edges
+                    WHERE (source_id = ${sourceInfo.alias}.id OR target_id = ${sourceInfo.alias}.id)${edgeTypeFilterBase}
+                    UNION ALL
+                    SELECT CASE WHEN e.source_id = vlp.current_id THEN e.target_id ELSE e.source_id END, vlp.hops + 1, vlp.visited_edges || e.id || ','
+                    FROM var_length_path vlp
+                    JOIN edges e ON (e.source_id = vlp.current_id OR e.target_id = vlp.current_id)${edgeTypeFilterRecursive}
+                    WHERE vlp.hops < ${maxHops} AND vlp.visited_edges NOT LIKE '%,' || e.id || ',%'
+                  )
+                  SELECT 1
+                  FROM var_length_path
+                  WHERE current_id = ${targetInfo!.alias}.id AND hops >= ${minHops}
+                )`;
+                conditions.push(reachSql);
+              }
+            } else if (direction === "left") {
+              // Left direction: traverse from target to source (incoming edges)
+              if (targetIsAnonymous) {
+                const reachSql = `EXISTS (
+                  WITH RECURSIVE var_length_path(source_id, target_id, hops) AS (
+                    SELECT source_id, target_id, 1
+                    FROM edges
+                    WHERE target_id = ${sourceInfo.alias}.id${edgeTypeFilterBase}
+                    UNION ALL
+                    SELECT e.source_id, vlp.target_id, vlp.hops + 1
+                    FROM var_length_path vlp
+                    JOIN edges e ON e.target_id = vlp.source_id${edgeTypeFilterRecursive}
+                    WHERE vlp.hops < ${maxHops}
+                  )
+                  SELECT 1
+                  FROM var_length_path
+                  WHERE hops >= ${minHops}
+                )`;
+                conditions.push(reachSql);
+              } else {
+                const reachSql = `EXISTS (
+                  WITH RECURSIVE var_length_path(source_id, target_id, hops) AS (
+                    SELECT source_id, target_id, 1
+                    FROM edges
+                    WHERE target_id = ${sourceInfo.alias}.id${edgeTypeFilterBase}
+                    UNION ALL
+                    SELECT e.source_id, vlp.target_id, vlp.hops + 1
+                    FROM var_length_path vlp
+                    JOIN edges e ON e.target_id = vlp.source_id${edgeTypeFilterRecursive}
+                    WHERE vlp.hops < ${maxHops}
+                  )
+                  SELECT 1
+                  FROM var_length_path
+                  WHERE source_id = ${targetInfo!.alias}.id AND hops >= ${minHops}
+                )`;
+                conditions.push(reachSql);
+              }
             } else {
-              // Build the reachability subquery
-              const reachSql = `EXISTS (
-                WITH RECURSIVE var_length_path(source_id, target_id, hops) AS (
-                  SELECT source_id, target_id, 1
-                  FROM edges
-                  WHERE source_id = ${sourceInfo.alias}.id${edgeTypeFilterBase}
-                  UNION ALL
-                  SELECT vlp.source_id, e.target_id, vlp.hops + 1
-                  FROM var_length_path vlp
-                  JOIN edges e ON vlp.target_id = e.source_id${edgeTypeFilterRecursive}
-                  WHERE vlp.hops < ${maxHops}
-                )
-                SELECT 1
-                FROM var_length_path
-                WHERE target_id = ${targetInfo!.alias}.id AND hops >= ${minHops}
-              )`;
-              
-              conditions.push(reachSql);
+              // Right direction (default): traverse from source to target (outgoing edges)
+              if (targetIsAnonymous) {
+                const reachSql = `EXISTS (
+                  WITH RECURSIVE var_length_path(source_id, target_id, hops) AS (
+                    SELECT source_id, target_id, 1
+                    FROM edges
+                    WHERE source_id = ${sourceInfo.alias}.id${edgeTypeFilterBase}
+                    UNION ALL
+                    SELECT vlp.source_id, e.target_id, vlp.hops + 1
+                    FROM var_length_path vlp
+                    JOIN edges e ON vlp.target_id = e.source_id${edgeTypeFilterRecursive}
+                    WHERE vlp.hops < ${maxHops}
+                  )
+                  SELECT 1
+                  FROM var_length_path
+                  WHERE hops >= ${minHops}
+                )`;
+                conditions.push(reachSql);
+              } else {
+                const reachSql = `EXISTS (
+                  WITH RECURSIVE var_length_path(source_id, target_id, hops) AS (
+                    SELECT source_id, target_id, 1
+                    FROM edges
+                    WHERE source_id = ${sourceInfo.alias}.id${edgeTypeFilterBase}
+                    UNION ALL
+                    SELECT vlp.source_id, e.target_id, vlp.hops + 1
+                    FROM var_length_path vlp
+                    JOIN edges e ON vlp.target_id = e.source_id${edgeTypeFilterRecursive}
+                    WHERE vlp.hops < ${maxHops}
+                  )
+                  SELECT 1
+                  FROM var_length_path
+                  WHERE target_id = ${targetInfo!.alias}.id AND hops >= ${minHops}
+                )`;
+                conditions.push(reachSql);
+              }
             }
           } else {
             // Single-hop relationship
