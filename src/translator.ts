@@ -5860,6 +5860,10 @@ SELECT COALESCE(json_group_array(CAST(n AS INTEGER)), json_array()) FROM r)`,
                 params 
               };
             }
+            // Handle map literal - properties({a: 1, b: 2}) returns the map itself
+            if (arg.type === "object") {
+              return this.translateObjectLiteral(arg);
+            }
           }
           throw new Error("properties requires a variable argument");
         }
