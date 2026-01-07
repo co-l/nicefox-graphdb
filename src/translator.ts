@@ -6710,10 +6710,6 @@ SELECT COALESCE(json_group_array(CAST(n AS INTEGER)), json_array()) FROM r)`,
 
       case "in": {
         // value IN list - check if value is in the list
-        const leftResult = this.translateExpression(expr.left!);
-        tables.push(...leftResult.tables);
-        params.push(...leftResult.params);
-        
         const listExpr = expr.list!;
         
         // Check for non-list literals (type error)
@@ -6733,11 +6729,92 @@ SELECT COALESCE(json_group_array(CAST(n AS INTEGER)), json_array()) FROM r)`,
           throw new Error("Type mismatch: expected List but was Map");
         }
         
+        // Helper to check if a value contains complex types (arrays, objects but not null)
+        const containsComplexTypes = (val: unknown): boolean => {
+          if (Array.isArray(val)) return true;
+          if (typeof val === "object" && val !== null) return true;
+          return false;
+        };
+        
+        // Helper to check if a value contains null (deeply)
+        const containsNull = (val: unknown): boolean => {
+          if (val === null) return true;
+          if (Array.isArray(val)) return val.some(containsNull);
+          return false;
+        };
+        
+        // Check if LHS is a complex type (list or object)
+        const leftExpr = expr.left!;
+        const leftIsLiteralArray = leftExpr.type === "literal" && Array.isArray(leftExpr.value);
+        const leftIsComplex = leftIsLiteralArray ||
+                              leftExpr.type === "function" && (leftExpr.functionName === "LIST" || leftExpr.functionName === "INDEX") ||
+                              leftExpr.type === "object";
+        
+        // Check if LHS literal array contains null
+        const leftHasNull = leftIsLiteralArray && containsNull(leftExpr.value);
+        
         if (listExpr.type === "literal" && Array.isArray(listExpr.value)) {
           const values = listExpr.value as unknown[];
           if (values.length === 0) {
             return { sql: "0", tables, params }; // false for empty list
           }
+          
+          // Check if RHS contains complex types (nested arrays/objects)
+          const rhsHasComplexTypes = values.some(containsComplexTypes);
+          // Check if RHS contains null (at any level)
+          const rhsHasNull = values.some(containsNull);
+          
+          // If either LHS or RHS contains complex types, use JSON comparison via json_each
+          // BUT: if either contains null, we need special handling for Cypher null semantics
+          if (leftIsComplex || rhsHasComplexTypes) {
+            // If LHS literal array contains null, or any matching RHS element would contain null,
+            // we need to use the old IN approach which handles null correctly via SQLite
+            if (leftHasNull || rhsHasNull) {
+              // Use the original approach: translate LHS and use IN with spread values
+              // This leverages SQLite's null handling where null IN (...) returns null
+              const leftResult = this.translateExpression(leftExpr);
+              tables.push(...leftResult.tables);
+              params.push(...leftResult.params);
+              const placeholders = values.map(() => "?").join(", ");
+              params.push(...values);
+              return {
+                sql: `(${leftResult.sql} IN (${placeholders}))`,
+                tables,
+                params,
+              };
+            }
+            
+            // No nulls - use JSON comparison which handles nested arrays correctly
+            // Serialize both LHS and RHS as JSON to avoid SQLite's json_array float conversion issue
+            const rhsJson = JSON.stringify(values);
+            
+            // For literal arrays, serialize directly to JSON to preserve integer types
+            if (leftIsLiteralArray) {
+              const lhsJson = JSON.stringify(leftExpr.value);
+              params.push(rhsJson, lhsJson);
+              return {
+                sql: `EXISTS(SELECT 1 FROM json_each(?) WHERE json(value) = json(?))`,
+                tables,
+                params,
+              };
+            }
+            
+            // For other complex LHS expressions, translate normally
+            const leftResult = this.translateExpression(leftExpr);
+            tables.push(...leftResult.tables);
+            params.push(...leftResult.params);
+            params.push(rhsJson);
+            return {
+              sql: `EXISTS(SELECT 1 FROM json_each(?) WHERE json(value) = json(${leftResult.sql}))`,
+              tables,
+              params,
+            };
+          }
+          
+          // Simple scalar values - translate LHS and use SQL IN clause
+          const leftResult = this.translateExpression(leftExpr);
+          tables.push(...leftResult.tables);
+          params.push(...leftResult.params);
           const placeholders = values.map(() => "?").join(", ");
           params.push(...values);
           return {
@@ -6753,6 +6830,56 @@ SELECT COALESCE(json_group_array(CAST(n AS INTEGER)), json_array()) FROM r)`,
             if (paramValue.length === 0) {
               return { sql: "0", tables, params }; // false for empty list
             }
+            
+            // Check if RHS contains complex types
+            const rhsHasComplexTypes = paramValue.some(containsComplexTypes);
+            const rhsHasNull = paramValue.some(containsNull);
+            
+            // If either LHS or RHS contains complex types, use JSON comparison
+            // BUT: if either contains null, use original approach for null semantics
+            if (leftIsComplex || rhsHasComplexTypes) {
+              if (leftHasNull || rhsHasNull) {
+                // Use original approach for null handling
+                const leftResult = this.translateExpression(leftExpr);
+                tables.push(...leftResult.tables);
+                params.push(...leftResult.params);
+                const placeholders = paramValue.map(() => "?").join(", ");
+                params.push(...paramValue);
+                return {
+                  sql: `(${leftResult.sql} IN (${placeholders}))`,
+                  tables,
+                  params,
+                };
+              }
+              
+              const rhsJson = JSON.stringify(paramValue);
+              
+              // For literal arrays, serialize directly to JSON
+              if (leftIsLiteralArray) {
+                const lhsJson = JSON.stringify(leftExpr.value);
+                params.push(rhsJson, lhsJson);
+                return {
+                  sql: `EXISTS(SELECT 1 FROM json_each(?) WHERE json(value) = json(?))`,
+                  tables,
+                  params,
+                };
+              }
+              
+              const leftResult = this.translateExpression(leftExpr);
+              tables.push(...leftResult.tables);
+              params.push(...leftResult.params);
+              params.push(rhsJson);
+              return {
+                sql: `EXISTS(SELECT 1 FROM json_each(?) WHERE json(value) = json(${leftResult.sql}))`,
+                tables,
+                params,
+              };
+            }
+            
+            // Simple scalar LHS and values
+            const leftResult = this.translateExpression(leftExpr);
+            tables.push(...leftResult.tables);
+            params.push(...leftResult.params);
             const placeholders = paramValue.map(() => "?").join(", ");
             params.push(...paramValue);
             return {
@@ -6768,6 +6895,34 @@ SELECT COALESCE(json_group_array(CAST(n AS INTEGER)), json_array()) FROM r)`,
         const listResult = this.translateExpression(listExpr);
         tables.push(...listResult.tables);
         params.push(...listResult.params);
+        
+        // For literal arrays on LHS without null, serialize to JSON for proper comparison
+        if (leftIsLiteralArray && !leftHasNull) {
+          const lhsJson = JSON.stringify(leftExpr.value);
+          params.push(lhsJson);
+          return {
+            sql: `EXISTS(SELECT 1 FROM json_each(${listResult.sql}) WHERE json(value) = json(?))`,
+            tables,
+            params,
+          };
+        }
+        
+        // For complex LHS types (non-literal arrays/objects) without null, use json() comparison
+        if (leftIsComplex && !leftHasNull) {
+          const leftResult = this.translateExpression(leftExpr);
+          tables.push(...leftResult.tables);
+          params.push(...leftResult.params);
+          return {
+            sql: `EXISTS(SELECT 1 FROM json_each(${listResult.sql}) WHERE json(value) = json(${leftResult.sql}))`,
+            tables,
+            params,
+          };
+        }
+        
+        // For scalar LHS or LHS with null, use simple IN clause which handles int/float equality correctly
+        const leftResult = this.translateExpression(leftExpr);
+        tables.push(...leftResult.tables);
+        params.push(...leftResult.params);
         return {
           sql: `(${leftResult.sql} IN (SELECT value FROM json_each(${listResult.sql})))`,
           tables,
