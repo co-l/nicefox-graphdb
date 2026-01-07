@@ -5274,6 +5274,40 @@ export class Executor {
             }
           }
         }
+      } else if (item.expression.type === "function" && item.expression.functionName === "INDEX") {
+        // Handle dynamic property access: n['propertyName'] or n['nam' + 'e']
+        const args = item.expression.args;
+        if (args && args.length === 2 && args[0].type === "variable") {
+          const variable = args[0].variable!;
+          const id = createdIds.get(variable);
+          
+          if (id) {
+            // Evaluate the property key expression (handles literals, binary expressions like 'nam' + 'e', parameters)
+            const propertyKey = this.evaluateExpressionForFilter(args[1], createdIds, params);
+            
+            if (typeof propertyKey === "string") {
+              // Try nodes first
+              const nodeResult = this.db.execute(
+                `SELECT json_extract(properties, '$.' || ?) as value FROM nodes WHERE id = ?`,
+                [propertyKey, id]
+              );
+              
+              if (nodeResult.rows.length > 0) {
+                resultRow[alias] = this.deepParseJson(nodeResult.rows[0].value);
+              } else {
+                // Try edges if not found in nodes
+                const edgeResult = this.db.execute(
+                  `SELECT json_extract(properties, '$.' || ?) as value FROM edges WHERE id = ?`,
+                  [propertyKey, id]
+                );
+                
+                if (edgeResult.rows.length > 0) {
+                  resultRow[alias] = this.deepParseJson(edgeResult.rows[0].value);
+                }
+              }
+            }
+          }
+        }
       }
     }
     
