@@ -9478,6 +9478,10 @@ SELECT COALESCE(json_group_array(CAST(n AS INTEGER)), json_array()) FROM r)`,
         // For literals, use the string representation of the value
         if (expr.value === null) return "NULL";
         if (typeof expr.value === "string") return `'${expr.value}'`;
+        // For arrays/objects, use JSON.stringify to preserve nested structure
+        if (Array.isArray(expr.value) || typeof expr.value === "object") {
+          return JSON.stringify(expr.value);
+        }
         return String(expr.value);
       }
       case "parameter":

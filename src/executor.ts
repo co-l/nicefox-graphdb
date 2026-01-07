@@ -7503,6 +7503,16 @@ export class Executor {
         // Empty args for count(*) or similar
         return `${funcName}(*)`;
       }
+      case "literal": {
+        // For literals, use the string representation of the value
+        if (expr.value === null) return "NULL";
+        if (typeof expr.value === "string") return `'${expr.value}'`;
+        // For arrays/objects, use JSON.stringify to preserve nested structure
+        if (Array.isArray(expr.value) || typeof expr.value === "object") {
+          return JSON.stringify(expr.value);
+        }
+        return String(expr.value);
+      }
       default:
         return "expr";
     }
