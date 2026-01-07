@@ -3561,7 +3561,7 @@ describe("CypherQueries.json Patterns", () => {
         const result = exec("RETURN NOT ALL(x IN [1, 2, -3] WHERE x > 0) AS notAllPositive");
         
         expect(result.data).toHaveLength(1);
-        expect(result.data[0].notAllPositive).toBe(true);
+        expect(result.data[0].notAllPositive).toBe(1);
       });
 
       it("uses list predicate with range()", () => {

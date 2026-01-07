@@ -7194,11 +7194,7 @@ SELECT COALESCE(json_group_array(CAST(n AS INTEGER)), json_array()) FROM r)`,
           const placeholders = values.map(() => "?").join(", ");
           params.push(...toSqliteParams(values));
           // Wrap left side in extra parentheses to ensure correct precedence (e.g., NOT has lower precedence than IN in SQL)
-          // Normalize boolean-producing expressions (NOT, comparisons) using json_extract to convert JSON booleans to integers
-          let leftSql = leftExpr.type === "unary" ? `(${leftResult.sql})` : leftResult.sql;
-          if (this.isBooleanProducingExpression(leftExpr)) {
-            leftSql = `json_extract(${leftResult.sql}, '$')`;
-          }
+          const leftSql = leftExpr.type === "unary" ? `(${leftResult.sql})` : leftResult.sql;
           return {
             sql: `(${leftSql} IN (${placeholders}))`,
             tables,
@@ -7250,11 +7246,7 @@ SELECT COALESCE(json_group_array(CAST(n AS INTEGER)), json_array()) FROM r)`,
             const placeholders = paramValue.map(() => "?").join(", ");
             params.push(...toSqliteParams(paramValue));
             // Wrap left side in extra parentheses to ensure correct precedence (e.g., NOT has lower precedence than IN in SQL)
-            // Normalize boolean-producing expressions (NOT, comparisons) using json_extract to convert JSON booleans to integers
-            let leftSql = leftExpr.type === "unary" ? `(${leftResult.sql})` : leftResult.sql;
-            if (this.isBooleanProducingExpression(leftExpr)) {
-              leftSql = `json_extract(${leftResult.sql}, '$')`;
-            }
+            const leftSql = leftExpr.type === "unary" ? `(${leftResult.sql})` : leftResult.sql;
             return {
               sql: `(${leftSql} IN (${placeholders}))`,
               tables,
@@ -7555,15 +7547,8 @@ SELECT COALESCE(json_group_array(CAST(n AS INTEGER)), json_array()) FROM r)`,
       this.validateBooleanOperand(expr.left!, expr.operator);
       this.validateBooleanOperand(expr.right!, expr.operator);
       
-      // Normalize operands using json_extract to handle JSON booleans (json('true')/json('false'))
-      // as well as raw integers (0/1). json_extract(x, '$') converts:
-      // - json('true') -> 1, json('false') -> 0
-      // - 1 -> 1, 0 -> 0, NULL -> NULL
-      const leftNorm = `json_extract(${leftResult.sql}, '$')`;
-      const rightNorm = `json_extract(${rightResult.sql}, '$')`;
-      
       return {
-        sql: `(${leftNorm} ${expr.operator} ${rightNorm})`,
+        sql: `(${leftResult.sql} ${expr.operator} ${rightResult.sql})`,
         tables,
         params,
       };
@@ -7575,9 +7560,8 @@ SELECT COALESCE(json_group_array(CAST(n AS INTEGER)), json_array()) FROM r)`,
       this.validateBooleanOperand(expr.left!, expr.operator);
       this.validateBooleanOperand(expr.right!, expr.operator);
       
-      // Normalize operands using json_extract to handle JSON booleans
-      const leftSql = `json_extract(${leftResult.sql}, '$')`;
-      const rightSql = `json_extract(${rightResult.sql}, '$')`;
+      const leftSql = leftResult.sql;
+      const rightSql = rightResult.sql;
       // XOR with NULL semantics: (a XOR b) = (a AND NOT b) OR (NOT a AND b)
       // This naturally handles NULL: if a is NULL, (a AND NOT b) is NULL or FALSE, (NOT a AND b) is NULL or FALSE
       // NULL OR NULL = NULL, NULL OR FALSE = NULL, so result is NULL when either input is NULL
@@ -7891,19 +7875,14 @@ SELECT COALESCE(json_group_array(CAST(n AS INTEGER)), json_array()) FROM r)`,
 
   // Normalize SQL for boolean comparison - ensures both sides use same representation
   // When one side is a comparison (produces json('true')/json('false')),
-  // the other side should also be converted to the same representation for proper comparison
+  // the other side should also be converted to JSON boolean for proper comparison
   private normalizeForBooleanComparison(expr: Expression, sql: string): string {
     // If it's a boolean literal (translated to 0 or 1), convert to JSON boolean
     if (expr.type === "literal" && typeof expr.value === "boolean") {
       return expr.value ? "json('true')" : "json('false')";
     }
-    // Comparisons and unary NOT already produce JSON booleans
-    if (expr.type === "comparison" || (expr.type === "unary" && expr.operator === "NOT")) {
-      return sql;
-    }
-    // For other expressions (including AND/OR/XOR which return integers, variables, property access, etc.)
-    // convert to JSON boolean format using a subquery to avoid parameter duplication
-    return `(SELECT CASE WHEN __v__ IS NULL THEN NULL WHEN __v__ THEN json('true') ELSE json('false') END FROM (SELECT ${sql} AS __v__))`;
+    // Comparison expressions already produce JSON booleans
+    return sql;
   }
 
   private translateComparisonExpression(expr: Expression): { sql: string; tables: string[]; params: unknown[] } {
@@ -8056,10 +8035,8 @@ SELECT COALESCE(json_group_array(CAST(n AS INTEGER)), json_array()) FROM r)`,
       }
     }
 
-    // Wrap result in JSON boolean for consistency with other boolean expressions
-    // Use a subquery to evaluate the comparison once and avoid parameter duplication
     return {
-      sql: `(SELECT CASE WHEN __cmp__ IS NULL THEN NULL WHEN __cmp__ THEN json('true') ELSE json('false') END FROM (SELECT (${leftSql} ${expr.comparisonOperator} ${rightSql}) AS __cmp__))`,
+      sql: `(${leftSql} ${expr.comparisonOperator} ${rightSql})`,
       tables,
       params,
     };
@@ -8839,13 +8816,8 @@ SELECT COALESCE(json_group_array(CAST(n AS INTEGER)), json_array()) FROM r)`,
       tables.push(...operandResult.tables);
       params.push(...operandResult.params);
       
-      // SQLite's NOT operator returns 0/1 integers, but we need JSON booleans.
-      // Three-valued logic: NOT null = null, NOT true = false, NOT false = true.
-      // Use a subquery to evaluate the operand once, avoiding parameter duplication.
-      // Use json_extract(__v__, '$') to convert json('true')/'false' to SQLite 1/0
-      // because json('true') is a TEXT value that SQLite treats as truthy.
       return {
-        sql: `(SELECT CASE WHEN __v__ IS NULL THEN NULL WHEN NOT json_extract(__v__, '$') THEN json('true') ELSE json('false') END FROM (SELECT ${operandResult.sql} AS __v__))`,
+        sql: `NOT (${operandResult.sql})`,
         tables,
         params,
       };
