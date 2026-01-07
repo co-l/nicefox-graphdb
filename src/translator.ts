@@ -1274,6 +1274,7 @@ export class Translator {
     const withSkip = (this.ctx as any).withSkip as Expression | undefined;
     const withLimit = (this.ctx as any).withLimit as Expression | undefined;
     const withWhere = (this.ctx as any).withWhere as WhereCondition | undefined;
+    const accumulatedWithWheres = (this.ctx as any).accumulatedWithWheres as WhereCondition[] | undefined;
 
     // Pre-compute whether we'll need a WITH subquery BEFORE building SELECT parts.
     // This is needed so translateExpression can reference UNWIND variables correctly.
@@ -2311,7 +2312,20 @@ export class Translator {
     // (The condition is added during edge join generation when optionalWhere is set on the pattern)
     // We no longer add these to the main WHERE clause as that would filter out rows entirely
     
-    // Add WHERE conditions from WITH clause
+    // Add WHERE conditions from WITH clauses
+    // First, apply accumulated WHERE conditions from previous WITH clauses
+    // These conditions filter rows and must be applied before the current WITH's WHERE
+    if (accumulatedWithWheres && accumulatedWithWheres.length > 0) {
+      for (const accWhere of accumulatedWithWheres) {
+        const withAliases = (this.ctx as any).withAliases as Map<string, Expression> | undefined;
+        if (!this.whereConditionReferencesAggregateAlias(accWhere, withAliases)) {
+          const { sql: whereSql, params: conditionParams } = this.translateWhere(accWhere);
+          whereParts.push(whereSql);
+          whereParams.push(...conditionParams);
+        }
+      }
+    }
+    
     // If the condition references an aggregate alias, it should go in HAVING instead of WHERE
     let havingCondition: { sql: string; params: unknown[] } | undefined;
     if (withWhere) {
@@ -2625,6 +2639,12 @@ export class Translator {
     // Track row ordering flowing through the query to support ordered COLLECT()
     // semantics (ORDER BY before an aggregation determines collect order).
     const previousRowOrderBy = (this.ctx as any).rowOrderBy as WithClause["orderBy"] | undefined;
+    
+    // Accumulate WHERE conditions from previous WITH clauses.
+    // When a WITH has a WHERE, it should filter rows for all subsequent clauses.
+    // We need to preserve WHERE conditions whose variables are still in scope.
+    const previousWithWhere = (this.ctx as any).withWhere as WhereCondition | undefined;
+    const accumulatedWithWheres = ((this.ctx as any).accumulatedWithWheres as WhereCondition[] | undefined) ?? [];
 
     // WITH modifiers (WHERE/ORDER BY/SKIP/LIMIT/DISTINCT) apply only to the
     // current WITH clause. Clear any previous WITH modifier state to avoid
@@ -2662,6 +2682,13 @@ export class Translator {
       this.ctx.withClauses = [];
     }
     this.ctx.withClauses.push(clause);
+    
+    // Accumulate WHERE conditions from previous WITH clauses.
+    // These need to be applied because later clauses depend on filtered rows.
+    if (previousWithWhere) {
+      accumulatedWithWheres.push(previousWithWhere);
+    }
+    (this.ctx as any).accumulatedWithWheres = accumulatedWithWheres;
     
     // Store where clause for later use
     if (clause.where) {
