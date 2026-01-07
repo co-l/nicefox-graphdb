@@ -1322,13 +1322,19 @@ describe("Parser", () => {
       expect(query.clauses[1].type).toBe("WITH");
     });
 
-    it("parses WITH clause without alias (variable passthrough)", () => {
-      const query = expectSuccess("MATCH (n:Person) WITH n, n.name RETURN n");
+    it("parses WITH clause with variable passthrough (no alias needed for variables)", () => {
+      const query = expectSuccess("MATCH (n:Person) WITH n, n.name AS name RETURN n");
       
       const withClause = query.clauses[1] as WithClause;
       expect(withClause.items).toHaveLength(2);
-      expect(withClause.items[0].alias).toBeUndefined();
-      expect(withClause.items[1].alias).toBeUndefined();
+      expect(withClause.items[0].alias).toBeUndefined(); // variable n doesn't need alias
+      expect(withClause.items[1].alias).toBe("name"); // expression n.name requires alias
+    });
+
+    it("rejects WITH clause when expression lacks alias", () => {
+      // Cypher requires non-variable expressions in WITH to be aliased
+      const error = expectError("MATCH (n:Person) WITH n, n.name RETURN n");
+      expect(error.message).toContain("must be aliased");
     });
   });
 

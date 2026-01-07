@@ -1413,6 +1413,13 @@ export class Parser {
           alias = this.expectIdentifierOrKeyword();
         }
 
+        // In WITH, non-variable expressions must be aliased
+        // e.g., WITH count(*) is invalid, but WITH count(*) AS c is valid
+        // e.g., WITH a.name is invalid, but WITH a.name AS name is valid
+        if (!alias && expression.type !== "variable") {
+          throw new Error(`Expression in WITH must be aliased (use AS)`);
+        }
+
         items.push({ expression, alias });
       } while (this.check("COMMA"));
     }

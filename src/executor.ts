@@ -335,12 +335,17 @@ export class Executor {
     const hasMatch = query.clauses.some(c => c.type === "MATCH");
     const hasCreate = query.clauses.some(c => c.type === "CREATE");
     const hasMerge = query.clauses.some(c => c.type === "MERGE");
+    const hasWithClause = query.clauses.some(c => c.type === "WITH");
     const mergeClause = query.clauses.find(c => c.type === "MERGE") as MergeClause | undefined;
     const mergeHasSetClauses = mergeClause?.onCreateSet || mergeClause?.onMatchSet;
     const needsMergePhasedExecution = (hasMatch || hasCreate) && hasMerge && !mergeHasSetClauses;
     
-    // If only one phase and no MATCH/CREATE+MERGE combo, standard execution can handle it
-    if (phases.length <= 1 && !needsMergePhasedExecution) {
+    // CREATE + WITH needs phased execution because SQL translation can't properly
+    // reference the created node's data (UUID is generated at runtime)
+    const needsCreateWithPhasedExecution = hasCreate && hasWithClause && !hasMatch;
+    
+    // If only one phase and no special combo, standard execution can handle it
+    if (phases.length <= 1 && !needsMergePhasedExecution && !needsCreateWithPhasedExecution) {
       return null;
     }
     
@@ -886,6 +891,28 @@ export class Executor {
         const prevClause = clauses[i - 1];
         if (prevClause.type === "WITH" && hasOnlyOptionalMatchBeforeWith && !hasRegularMatchBeforeWith) {
           needsNewPhase = true;
+        }
+      }
+      
+      // Check if WITH after a WITH with aggregation AND WHERE - needs phase boundary
+      // This handles patterns like:
+      //   MATCH ... WITH x, count(*) AS c WHERE c > 1 WITH x WHERE x.name <> 'foo' RETURN count(*)
+      // The first WITH with aggregation creates a grouping context, and the WHERE on aggregates
+      // (HAVING) needs to be applied before the second WITH is processed.
+      // 
+      // Note: We only add the phase boundary when the previous WITH has a WHERE clause,
+      // because without WHERE, the aggregation can be handled in SQL (no HAVING needed).
+      if (clause.type === "WITH" && i > 0) {
+        const prevClause = clauses[i - 1];
+        if (prevClause.type === "WITH") {
+          const prevWithClause = prevClause as WithClause;
+          const prevHasAggregate = prevWithClause.items.some(item => 
+            this.expressionHasAggregate(item.expression)
+          );
+          // Only force phase boundary if the aggregating WITH has a WHERE (HAVING)
+          if (prevHasAggregate && prevWithClause.where) {
+            needsNewPhase = true;
+          }
         }
       }
       
@@ -1634,6 +1661,12 @@ export class Executor {
         for (const { alias, expression } of aggregateItems) {
           const value = this.evaluateAggregateExpression(expression, groupRows, params);
           outputRow.set(alias, value);
+        }
+        
+        // Apply WHERE filter (HAVING semantics) after aggregation
+        if (clause.where) {
+          const passes = this.evaluateWhereInRow(clause.where, outputRow, params);
+          if (!passes) continue;
         }
         
         outputRows.push(outputRow);
@@ -2937,6 +2970,15 @@ export class Executor {
         }
         
         return null;
+      }
+      
+      case "object": {
+        // Evaluate object literal expression like {first: m.id, second: 42}
+        const result: Record<string, unknown> = {};
+        for (const prop of expr.properties || []) {
+          result[prop.key] = this.evaluateExpressionInRow(prop.value, row, params);
+        }
+        return result;
       }
         
       default:

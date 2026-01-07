@@ -2312,21 +2312,52 @@ export class Translator {
       p.edgeIsNew
     );
 
-    // Check if we need a subquery for WITH LIMIT/SKIP when RETURN is pure aggregation.
+    // Check if we need a subquery for WITH LIMIT/SKIP/DISTINCT when RETURN is pure aggregation.
     // When RETURN count(*) follows WITH n LIMIT 2, the LIMIT should apply to rows before
     // aggregation, not to the aggregated result. We achieve this by wrapping the FROM in
-    // a subquery that applies the LIMIT.
+    // a subquery that applies the LIMIT/DISTINCT.
     const returnOnlyAggregates = clause.items.every(item => this.isAggregateExpression(item.expression));
-    const needsWithSubquery = returnOnlyAggregates && (withLimit !== undefined || withSkip !== undefined);
+    const needsWithSubquery = returnOnlyAggregates && (withLimit !== undefined || withSkip !== undefined || withDistinct);
     
     // Build final SQL
     // Apply DISTINCT from either the RETURN clause, preceding WITH, or OPTIONAL MATCH pattern
-    const distinctKeyword = (clause.distinct || withDistinct || needsOptionalMatchDistinct) ? "DISTINCT " : "";
+    // BUT: if we're using a subquery for DISTINCT, don't add DISTINCT to the outer query
+    const needsSubqueryDistinct = returnOnlyAggregates && withDistinct;
+    const distinctKeyword = (clause.distinct || (withDistinct && !needsSubqueryDistinct) || needsOptionalMatchDistinct) ? "DISTINCT " : "";
     let sql = `SELECT ${distinctKeyword}${selectParts.join(", ")}`;
 
     if (needsWithSubquery && fromParts.length > 0) {
-      // Build inner query with LIMIT/SKIP from WITH clause
-      let innerSql = `SELECT * FROM ${fromParts.join(", ")}`;
+      // Build inner query with LIMIT/SKIP/DISTINCT from WITH clause
+      // For DISTINCT, we need to select the WITH expressions (not just *)
+      const innerSelectDistinct = needsSubqueryDistinct ? "DISTINCT " : "";
+      let innerSelect = "*";
+      
+      // If WITH has DISTINCT with non-variable expressions (like maps), we need to
+      // explicitly select those expressions for proper deduplication
+      if (needsSubqueryDistinct && this.ctx.withClauses && this.ctx.withClauses.length > 0) {
+        const lastWithClause = this.ctx.withClauses[this.ctx.withClauses.length - 1];
+        const withSelectParts: string[] = [];
+        for (const item of lastWithClause.items) {
+          if (item.expression.type !== "variable" || item.expression.variable === "*") {
+            // Computed expression - need to translate it
+            const { sql: exprSql, params: exprParams } = this.translateExpression(item.expression);
+            whereParams.push(...exprParams);
+            const alias = item.alias || this.getExpressionName(item.expression);
+            withSelectParts.push(`${exprSql} AS "${alias}"`);
+          } else {
+            // Simple variable passthrough
+            const varInfo = this.ctx.variables.get(item.expression.variable!);
+            if (varInfo) {
+              withSelectParts.push(`${varInfo.alias}.id AS "${item.alias || item.expression.variable}"`);
+            }
+          }
+        }
+        if (withSelectParts.length > 0) {
+          innerSelect = withSelectParts.join(", ");
+        }
+      }
+      
+      let innerSql = `SELECT ${innerSelectDistinct}${innerSelect} FROM ${fromParts.join(", ")}`;
       if (joinParts.length > 0) {
         innerSql += ` ${joinParts.join(" ")}`;
       }
@@ -4404,8 +4435,12 @@ export class Translator {
         const withAliases = (this.ctx as any).withAliases as Map<string, Expression> | undefined;
         if (withAliases && withAliases.has(expr.variable!)) {
           const aliasName = expr.variable!;
-          const selfRefDepths = (this.ctx as any)._withAliasSelfRefDepths as Map<string, number> | undefined;
-          const currentDepth = selfRefDepths?.get(aliasName);
+          const selfRefDepths =
+            (((this.ctx as any)._withAliasSelfRefDepths as Map<string, number> | undefined) ??= new Map<
+              string,
+              number
+            >());
+          const currentDepth = selfRefDepths.get(aliasName);
           const skipScopes = currentDepth === undefined ? 0 : currentDepth + 1;
           const originalExpr = this.lookupWithAliasExpression(aliasName, skipScopes);
           if (originalExpr) {
@@ -4420,16 +4455,35 @@ export class Translator {
             // 1. It's NOT a property expression with the same variable (to avoid infinite recursion)
             // 2. It's NOT a non-map type (numbers, strings, booleans, lists should error)
             if (!isNonMapType && (originalExpr.type !== "property" || originalExpr.variable !== expr.variable)) {
-              // This variable is a WITH alias - translate the underlying expression and access the property
-              const objectResult = this.translateExpression(originalExpr);
-              tables.push(...objectResult.tables);
-              params.push(...objectResult.params);
-              // Access property from the result using json_extract
-              return {
-                sql: `json_extract(${objectResult.sql}, '$.${expr.property}')`,
-                tables,
-                params,
-              };
+              // Track self-reference depth to handle shadowing (e.g., WITH {first: m.id} AS m)
+              // When translating the inner expression, if we encounter the same alias again,
+              // we should resolve it to the previous scope (the original node variable).
+              if (currentDepth === undefined) {
+                selfRefDepths.set(aliasName, 0);
+              } else {
+                selfRefDepths.set(aliasName, currentDepth + 1);
+              }
+              try {
+                // This variable is a WITH alias - translate the underlying expression and access the property
+                const objectResult = this.translateExpression(originalExpr);
+                tables.push(...objectResult.tables);
+                params.push(...objectResult.params);
+                // Access property from the result using json_extract
+                return {
+                  sql: `json_extract(${objectResult.sql}, '$.${expr.property}')`,
+                  tables,
+                  params,
+                };
+              } finally {
+                if (currentDepth === undefined) {
+                  selfRefDepths.delete(aliasName);
+                  if (selfRefDepths.size === 0) {
+                    (this.ctx as any)._withAliasSelfRefDepths = undefined;
+                  }
+                } else {
+                  selfRefDepths.set(aliasName, currentDepth);
+                }
+              }
             }
           }
         }
@@ -7639,6 +7693,20 @@ SELECT COALESCE(json_group_array(CAST(n AS INTEGER)), json_array()) FROM r)`,
   private translateOrderByExpression(expr: Expression, returnAliases: string[] = []): { sql: string; params?: unknown[] } {
     switch (expr.type) {
       case "property": {
+        // First check if the variable is a WITH alias (e.g., ordering by properties of a map from WITH)
+        const withAliases = (this.ctx as any).withAliases as Map<string, Expression> | undefined;
+        if (withAliases && withAliases.has(expr.variable!)) {
+          // Translate the underlying expression and access the property
+          const originalExpr = withAliases.get(expr.variable!)!;
+          const objectResult = this.translateExpression(originalExpr);
+          return {
+            sql: this.buildDateTimeWithOffsetOrderBy(
+              `json_extract(${objectResult.sql}, '$.${expr.property}')`
+            ),
+            params: objectResult.params,
+          };
+        }
+        
         // Check if the variable is a RETURN alias that points to another variable
         const returnAliasExpressions = (this.ctx as any).returnAliasExpressions as Map<string, Expression> | undefined;
         let targetVariable = expr.variable!;
@@ -7678,20 +7746,28 @@ SELECT COALESCE(json_group_array(CAST(n AS INTEGER)), json_array()) FROM r)`,
             visited.add(resolved.variable);
             resolved = withAliases.get(resolved.variable)!;
           }
-          if (resolved.type === "property") {
+          
+          // If the resolved expression contains aggregation (e.g., head(collect(...))),
+          // we can't re-evaluate it in ORDER BY. Use the column alias instead.
+          if (this.isAggregateExpression(resolved) && returnAliases.includes(expr.variable!)) {
+            return { sql: `"${expr.variable!}"`, params: [] };
+          }
+          
+          // If the resolved expression is a property that references a WITH alias with aggregation,
+          // we can't expand it. Use the column alias instead.
+          if (resolved.type === "property" && resolved.variable) {
+            const propVarExpr = withAliases.get(resolved.variable);
+            if (propVarExpr && this.isAggregateExpression(propVarExpr) && returnAliases.includes(expr.variable!)) {
+              return { sql: `"${expr.variable!}"`, params: [] };
+            }
             const { sql, params } = this.translateOrderByExpression(resolved, returnAliases);
             return { sql, params: params ?? [] };
           }
+          
         }
-
-        const returnAliasExpressions = (this.ctx as any).returnAliasExpressions as Map<string, Expression> | undefined;
-        const returnExpr = returnAliasExpressions?.get(expr.variable!);
-        if (returnExpr?.type === "property") {
-          const { sql, params } = this.translateOrderByExpression(returnExpr, returnAliases);
-          return { sql, params: params ?? [] };
-        }
-
-        // Check if this is an UNWIND variable
+        
+        // Check if this is an UNWIND variable - must come before general fallbacks
+        // because UNWIND variables may need special datetime sorting
         const unwindClauses = (this.ctx as any).unwindClauses as Array<{
           alias: string;
           variable: string;
@@ -7705,11 +7781,24 @@ SELECT COALESCE(json_group_array(CAST(n AS INTEGER)), json_array()) FROM r)`,
             return { sql: this.buildDateTimeWithOffsetOrderBy(`${unwindClause.alias}.value`), params: [] };
           }
         }
+        
+        // For WITH aliases with other expression types (binary, function, literal, etc.)
+        // that are projected, use the column alias for ORDER BY.
+        if (withAliases && withAliases.has(expr.variable!) && returnAliases.includes(expr.variable!)) {
+          return { sql: `"${expr.variable!}"`, params: [] };
+        }
 
-        // First check if this is a return column alias (e.g., ORDER BY total)
-        // SQL allows ORDER BY to reference SELECT column aliases directly
-        if (returnAliases.includes(expr.variable!)) {
-          return { sql: expr.variable!, params: [] };
+        const returnAliasExpressions = (this.ctx as any).returnAliasExpressions as Map<string, Expression> | undefined;
+        const returnExpr = returnAliasExpressions?.get(expr.variable!);
+        if (returnExpr?.type === "property") {
+          const { sql, params } = this.translateOrderByExpression(returnExpr, returnAliases);
+          return { sql, params: params ?? [] };
+        }
+        
+        // For RETURN alias that is an aggregate or other computed expression,
+        // use the column alias directly (it will be in SELECT)
+        if (returnExpr && returnAliases.includes(expr.variable!)) {
+          return { sql: `"${expr.variable!}"`, params: [] };
         }
         
         const varInfo = this.ctx.variables.get(expr.variable!);
