@@ -7238,6 +7238,25 @@ SELECT COALESCE(json_group_array(CAST(n AS INTEGER)), json_array()) FROM r)`,
               const millisecondExpr = byKey.get("millisecond");
               const microsecondExpr = byKey.get("microsecond");
 
+              // Localdatetime from date and time sources: localdatetime({date: otherDate, time: otherTime})
+              if (dateExpr && timeExpr && !hourExpr && !minuteExpr && !yearExpr) {
+                const dateResult = this.translateExpression(dateExpr);
+                const timeResult = this.translateExpression(timeExpr);
+                tables.push(...dateResult.tables, ...timeResult.tables);
+                params.push(...dateResult.params, ...timeResult.params);
+                
+                // Extract date part (first 10 chars: YYYY-MM-DD)
+                const datePart = `substr(${dateResult.sql}, 1, 10)`;
+                // Extract time part (everything after 'T' or the whole string)
+                const timePart = `(SELECT CASE WHEN instr(_t, 'T') > 0 THEN substr(_t, instr(_t, 'T') + 1) ELSE _t END FROM (SELECT ${timeResult.sql} AS _t))`;
+                
+                return {
+                  sql: `(${datePart} || 'T' || ${timePart})`,
+                  tables,
+                  params,
+                };
+              }
+              
               // Localdatetime projection: localdatetime({date: other, hour: H, minute: M, ...})
               // Take date from source and add time components, with optional date component overrides
               if (dateExpr && hourExpr && minuteExpr) {
