@@ -6869,6 +6869,9 @@ SELECT COALESCE(json_group_array(CAST(n AS INTEGER)), json_array()) FROM r)`,
             const arg = expr.args[0];
 
             // datetime({year: 1984, month: 10, day: 11, hour: 12, minute: 30, second: 14, nanosecond: 12, timezone: '+00:15'})
+            // or datetime({year: 1984, week: 10, dayOfWeek: 3, hour: 12, minute: 31, second: 14})
+            // or datetime({year: 1984, ordinalDay: 100, hour: 12, minute: 30})
+            // or datetime({year: 1984, quarter: 2, dayOfQuarter: 45, hour: 12, minute: 30})
             if (arg.type === "object") {
               const props = arg.properties ?? [];
               const byKey = new Map<string, Expression>();
@@ -6877,6 +6880,11 @@ SELECT COALESCE(json_group_array(CAST(n AS INTEGER)), json_array()) FROM r)`,
               const yearExpr = byKey.get("year");
               const monthExpr = byKey.get("month");
               const dayExpr = byKey.get("day");
+              const weekExpr = byKey.get("week");
+              const dayOfWeekExpr = byKey.get("dayofweek");
+              const ordinalDayExpr = byKey.get("ordinalday");
+              const quarterExpr = byKey.get("quarter");
+              const dayOfQuarterExpr = byKey.get("dayofquarter");
               const hourExpr = byKey.get("hour");
               const minuteExpr = byKey.get("minute");
               const secondExpr = byKey.get("second");
@@ -6885,13 +6893,21 @@ SELECT COALESCE(json_group_array(CAST(n AS INTEGER)), json_array()) FROM r)`,
               const microsecondExpr = byKey.get("microsecond");
               const timezoneExpr = byKey.get("timezone");
 
-              if (!yearExpr || !monthExpr || !dayExpr || !hourExpr || !minuteExpr) {
-                throw new Error("datetime(map) requires year, month, day, hour, and minute");
+              // Check date format type
+              const hasCalendarDate = monthExpr && dayExpr;
+              const hasWeekDate = weekExpr !== undefined;
+              const hasOrdinalDate = ordinalDayExpr !== undefined;
+              const hasQuarterDate = quarterExpr !== undefined;
+
+              if (!yearExpr || !hourExpr || !minuteExpr) {
+                throw new Error("datetime(map) requires year, hour, and minute");
+              }
+
+              if (!hasCalendarDate && !hasWeekDate && !hasOrdinalDate && !hasQuarterDate) {
+                throw new Error("datetime(map) requires month/day or week or ordinalDay or quarter");
               }
 
               const yearResult = this.translateExpression(yearExpr);
-              const monthResult = this.translateExpression(monthExpr);
-              const dayResult = this.translateExpression(dayExpr);
               const hourResult = this.translateExpression(hourExpr);
               const minuteResult = this.translateExpression(minuteExpr);
               // Default timezone to 'Z' (UTC) if not provided
@@ -6900,30 +6916,93 @@ SELECT COALESCE(json_group_array(CAST(n AS INTEGER)), json_array()) FROM r)`,
                 : { sql: "'Z'", tables: [] as string[], params: [] as unknown[] };
               tables.push(
                 ...yearResult.tables,
-                ...monthResult.tables,
-                ...dayResult.tables,
                 ...hourResult.tables,
                 ...minuteResult.tables,
                 ...tzResult.tables
               );
               params.push(
                 ...yearResult.params,
-                ...monthResult.params,
-                ...dayResult.params,
                 ...hourResult.params,
                 ...minuteResult.params,
                 ...tzResult.params
               );
 
               const yearSql = `CAST(${yearResult.sql} AS INTEGER)`;
-              const monthSql = `CAST(${monthResult.sql} AS INTEGER)`;
-              const daySql = `CAST(${dayResult.sql} AS INTEGER)`;
               const hourSql = `CAST(${hourResult.sql} AS INTEGER)`;
               const minuteSql = `CAST(${minuteResult.sql} AS INTEGER)`;
 
+              // Build date part based on format type
+              let dateSql: string;
+
+              if (hasWeekDate) {
+                // ISO week date: datetime({year: Y, week: W, dayOfWeek: D, ...})
+                const weekResult = this.translateExpression(weekExpr);
+                tables.push(...weekResult.tables);
+                params.push(...weekResult.params);
+                const weekSql = `CAST(${weekResult.sql} AS INTEGER)`;
+
+                // Default dayOfWeek is 1 (Monday)
+                let dayOfWeekSql = "1";
+                if (dayOfWeekExpr) {
+                  const dowResult = this.translateExpression(dayOfWeekExpr);
+                  tables.push(...dowResult.tables);
+                  params.push(...dowResult.params);
+                  dayOfWeekSql = `CAST(${dowResult.sql} AS INTEGER)`;
+                }
+
+                // Need yearSql twice in the formula, so duplicate params
+                params.push(...yearResult.params);
+
+                // ISO week date formula:
+                // Monday of week W in year Y = Jan 4 of Y - (weekday of Jan 4 as 0-6 Mon-Sun) + (W-1)*7
+                // Then add (dayOfWeek - 1) for other days
+                dateSql = `DATE(
+                  julianday(printf('%04d-01-04', ${yearSql}))
+                  - ((CAST(strftime('%w', printf('%04d-01-04', ${yearSql})) AS INTEGER) + 6) % 7)
+                  + (${weekSql} - 1) * 7
+                  + (${dayOfWeekSql} - 1)
+                )`;
+              } else if (hasOrdinalDate) {
+                // Ordinal date: datetime({year: Y, ordinalDay: D, ...})
+                const ordinalDayResult = this.translateExpression(ordinalDayExpr!);
+                tables.push(...ordinalDayResult.tables);
+                params.push(...ordinalDayResult.params);
+                const ordinalDaySql = `CAST(${ordinalDayResult.sql} AS INTEGER)`;
+
+                // Start from Jan 1 and add (ordinalDay - 1) days
+                dateSql = `DATE(printf('%04d-01-01', ${yearSql}), '+' || (${ordinalDaySql} - 1) || ' days')`;
+              } else if (hasQuarterDate) {
+                // Quarter date: datetime({year: Y, quarter: Q, dayOfQuarter: D, ...})
+                const quarterResult = this.translateExpression(quarterExpr!);
+                tables.push(...quarterResult.tables);
+                params.push(...quarterResult.params);
+                const quarterSql = `CAST(${quarterResult.sql} AS INTEGER)`;
+
+                let dayOfQuarterSql = "1";
+                if (dayOfQuarterExpr) {
+                  const dayOfQuarterResult = this.translateExpression(dayOfQuarterExpr);
+                  tables.push(...dayOfQuarterResult.tables);
+                  params.push(...dayOfQuarterResult.params);
+                  dayOfQuarterSql = `CAST(${dayOfQuarterResult.sql} AS INTEGER)`;
+                }
+
+                // Quarter start months: Q1=1, Q2=4, Q3=7, Q4=10
+                dateSql = `DATE(printf('%04d-%02d-01', ${yearSql}, (${quarterSql} - 1) * 3 + 1), '+' || (${dayOfQuarterSql} - 1) || ' days')`;
+              } else {
+                // Calendar date: month/day
+                const monthResult = this.translateExpression(monthExpr!);
+                const dayResult = this.translateExpression(dayExpr!);
+                tables.push(...monthResult.tables, ...dayResult.tables);
+                params.push(...monthResult.params, ...dayResult.params);
+                const monthSql = `CAST(${monthResult.sql} AS INTEGER)`;
+                const daySql = `CAST(${dayResult.sql} AS INTEGER)`;
+                dateSql = `printf('%04d-%02d-%02d', ${yearSql}, ${monthSql}, ${daySql})`;
+              }
+
+              // Build time part
               if (!secondExpr) {
                 return {
-                  sql: `(printf('%04d-%02d-%02dT%02d:%02d', ${yearSql}, ${monthSql}, ${daySql}, ${hourSql}, ${minuteSql}) || ${tzResult.sql})`,
+                  sql: `(${dateSql} || 'T' || printf('%02d:%02d', ${hourSql}, ${minuteSql}) || ${tzResult.sql})`,
                   tables,
                   params,
                 };
@@ -6939,14 +7018,13 @@ SELECT COALESCE(json_group_array(CAST(n AS INTEGER)), json_array()) FROM r)`,
 
               if (!hasSubSecond) {
                 return {
-                  sql: `(printf('%04d-%02d-%02dT%02d:%02d:%02d', ${yearSql}, ${monthSql}, ${daySql}, ${hourSql}, ${minuteSql}, ${secondSql}) || ${tzResult.sql})`,
+                  sql: `(${dateSql} || 'T' || printf('%02d:%02d:%02d', ${hourSql}, ${minuteSql}, ${secondSql}) || ${tzResult.sql})`,
                   tables,
                   params,
                 };
               }
 
               // Compute total nanoseconds from millisecond, microsecond, and nanosecond
-              // millisecond * 1000000 + microsecond * 1000 + nanosecond
               const nanoComponents: string[] = [];
 
               if (millisecondExpr) {
@@ -6973,7 +7051,7 @@ SELECT COALESCE(json_group_array(CAST(n AS INTEGER)), json_array()) FROM r)`,
               const totalNanoSql = nanoComponents.length > 0 ? nanoComponents.join(" + ") : "0";
 
               return {
-                sql: `(printf('%04d-%02d-%02dT%02d:%02d:%02d.%09d', ${yearSql}, ${monthSql}, ${daySql}, ${hourSql}, ${minuteSql}, ${secondSql}, ${totalNanoSql}) || ${tzResult.sql})`,
+                sql: `(${dateSql} || 'T' || printf('%02d:%02d:%02d.%09d', ${hourSql}, ${minuteSql}, ${secondSql}, ${totalNanoSql}) || ${tzResult.sql})`,
                 tables,
                 params,
               };
