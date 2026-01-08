@@ -28,6 +28,57 @@ import { translate, TranslationResult, Translator } from "./translator.js";
 import { GraphDatabase } from "./db.js";
 
 // ============================================================================
+// Timezone Helpers
+// ============================================================================
+
+/**
+ * Check if a string is an IANA timezone name (contains '/')
+ */
+function isIANATimezone(tz: string): boolean {
+  // IANA timezones like 'Europe/Stockholm', 'America/New_York'
+  // Offsets are like '+01:00', '-08:00', 'Z'
+  return tz.includes('/') && !tz.startsWith('+') && !tz.startsWith('-');
+}
+
+/**
+ * Convert IANA timezone to UTC offset for a given date.
+ * Returns offset string like '+01:00' or '-05:00'.
+ * If conversion fails, returns '+00:00'.
+ */
+function getTimezoneOffset(timezone: string, year: number, month: number, day: number, hour: number, minute: number = 0): string {
+  if (!isIANATimezone(timezone)) {
+    return timezone;
+  }
+  
+  try {
+    // Create a UTC date for the given local time in the timezone
+    // We need to find what UTC offset the timezone has at this local time
+    const date = new Date(Date.UTC(year, month - 1, day, hour, minute, 0));
+    
+    // Use Intl to get the offset
+    const formatter = new Intl.DateTimeFormat('en-US', {
+      timeZone: timezone,
+      timeZoneName: 'longOffset'
+    });
+    
+    const parts = formatter.formatToParts(date);
+    const tzPart = parts.find(p => p.type === 'timeZoneName');
+    
+    if (tzPart && tzPart.value) {
+      // Extract offset from "GMT+01:00" or "GMT-05:00" or "GMT"
+      const match = tzPart.value.match(/GMT([+-]\d{2}:\d{2})?/);
+      if (match) {
+        return match[1] || '+00:00'; // 'GMT' alone means +00:00
+      }
+    }
+    
+    return '+00:00'; // Fallback
+  } catch {
+    return '+00:00'; // If timezone is invalid, return UTC
+  }
+}
+
+// ============================================================================
 // Types
 // ============================================================================
 
@@ -5444,7 +5495,13 @@ export class Executor {
               ? `${pad2(Math.trunc(hour))}:${pad2(Math.trunc(minute))}:${pad2(Math.trunc(second))}`
               : `${pad2(Math.trunc(hour))}:${pad2(Math.trunc(minute))}`;
             if (nanosVal !== undefined) time += `.${String(Math.trunc(nanos)).padStart(9, "0")}`;
-            return `${pad4(Math.trunc(year))}-${pad2(Math.trunc(month))}-${pad2(Math.trunc(day))}T${time}${tz}`;
+            // Format timezone: IANA names get offset + [name], offsets stay as-is
+            let tzPart = tz;
+            if (isIANATimezone(tz)) {
+              const offset = getTimezoneOffset(tz, Math.trunc(year), Math.trunc(month), Math.trunc(day), Math.trunc(hour), Math.trunc(minute));
+              tzPart = `${offset}[${tz}]`;
+            }
+            return `${pad4(Math.trunc(year))}-${pad2(Math.trunc(month))}-${pad2(Math.trunc(day))}T${time}${tzPart}`;
           }
           return String(arg);
         }
@@ -5489,6 +5546,13 @@ export class Executor {
               ? `${pad2(Math.trunc(hour))}:${pad2(Math.trunc(minute))}:${pad2(Math.trunc(second))}`
               : `${pad2(Math.trunc(hour))}:${pad2(Math.trunc(minute))}`;
             if (nanosVal !== undefined) out += `.${String(Math.trunc(nanos)).padStart(9, "0")}`;
+            // For TIME, if IANA timezone convert to offset + [name]
+            if (isIANATimezone(tz)) {
+              // Time doesn't have full date context, use current date for offset calculation
+              const now = new Date();
+              const offset = getTimezoneOffset(tz, now.getFullYear(), now.getMonth() + 1, now.getDate(), Math.trunc(hour), Math.trunc(minute));
+              return out + `${offset}[${tz}]`;
+            }
             return out + tz;
           }
           const str = String(arg);

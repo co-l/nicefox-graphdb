@@ -12598,21 +12598,27 @@ SELECT COALESCE(json_group_array(CAST(n AS INTEGER)), json_array()) FROM r)`,
     
     // Temporal accessor properties for date/datetime/time values
     // These extract components from ISO 8601 formatted strings
+    // Format may include IANA timezone like: 1984-11-11T12:31:14.645876123+01:00[Europe/Stockholm]
+    // Need to strip the [timezone] bracket portion for date parsing with strftime
+    
+    // Expression to strip IANA bracket portion: CASE WHEN instr(v,'[') > 0 THEN substr(v,1,instr(v,'[')-1) ELSE v END
+    const cleanExpr = `(SELECT CASE WHEN instr(_v, '[') > 0 THEN substr(_v, 1, instr(_v, '[') - 1) ELSE _v END FROM (SELECT ${valueExpr} AS _v))`;
+    
     const temporalAccessors: Record<string, string> = {
-      // Date accessors
-      "year": `CAST(strftime('%Y', ${valueExpr}) AS INTEGER)`,
-      "month": `CAST(strftime('%m', ${valueExpr}) AS INTEGER)`,
-      "day": `CAST(strftime('%d', ${valueExpr}) AS INTEGER)`,
+      // Date accessors - use cleaned expression for strftime
+      "year": `CAST(strftime('%Y', ${cleanExpr}) AS INTEGER)`,
+      "month": `CAST(strftime('%m', ${cleanExpr}) AS INTEGER)`,
+      "day": `CAST(strftime('%d', ${cleanExpr}) AS INTEGER)`,
       // Week-based accessors (ISO 8601 week date)
-      "week": `CAST(strftime('%V', ${valueExpr}) AS INTEGER)`, // ISO week number (1-53)
-      "weekYear": `CAST(strftime('%G', ${valueExpr}) AS INTEGER)`, // ISO week year
-      "weekDay": `CAST(CASE WHEN strftime('%w', ${valueExpr}) = '0' THEN 7 ELSE strftime('%w', ${valueExpr}) END AS INTEGER)`, // 1=Monday, 7=Sunday
-      "dayOfWeek": `CAST(CASE WHEN strftime('%w', ${valueExpr}) = '0' THEN 7 ELSE strftime('%w', ${valueExpr}) END AS INTEGER)`,
+      "week": `CAST(strftime('%V', ${cleanExpr}) AS INTEGER)`, // ISO week number (1-53)
+      "weekYear": `CAST(strftime('%G', ${cleanExpr}) AS INTEGER)`, // ISO week year
+      "weekDay": `CAST(CASE WHEN strftime('%w', ${cleanExpr}) = '0' THEN 7 ELSE strftime('%w', ${cleanExpr}) END AS INTEGER)`, // 1=Monday, 7=Sunday
+      "dayOfWeek": `CAST(CASE WHEN strftime('%w', ${cleanExpr}) = '0' THEN 7 ELSE strftime('%w', ${cleanExpr}) END AS INTEGER)`,
       // Ordinal accessors
-      "ordinalDay": `CAST(strftime('%j', ${valueExpr}) AS INTEGER)`,
+      "ordinalDay": `CAST(strftime('%j', ${cleanExpr}) AS INTEGER)`,
       // Quarter accessors
-      "quarter": `CAST((CAST(strftime('%m', ${valueExpr}) AS INTEGER) + 2) / 3 AS INTEGER)`,
-      "dayOfQuarter": `CAST(strftime('%j', ${valueExpr}) AS INTEGER) - CASE CAST((CAST(strftime('%m', ${valueExpr}) AS INTEGER) + 2) / 3 AS INTEGER) WHEN 1 THEN 0 WHEN 2 THEN 90 + (CASE WHEN strftime('%Y', ${valueExpr}) % 4 = 0 AND (strftime('%Y', ${valueExpr}) % 100 != 0 OR strftime('%Y', ${valueExpr}) % 400 = 0) THEN 1 ELSE 0 END) WHEN 3 THEN 181 + (CASE WHEN strftime('%Y', ${valueExpr}) % 4 = 0 AND (strftime('%Y', ${valueExpr}) % 100 != 0 OR strftime('%Y', ${valueExpr}) % 400 = 0) THEN 1 ELSE 0 END) ELSE 273 + (CASE WHEN strftime('%Y', ${valueExpr}) % 4 = 0 AND (strftime('%Y', ${valueExpr}) % 100 != 0 OR strftime('%Y', ${valueExpr}) % 400 = 0) THEN 1 ELSE 0 END) END`,
+      "quarter": `CAST((CAST(strftime('%m', ${cleanExpr}) AS INTEGER) + 2) / 3 AS INTEGER)`,
+      "dayOfQuarter": `CAST(strftime('%j', ${cleanExpr}) AS INTEGER) - CASE CAST((CAST(strftime('%m', ${cleanExpr}) AS INTEGER) + 2) / 3 AS INTEGER) WHEN 1 THEN 0 WHEN 2 THEN 90 + (CASE WHEN strftime('%Y', ${cleanExpr}) % 4 = 0 AND (strftime('%Y', ${cleanExpr}) % 100 != 0 OR strftime('%Y', ${cleanExpr}) % 400 = 0) THEN 1 ELSE 0 END) WHEN 3 THEN 181 + (CASE WHEN strftime('%Y', ${cleanExpr}) % 4 = 0 AND (strftime('%Y', ${cleanExpr}) % 100 != 0 OR strftime('%Y', ${cleanExpr}) % 400 = 0) THEN 1 ELSE 0 END) ELSE 273 + (CASE WHEN strftime('%Y', ${cleanExpr}) % 4 = 0 AND (strftime('%Y', ${cleanExpr}) % 100 != 0 OR strftime('%Y', ${cleanExpr}) % 400 = 0) THEN 1 ELSE 0 END) END`,
       // Time accessors (for time/datetime/localtime/localdatetime)
       // Time format: HH:MM:SS.NNNNNNNNN or datetime: ...THH:MM:SS.NNNNNNNNN
       // Use CASE to detect if there's a 'T' separator (datetime format) vs pure time format
@@ -12624,12 +12630,23 @@ SELECT COALESCE(json_group_array(CAST(n AS INTEGER)), json_array()) FROM r)`,
       "nanosecond": `CAST(COALESCE(substr(${valueExpr}, instr(${valueExpr}, '.') + 1, 9), '0') AS INTEGER)`,
       "millisecond": `CAST(COALESCE(substr(${valueExpr}, instr(${valueExpr}, '.') + 1, 3), '0') AS INTEGER)`,
       "microsecond": `CAST(COALESCE(substr(${valueExpr}, instr(${valueExpr}, '.') + 1, 6), '0') AS INTEGER)`,
-      // Timezone accessors - extract from the end of the string (e.g., +01:00, -05:30, Z)
-      // Find the timezone part by looking for +, -, or Z after the time portion
-      "timezone": `(SELECT CASE WHEN _tz = '' THEN NULL ELSE _tz END FROM (SELECT CASE WHEN instr(substr(${valueExpr}, -6), '+') > 0 THEN substr(${valueExpr}, -6) WHEN instr(substr(${valueExpr}, -6), '-') > 0 THEN substr(${valueExpr}, -6) WHEN substr(${valueExpr}, -1) = 'Z' THEN 'Z' ELSE '' END AS _tz))`,
-      "offset": `(SELECT CASE WHEN _tz = '' THEN NULL ELSE _tz END FROM (SELECT CASE WHEN instr(substr(${valueExpr}, -6), '+') > 0 THEN substr(${valueExpr}, -6) WHEN instr(substr(${valueExpr}, -6), '-') > 0 THEN substr(${valueExpr}, -6) WHEN substr(${valueExpr}, -1) = 'Z' THEN '+00:00' ELSE '' END AS _tz))`,
-      "offsetMinutes": `(SELECT CASE WHEN _tz = '' THEN NULL ELSE CAST(substr(_tz, 1, 1) || '1' AS INTEGER) * (CAST(substr(_tz, 2, 2) AS INTEGER) * 60 + CAST(substr(_tz, 5, 2) AS INTEGER)) END FROM (SELECT CASE WHEN instr(substr(${valueExpr}, -6), '+') > 0 THEN substr(${valueExpr}, -6) WHEN instr(substr(${valueExpr}, -6), '-') > 0 THEN substr(${valueExpr}, -6) WHEN substr(${valueExpr}, -1) = 'Z' THEN '+00:00' ELSE '' END AS _tz))`,
-      "offsetSeconds": `(SELECT CASE WHEN _tz = '' THEN NULL ELSE CAST(substr(_tz, 1, 1) || '1' AS INTEGER) * (CAST(substr(_tz, 2, 2) AS INTEGER) * 3600 + CAST(substr(_tz, 5, 2) AS INTEGER) * 60) END FROM (SELECT CASE WHEN instr(substr(${valueExpr}, -6), '+') > 0 THEN substr(${valueExpr}, -6) WHEN instr(substr(${valueExpr}, -6), '-') > 0 THEN substr(${valueExpr}, -6) WHEN substr(${valueExpr}, -1) = 'Z' THEN '+00:00' ELSE '' END AS _tz))`,
+      // Timezone accessors - handle both formats:
+      // 1. Simple offset: 12:31:14+01:00 or 12:31:14Z
+      // 2. IANA with offset: 12:31:14+01:00[Europe/Stockholm]
+      // For timezone: return IANA name if present (between []), otherwise return offset
+      "timezone": `(SELECT CASE WHEN instr(_v, '[') > 0 THEN substr(_v, instr(_v, '[') + 1, instr(_v, ']') - instr(_v, '[') - 1) WHEN instr(substr(_v, -6), '+') > 0 THEN substr(_v, -6) WHEN instr(substr(_v, -6), '-') > 0 THEN substr(_v, -6) WHEN substr(_v, -1) = 'Z' THEN 'Z' ELSE NULL END FROM (SELECT ${valueExpr} AS _v))`,
+      // For offset: always return the numeric offset (+01:00 style)
+      // When there's a [ bracket, extract the offset before it
+      "offset": `(SELECT CASE WHEN instr(_v, '[') > 0 THEN substr(_v, length(_v) - length(substr(_v, instr(_v, '['))) - 5, 6) WHEN instr(substr(_v, -6), '+') > 0 THEN substr(_v, -6) WHEN instr(substr(_v, -6), '-') > 0 THEN substr(_v, -6) WHEN substr(_v, -1) = 'Z' THEN '+00:00' ELSE NULL END FROM (SELECT ${valueExpr} AS _v))`,
+      // offsetMinutes/offsetSeconds: extract offset then compute
+      // Handle both formats: simple offset or offset with IANA bracket
+      "offsetMinutes": `(SELECT CASE WHEN _tz = '' THEN NULL ELSE CAST(substr(_tz, 1, 1) || '1' AS INTEGER) * (CAST(substr(_tz, 2, 2) AS INTEGER) * 60 + CAST(substr(_tz, 5, 2) AS INTEGER)) END FROM (SELECT CASE WHEN instr(_v, '[') > 0 THEN substr(_v, length(_v) - length(substr(_v, instr(_v, '['))) - 5, 6) WHEN instr(substr(_v, -6), '+') > 0 THEN substr(_v, -6) WHEN instr(substr(_v, -6), '-') > 0 THEN substr(_v, -6) WHEN substr(_v, -1) = 'Z' THEN '+00:00' ELSE '' END AS _tz FROM (SELECT ${valueExpr} AS _v)))`,
+      "offsetSeconds": `(SELECT CASE WHEN _tz = '' THEN NULL ELSE CAST(substr(_tz, 1, 1) || '1' AS INTEGER) * (CAST(substr(_tz, 2, 2) AS INTEGER) * 3600 + CAST(substr(_tz, 5, 2) AS INTEGER) * 60) END FROM (SELECT CASE WHEN instr(_v, '[') > 0 THEN substr(_v, length(_v) - length(substr(_v, instr(_v, '['))) - 5, 6) WHEN instr(substr(_v, -6), '+') > 0 THEN substr(_v, -6) WHEN instr(substr(_v, -6), '-') > 0 THEN substr(_v, -6) WHEN substr(_v, -1) = 'Z' THEN '+00:00' ELSE '' END AS _tz FROM (SELECT ${valueExpr} AS _v)))`,
+      // epochSeconds and epochMillis - compute Unix timestamp
+      // Using julianday with correction for nanosecond precision
+      // First compute epoch seconds from julianday, then add fractional part from nanoseconds
+      "epochSeconds": `CAST((julianday(${cleanExpr}) - 2440587.5) * 86400 AS INTEGER)`,
+      "epochMillis": `(CAST((julianday(${cleanExpr}) - 2440587.5) * 86400 AS INTEGER) * 1000 + CAST(COALESCE(substr(${valueExpr}, instr(${valueExpr}, '.') + 1, 3), '0') AS INTEGER))`,
     };
 
     return temporalAccessors[propertyName] ?? null;
@@ -13284,7 +13301,13 @@ SELECT COALESCE(json_group_array(CAST(n AS INTEGER)), json_array()) FROM r)`,
 
             let time = hasSecond ? `${pad2(Math.trunc(hour))}:${pad2(Math.trunc(minute))}:${pad2(Math.trunc(second))}` : `${pad2(Math.trunc(hour))}:${pad2(Math.trunc(minute))}`;
             if (nanosVal !== undefined) time += `.${String(Math.trunc(nanos)).padStart(9, "0")}`;
-            return `${pad4(Math.trunc(year))}-${pad2(Math.trunc(month))}-${pad2(Math.trunc(day))}T${time}${tz}`;
+            // Format timezone: IANA names get offset + [name], offsets stay as-is
+            let tzPart = tz;
+            if (isIANATimezone(tz)) {
+              const offset = getTimezoneOffset(tz, Math.trunc(year), Math.trunc(month), Math.trunc(day), Math.trunc(hour), Math.trunc(minute));
+              tzPart = `${offset}[${tz}]`;
+            }
+            return `${pad4(Math.trunc(year))}-${pad2(Math.trunc(month))}-${pad2(Math.trunc(day))}T${time}${tzPart}`;
           }
           const arg0 = this.evaluatePropertyValue(args[0]);
           return String(arg0);
