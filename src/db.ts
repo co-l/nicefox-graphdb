@@ -158,6 +158,13 @@ function deepCypherEquals(a: unknown, b: unknown): number | null {
  * - '[...]' for arrays
  * - '{...}' for objects
  */
+// Regex patterns for temporal types
+const TIME_PATTERN = /^\d{2}:\d{2}(:\d{2})?(\.\d+)?(Z|[+-]\d{2}:\d{2})$/;
+const LOCALTIME_PATTERN = /^\d{2}:\d{2}(:\d{2})?(\.\d+)?$/;
+const DATE_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
+const DATETIME_PATTERN = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(:\d{2})?(\.\d+)?(Z|[+-]\d{2}:\d{2})?(\[.+\])?$/;
+const LOCALDATETIME_PATTERN = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(:\d{2})?(\.\d+)?$/;
+
 function getCypherTypeForOrdering(value: unknown): string | null {
   if (value === null) return null;
   
@@ -206,6 +213,13 @@ function getCypherTypeForOrdering(value: unknown): string | null {
       return "number";
     }
     
+    // Check for temporal types (times with timezone need special comparison)
+    if (TIME_PATTERN.test(s)) return "time";
+    if (DATETIME_PATTERN.test(s)) return "datetime";
+    if (DATE_PATTERN.test(s)) return "date";
+    if (LOCALTIME_PATTERN.test(s)) return "localtime";
+    if (LOCALDATETIME_PATTERN.test(s)) return "localdatetime";
+    
     // Otherwise treat as a plain string
     return "string";
   }
@@ -239,8 +253,69 @@ function areCypherTypesOrderable(typeA: string | null, typeB: string | null): bo
 }
 
 /**
+ * Parse timezone offset to minutes from UTC
+ */
+function parseTimezoneOffset(tz: string): number {
+  if (tz === "Z" || tz === "+00:00") return 0;
+  const sign = tz[0] === "-" ? -1 : 1;
+  const hours = parseInt(tz.slice(1, 3), 10);
+  const minutes = parseInt(tz.slice(4, 6), 10);
+  return sign * (hours * 60 + minutes);
+}
+
+/**
+ * Convert time string to nanoseconds from midnight UTC for comparison
+ */
+function timeToNanosUTC(timeStr: string): number {
+  // Format: HH:MM or HH:MM:SS or HH:MM:SS.nnnnnnnnn followed by Z or +HH:MM or -HH:MM
+  // May also have [timezone] suffix - strip it
+  const withoutTzName = timeStr.replace(/\[.+\]$/, "");
+  
+  // Find timezone part
+  let tzOffset = 0;
+  let timePart = withoutTzName;
+  
+  if (withoutTzName.endsWith("Z")) {
+    timePart = withoutTzName.slice(0, -1);
+    tzOffset = 0;
+  } else {
+    const tzMatch = withoutTzName.match(/([+-]\d{2}:\d{2})$/);
+    if (tzMatch) {
+      tzOffset = parseTimezoneOffset(tzMatch[1]);
+      timePart = withoutTzName.slice(0, -6);
+    }
+  }
+  
+  // Parse time components
+  const parts = timePart.split(":");
+  const hours = parseInt(parts[0], 10);
+  const minutes = parseInt(parts[1], 10);
+  let seconds = 0;
+  let nanos = 0;
+  
+  if (parts[2]) {
+    const secParts = parts[2].split(".");
+    seconds = parseInt(secParts[0], 10);
+    if (secParts[1]) {
+      // Pad or truncate to 9 digits
+      const fracStr = secParts[1].padEnd(9, "0").slice(0, 9);
+      nanos = parseInt(fracStr, 10);
+    }
+  }
+  
+  // Convert to total nanoseconds from midnight, then adjust for timezone
+  const totalMinutes = hours * 60 + minutes - tzOffset;
+  const totalNanos = (totalMinutes * 60 + seconds) * 1_000_000_000 + nanos;
+  
+  // Normalize to 24-hour range (handle negative from timezone adjustment)
+  const dayInNanos = 24 * 60 * 60 * 1_000_000_000;
+  return ((totalNanos % dayInNanos) + dayInNanos) % dayInNanos;
+}
+
+/**
  * Convert a value to its comparable form.
  * For JSON-formatted strings from -> operator, parse to get actual value.
+ * For temporal types, convert to a form suitable for comparison.
  */
 function toComparableValue(value: unknown, type: string): number | string | boolean {
   if (typeof value === "string") {
@@ -255,6 +330,20 @@ function toComparableValue(value: unknown, type: string): number | string | bool
       if (value.startsWith('"') && value.endsWith('"')) {
         return value.slice(1, -1);
       }
+      return value;
+    }
+    if (type === "time") {
+      // Convert to nanoseconds from midnight UTC for comparison
+      return timeToNanosUTC(value);
+    }
+    if (type === "datetime") {
+      // Strip [timezone] suffix and compare lexically (ISO format is naturally sortable when in UTC or same TZ)
+      // For proper comparison, we'd need to convert to UTC, but for same-offset datetimes, lexical works
+      // TODO: Full timezone-aware datetime comparison
+      return value.replace(/\[.+\]$/, "");
+    }
+    // date, localtime, localdatetime can be compared lexically (ISO format is sortable)
+    if (type === "date" || type === "localtime" || type === "localdatetime") {
       return value;
     }
   }
