@@ -7192,11 +7192,54 @@ SELECT COALESCE(json_group_array(CAST(n AS INTEGER)), json_array()) FROM r)`,
               };
             }
 
-            // datetime('2024-01-15T12:30:00') - parse datetime string
+            // datetime('2024-01-15T12:30:00+01:00') - parse datetime string with timezone
+            // Also supports ordinal date: '2015-202T21:40:32+01:00'
+            // Also supports year-only with compact time: '2015T214032Z'
             const argResult = this.translateFunctionArg(arg);
             tables.push(...argResult.tables);
             params.push(...argResult.params);
-            return { sql: `DATETIME(${argResult.sql})`, tables, params };
+            const dtArg = argResult.sql;
+            // Parse various datetime formats and normalize to ISO format
+            // The string includes timezone at the end (Z, +HH:MM, -HH:MM)
+            // We need to extract datetime part and timezone separately, then reassemble
+            // Helper: normalize compact time HHMMSS to HH:MM:SS (time part before timezone)
+            const normalizeTimeWithTz = (timeExpr: string) => `CASE
+              WHEN ${timeExpr} GLOB '[0-9][0-9][0-9][0-9][0-9][0-9].*[+-][0-9][0-9]:[0-9][0-9]'
+              THEN substr(${timeExpr}, 1, 2) || ':' || substr(${timeExpr}, 3, 2) || ':' || substr(${timeExpr}, 5, 2) || substr(${timeExpr}, 7)
+              WHEN ${timeExpr} GLOB '[0-9][0-9][0-9][0-9][0-9][0-9][+-][0-9][0-9]:[0-9][0-9]'
+              THEN substr(${timeExpr}, 1, 2) || ':' || substr(${timeExpr}, 3, 2) || ':' || substr(${timeExpr}, 5, 2) || substr(${timeExpr}, 7)
+              WHEN ${timeExpr} GLOB '[0-9][0-9][0-9][0-9][0-9][0-9]Z'
+              THEN substr(${timeExpr}, 1, 2) || ':' || substr(${timeExpr}, 3, 2) || ':' || substr(${timeExpr}, 5, 2) || 'Z'
+              WHEN ${timeExpr} GLOB '[0-9][0-9][0-9][0-9][0-9][0-9]'
+              THEN substr(${timeExpr}, 1, 2) || ':' || substr(${timeExpr}, 3, 2) || ':' || substr(${timeExpr}, 5, 2)
+              ELSE ${timeExpr}
+            END`;
+            const sql = `(SELECT CASE
+              WHEN d GLOB '[0-9][0-9][0-9][0-9]T[0-9]*'
+              THEN substr(d, 1, 4) || '-01-01T' || (${normalizeTimeWithTz("substr(d, 6)")})
+              WHEN d GLOB '[0-9][0-9][0-9][0-9]-[0-9][0-9][0-9]T*'
+              THEN DATE(printf('%04d-01-01', CAST(substr(d, 1, 4) AS INTEGER)),
+                        '+' || (CAST(substr(d, 6, 3) AS INTEGER) - 1) || ' days') || 'T' || (${normalizeTimeWithTz("substr(d, 10)")})
+              WHEN d GLOB '[0-9][0-9][0-9][0-9][0-9][0-9][0-9]T*'
+              THEN DATE(printf('%04d-01-01', CAST(substr(d, 1, 4) AS INTEGER)),
+                        '+' || (CAST(substr(d, 5, 3) AS INTEGER) - 1) || ' days') || 'T' || (${normalizeTimeWithTz("substr(d, 9)")})
+              WHEN d GLOB '[0-9][0-9][0-9][0-9]-W[0-9][0-9]-[0-9]T*'
+              THEN DATE(
+                julianday(printf('%04d-01-04', CAST(substr(d, 1, 4) AS INTEGER)))
+                - ((CAST(strftime('%w', printf('%04d-01-04', CAST(substr(d, 1, 4) AS INTEGER))) AS INTEGER) + 6) % 7)
+                + (CAST(substr(d, 7, 2) AS INTEGER) - 1) * 7
+                + (CAST(substr(d, 10, 1) AS INTEGER) - 1)
+              ) || 'T' || (${normalizeTimeWithTz("substr(d, 12)")})
+              WHEN d GLOB '[0-9][0-9][0-9][0-9]W[0-9][0-9][0-9]T*'
+              THEN DATE(
+                julianday(printf('%04d-01-04', CAST(substr(d, 1, 4) AS INTEGER)))
+                - ((CAST(strftime('%w', printf('%04d-01-04', CAST(substr(d, 1, 4) AS INTEGER))) AS INTEGER) + 6) % 7)
+                + (CAST(substr(d, 6, 2) AS INTEGER) - 1) * 7
+                + (CAST(substr(d, 8, 1) AS INTEGER) - 1)
+              ) || 'T' || (${normalizeTimeWithTz("substr(d, 10)")})
+              ELSE d
+            END FROM (SELECT ${dtArg} AS d))`; 
+            return { sql, tables, params };
           }
           // datetime() - current datetime
           return { sql: `DATETIME('now')`, tables, params };

@@ -2041,7 +2041,8 @@ describe("Translator", () => {
 
       expect(result.statements).toHaveLength(1);
       const sql = result.statements[0].sql;
-      expect(sql).toMatch(/DATETIME\(/i);
+      // datetime() with string uses a CASE expression to handle various date formats
+      expect(sql).toMatch(/SELECT CASE/i);
       expect(result.returnColumns).toEqual(["dt"]);
     });
 
