@@ -1481,7 +1481,7 @@ export const FAILING_TESTS = new Set<string>([
   // "expressions/string > String11 - Combining Exact String Search|1",
   // "expressions/string > String11 - Combining Exact String Search|2",
   // "expressions/string > String1 - Substring extraction|1",
-  "expressions/string > String4 - String Splitting|1",
+  // "expressions/string > String4 - String Splitting|1",
   // "expressions/string > String8 - Exact String Prefix Search|1",
   // "expressions/string > String8 - Exact String Prefix Search|2",
   // "expressions/string > String8 - Exact String Prefix Search|5",

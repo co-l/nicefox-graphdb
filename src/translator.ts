@@ -6130,8 +6130,13 @@ SELECT COALESCE(json_group_array(CAST(n AS INTEGER)), json_array()) FROM r)`,
             const strResult = this.translateFunctionArg(expr.args[0]);
             const delimResult = this.translateFunctionArg(expr.args[1]);
             tables.push(...strResult.tables, ...delimResult.tables);
-            params.push(...strResult.params, ...delimResult.params);
             // SQLite doesn't have native split, use recursive CTE with instr
+            // The delimiter is used 6 times in the SQL, so we need to push its params 6 times
+            // The string is used 1 time
+            params.push(...strResult.params);
+            for (let i = 0; i < 6; i++) {
+              params.push(...delimResult.params);
+            }
             // This creates a JSON array from splitting the string
             return { 
               sql: `(WITH RECURSIVE split(str, rest, pos) AS (
