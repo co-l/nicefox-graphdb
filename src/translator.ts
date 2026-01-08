@@ -6667,6 +6667,8 @@ SELECT COALESCE(json_group_array(CAST(n AS INTEGER)), json_array()) FROM r)`,
               const minuteExpr = byKey.get("minute");
               const secondExpr = byKey.get("second");
               const nanosecondExpr = byKey.get("nanosecond");
+              const millisecondExpr = byKey.get("millisecond");
+              const microsecondExpr = byKey.get("microsecond");
 
               if (!yearExpr || !monthExpr || !dayExpr || !hourExpr || !minuteExpr) {
                 throw new Error("localdatetime(map) requires year, month, day, hour, and minute");
@@ -6711,7 +6713,10 @@ SELECT COALESCE(json_group_array(CAST(n AS INTEGER)), json_array()) FROM r)`,
               params.push(...secondResult.params);
               const secondSql = `CAST(${secondResult.sql} AS INTEGER)`;
 
-              if (!nanosecondExpr) {
+              // Check if we have any sub-second precision (nanosecond, millisecond, microsecond)
+              const hasSubSecond = nanosecondExpr || millisecondExpr || microsecondExpr;
+
+              if (!hasSubSecond) {
                 return {
                   sql: `printf('%04d-%02d-%02dT%02d:%02d:%02d', ${yearSql}, ${monthSql}, ${daySql}, ${hourSql}, ${minuteSql}, ${secondSql})`,
                   tables,
@@ -6719,13 +6724,35 @@ SELECT COALESCE(json_group_array(CAST(n AS INTEGER)), json_array()) FROM r)`,
                 };
               }
 
-              const nanosecondResult = this.translateExpression(nanosecondExpr);
-              tables.push(...nanosecondResult.tables);
-              params.push(...nanosecondResult.params);
-              const nanosecondSql = `CAST(${nanosecondResult.sql} AS INTEGER)`;
+              // Compute total nanoseconds from millisecond, microsecond, and nanosecond
+              // millisecond * 1000000 + microsecond * 1000 + nanosecond
+              const nanoComponents: string[] = [];
+
+              if (millisecondExpr) {
+                const msResult = this.translateExpression(millisecondExpr);
+                tables.push(...msResult.tables);
+                params.push(...msResult.params);
+                nanoComponents.push(`(CAST(${msResult.sql} AS INTEGER) * 1000000)`);
+              }
+
+              if (microsecondExpr) {
+                const usResult = this.translateExpression(microsecondExpr);
+                tables.push(...usResult.tables);
+                params.push(...usResult.params);
+                nanoComponents.push(`(CAST(${usResult.sql} AS INTEGER) * 1000)`);
+              }
+
+              if (nanosecondExpr) {
+                const nsResult = this.translateExpression(nanosecondExpr);
+                tables.push(...nsResult.tables);
+                params.push(...nsResult.params);
+                nanoComponents.push(`CAST(${nsResult.sql} AS INTEGER)`);
+              }
+
+              const totalNanoSql = nanoComponents.length > 0 ? nanoComponents.join(" + ") : "0";
 
               return {
-                sql: `printf('%04d-%02d-%02dT%02d:%02d:%02d.%09d', ${yearSql}, ${monthSql}, ${daySql}, ${hourSql}, ${minuteSql}, ${secondSql}, ${nanosecondSql})`,
+                sql: `printf('%04d-%02d-%02dT%02d:%02d:%02d.%09d', ${yearSql}, ${monthSql}, ${daySql}, ${hourSql}, ${minuteSql}, ${secondSql}, ${totalNanoSql})`,
                 tables,
                 params,
               };
@@ -6755,6 +6782,8 @@ SELECT COALESCE(json_group_array(CAST(n AS INTEGER)), json_array()) FROM r)`,
               const minuteExpr = byKey.get("minute");
               const secondExpr = byKey.get("second");
               const nanosecondExpr = byKey.get("nanosecond");
+              const millisecondExpr = byKey.get("millisecond");
+              const microsecondExpr = byKey.get("microsecond");
               const timezoneExpr = byKey.get("timezone");
 
               if (!yearExpr || !monthExpr || !dayExpr || !hourExpr || !minuteExpr || !timezoneExpr) {
@@ -6803,7 +6832,10 @@ SELECT COALESCE(json_group_array(CAST(n AS INTEGER)), json_array()) FROM r)`,
               params.push(...secondResult.params);
               const secondSql = `CAST(${secondResult.sql} AS INTEGER)`;
 
-              if (!nanosecondExpr) {
+              // Check if we have any sub-second precision (nanosecond, millisecond, microsecond)
+              const hasSubSecond = nanosecondExpr || millisecondExpr || microsecondExpr;
+
+              if (!hasSubSecond) {
                 return {
                   sql: `(printf('%04d-%02d-%02dT%02d:%02d:%02d', ${yearSql}, ${monthSql}, ${daySql}, ${hourSql}, ${minuteSql}, ${secondSql}) || ${tzResult.sql})`,
                   tables,
@@ -6811,13 +6843,35 @@ SELECT COALESCE(json_group_array(CAST(n AS INTEGER)), json_array()) FROM r)`,
                 };
               }
 
-              const nanosecondResult = this.translateExpression(nanosecondExpr);
-              tables.push(...nanosecondResult.tables);
-              params.push(...nanosecondResult.params);
-              const nanosecondSql = `CAST(${nanosecondResult.sql} AS INTEGER)`;
+              // Compute total nanoseconds from millisecond, microsecond, and nanosecond
+              // millisecond * 1000000 + microsecond * 1000 + nanosecond
+              const nanoComponents: string[] = [];
+
+              if (millisecondExpr) {
+                const msResult = this.translateExpression(millisecondExpr);
+                tables.push(...msResult.tables);
+                params.push(...msResult.params);
+                nanoComponents.push(`(CAST(${msResult.sql} AS INTEGER) * 1000000)`);
+              }
+
+              if (microsecondExpr) {
+                const usResult = this.translateExpression(microsecondExpr);
+                tables.push(...usResult.tables);
+                params.push(...usResult.params);
+                nanoComponents.push(`(CAST(${usResult.sql} AS INTEGER) * 1000)`);
+              }
+
+              if (nanosecondExpr) {
+                const nsResult = this.translateExpression(nanosecondExpr);
+                tables.push(...nsResult.tables);
+                params.push(...nsResult.params);
+                nanoComponents.push(`CAST(${nsResult.sql} AS INTEGER)`);
+              }
+
+              const totalNanoSql = nanoComponents.length > 0 ? nanoComponents.join(" + ") : "0";
 
               return {
-                sql: `(printf('%04d-%02d-%02dT%02d:%02d:%02d.%09d', ${yearSql}, ${monthSql}, ${daySql}, ${hourSql}, ${minuteSql}, ${secondSql}, ${nanosecondSql}) || ${tzResult.sql})`,
+                sql: `(printf('%04d-%02d-%02dT%02d:%02d:%02d.%09d', ${yearSql}, ${monthSql}, ${daySql}, ${hourSql}, ${minuteSql}, ${secondSql}, ${totalNanoSql}) || ${tzResult.sql})`,
                 tables,
                 params,
               };
