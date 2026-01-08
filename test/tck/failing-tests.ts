@@ -1669,7 +1669,7 @@ export const FAILING_TESTS = new Set<string>([
   // "expressions/temporal > Temporal4 - Store Temporal Values|13:8",
   // "expressions/temporal > Temporal4 - Store Temporal Values|13:9",
   // "expressions/temporal > Temporal5 - Access Components of Temporal Values|1",
-  "expressions/temporal > Temporal5 - Access Components of Temporal Values|2",
+  // "expressions/temporal > Temporal5 - Access Components of Temporal Values|2",
   // "expressions/temporal > Temporal5 - Access Components of Temporal Values|3",
   "expressions/temporal > Temporal5 - Access Components of Temporal Values|4",
   // "expressions/temporal > Temporal5 - Access Components of Temporal Values|5",

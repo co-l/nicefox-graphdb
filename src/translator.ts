@@ -12603,9 +12603,9 @@ SELECT COALESCE(json_group_array(CAST(n AS INTEGER)), json_array()) FROM r)`,
       "year": `CAST(strftime('%Y', ${valueExpr}) AS INTEGER)`,
       "month": `CAST(strftime('%m', ${valueExpr}) AS INTEGER)`,
       "day": `CAST(strftime('%d', ${valueExpr}) AS INTEGER)`,
-      // Week-based accessors
-      "week": `CAST(strftime('%W', ${valueExpr}) AS INTEGER)`, // ISO week number
-      "weekYear": `CAST(strftime('%Y', ${valueExpr}) AS INTEGER)`, // ISO week year (simplified)
+      // Week-based accessors (ISO 8601 week date)
+      "week": `CAST(strftime('%V', ${valueExpr}) AS INTEGER)`, // ISO week number (1-53)
+      "weekYear": `CAST(strftime('%G', ${valueExpr}) AS INTEGER)`, // ISO week year
       "weekDay": `CAST(CASE WHEN strftime('%w', ${valueExpr}) = '0' THEN 7 ELSE strftime('%w', ${valueExpr}) END AS INTEGER)`, // 1=Monday, 7=Sunday
       "dayOfWeek": `CAST(CASE WHEN strftime('%w', ${valueExpr}) = '0' THEN 7 ELSE strftime('%w', ${valueExpr}) END AS INTEGER)`,
       // Ordinal accessors
