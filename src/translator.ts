@@ -7019,8 +7019,9 @@ SELECT COALESCE(json_group_array(CAST(n AS INTEGER)), json_array()) FROM r)`,
               const timezoneExpr = byKey.get("timezone");
               
               if (dateExpr && timeExpr) {
-                // Compose datetime from date and time values
+                // Compose datetime from date and time values with optional overrides
                 // Format: date part (YYYY-MM-DD) || 'T' || time part (HH:MM:SS...) || timezone
+                // Support overrides: year, month, day for date; hour, minute, second, nanosecond/millisecond/microsecond for time
                 const dateResult = this.translateExpression(dateExpr);
                 const timeResult = this.translateExpression(timeExpr);
                 tables.push(...dateResult.tables, ...timeResult.tables);
@@ -7033,10 +7034,85 @@ SELECT COALESCE(json_group_array(CAST(n AS INTEGER)), json_array()) FROM r)`,
                 tables.push(...tzResult.tables);
                 params.push(...tzResult.params);
                 
-                // The date is already in YYYY-MM-DD format, time in HH:MM:SS format
-                // We just concatenate them with 'T' and append timezone
+                // Check for date component overrides
+                const yearOverride = byKey.get("year");
+                const monthOverride = byKey.get("month");
+                const dayOverride = byKey.get("day");
+                
+                // Check for time component overrides
+                const hourOverride = byKey.get("hour");
+                const minuteOverride = byKey.get("minute");
+                const secondOverride = byKey.get("second");
+                const nanosecondOverride = byKey.get("nanosecond");
+                const millisecondOverride = byKey.get("millisecond");
+                const microsecondOverride = byKey.get("microsecond");
+                
+                // Build date part: YYYY-MM-DD from source with overrides
+                // Date source is first 10 chars of dateExpr
+                const dateSource = `substr(${dateResult.sql}, 1, 10)`;
+                let datePart: string;
+                
+                if (yearOverride || monthOverride || dayOverride) {
+                  // Extract components from source date and apply overrides
+                  const yearSql = yearOverride 
+                    ? (() => { const r = this.translateExpression(yearOverride); tables.push(...r.tables); params.push(...r.params); return `printf('%04d', CAST(${r.sql} AS INTEGER))`; })()
+                    : `substr(${dateSource}, 1, 4)`;
+                  const monthSql = monthOverride
+                    ? (() => { const r = this.translateExpression(monthOverride); tables.push(...r.tables); params.push(...r.params); return `printf('%02d', CAST(${r.sql} AS INTEGER))`; })()
+                    : `substr(${dateSource}, 6, 2)`;
+                  const daySql = dayOverride
+                    ? (() => { const r = this.translateExpression(dayOverride); tables.push(...r.tables); params.push(...r.params); return `printf('%02d', CAST(${r.sql} AS INTEGER))`; })()
+                    : `substr(${dateSource}, 9, 2)`;
+                  datePart = `(${yearSql} || '-' || ${monthSql} || '-' || ${daySql})`;
+                } else {
+                  datePart = dateSource;
+                }
+                
+                // Build time part: HH:MM:SS.NNNNNNNNN from source with overrides
+                // Time source could be just time (HH:MM:SS.NNN) or datetime (has T, take after T)
+                // For localtime it's format HH:MM:SS.NNNNNNNNN directly
+                const timeSource = timeResult.sql;
+                let timePart: string;
+                
+                if (hourOverride || minuteOverride || secondOverride || nanosecondOverride || millisecondOverride || microsecondOverride) {
+                  // Extract components from source time and apply overrides
+                  // Time format: HH:MM:SS.NNNNNNNNN
+                  const hourSql = hourOverride
+                    ? (() => { const r = this.translateExpression(hourOverride); tables.push(...r.tables); params.push(...r.params); return `printf('%02d', CAST(${r.sql} AS INTEGER))`; })()
+                    : `substr(${timeSource}, 1, 2)`;
+                  const minuteSql = minuteOverride
+                    ? (() => { const r = this.translateExpression(minuteOverride); tables.push(...r.tables); params.push(...r.params); return `printf('%02d', CAST(${r.sql} AS INTEGER))`; })()
+                    : `substr(${timeSource}, 4, 2)`;
+                  const secondSql = secondOverride
+                    ? (() => { const r = this.translateExpression(secondOverride); tables.push(...r.tables); params.push(...r.params); return `printf('%02d', CAST(${r.sql} AS INTEGER))`; })()
+                    : `substr(${timeSource}, 7, 2)`;
+                  
+                  // Handle fractional seconds - nanosecond/millisecond/microsecond overrides or take from source
+                  let fracSql: string;
+                  if (nanosecondOverride) {
+                    const r = this.translateExpression(nanosecondOverride);
+                    tables.push(...r.tables); params.push(...r.params);
+                    fracSql = `'.' || printf('%09d', CAST(${r.sql} AS INTEGER))`;
+                  } else if (millisecondOverride) {
+                    const r = this.translateExpression(millisecondOverride);
+                    tables.push(...r.tables); params.push(...r.params);
+                    fracSql = `'.' || printf('%09d', CAST(${r.sql} AS INTEGER) * 1000000)`;
+                  } else if (microsecondOverride) {
+                    const r = this.translateExpression(microsecondOverride);
+                    tables.push(...r.tables); params.push(...r.params);
+                    fracSql = `'.' || printf('%09d', CAST(${r.sql} AS INTEGER) * 1000)`;
+                  } else {
+                    // Keep fractional part from source (position 9 onwards: .NNNNNNNNN)
+                    fracSql = `substr(${timeSource}, 9)`;
+                  }
+                  
+                  timePart = `(${hourSql} || ':' || ${minuteSql} || ':' || ${secondSql} || ${fracSql})`;
+                } else {
+                  timePart = timeSource;
+                }
+                
                 return {
-                  sql: `(substr(${dateResult.sql}, 1, 10) || 'T' || ${timeResult.sql} || ${tzResult.sql})`,
+                  sql: `(${datePart} || 'T' || ${timePart} || ${tzResult.sql})`,
                   tables,
                   params,
                 };
