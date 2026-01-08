@@ -8451,63 +8451,105 @@ SELECT COALESCE(json_group_array(CAST(n AS INTEGER)), json_array()) FROM r)`,
                 }
               }
               
+              // Handle fractional values normalization:
+              // - 0.5 years = 6 months (12 months/year)
+              // - 0.5 months = 15 days (30 days/month per Cypher spec)
+              // - 0.5 days = 12 hours (24 hours/day)
+              // - 0.5 hours = 30 minutes
+              // - 0.5 minutes = 30 seconds
+              
+              // Years: integer part stays, fractional part converts to months
+              const rawYears = yearsSql?.sql ?? "0";
+              const finalYearsSql = `CAST(${rawYears} AS INTEGER)`;
+              const monthsFromYearsFracSql = `((${rawYears} - CAST(${rawYears} AS INTEGER)) * 12)`;
+              
+              // Months: add months from years fraction, then integer part stays, fractional converts to days
+              const rawMonths = monthsSql?.sql ?? "0";
+              const totalMonthsSql = `(${rawMonths} + ${monthsFromYearsFracSql})`;
+              const finalMonthsSql = `CAST(${totalMonthsSql} AS INTEGER)`;
+              const daysFromMonthsFracSql = `((${totalMonthsSql} - CAST(${totalMonthsSql} AS INTEGER)) * 30)`; // 30 days/month per Cypher spec
+              
+              // Weeks stay as-is (integer only in Cypher)
+              const rawWeeks = weeksSql?.sql ?? "0";
+              const finalWeeksSql = `CAST(${rawWeeks} AS INTEGER)`;
+              
+              // Days: add days from months fraction, use ROUND for final value (Cypher rounds half up)
+              const rawDays = daysSql?.sql ?? "0";
+              const totalDaysSql = `(${rawDays} + ${daysFromMonthsFracSql})`;
+              const finalDaysSql = `CAST(ROUND(${totalDaysSql}) AS INTEGER)`;
+              const hoursFromDaysFracSql = `((${totalDaysSql} - CAST(${totalDaysSql} AS INTEGER)) * 24)`;
+              
+              // Hours: add hours from days fraction, then integer part stays, fractional converts to minutes
+              const rawHours = hoursSql?.sql ?? "0";
+              const totalHoursFromFracSql = `(${rawHours} + ${hoursFromDaysFracSql})`;
+              const finalHoursBeforeNormSql = `CAST(${totalHoursFromFracSql} AS INTEGER)`;
+              const minutesFromHoursFracSql = `((${totalHoursFromFracSql} - CAST(${totalHoursFromFracSql} AS INTEGER)) * 60)`;
+              
+              // Minutes: add minutes from hours fraction, then integer part stays, fractional converts to seconds
+              const rawMins = minutesSql?.sql ?? "0";
+              const totalMinsFromFracSql = `(${rawMins} + ${minutesFromHoursFracSql})`;
+              const finalMinsBeforeNormSql = `CAST(${totalMinsFromFracSql} AS INTEGER)`;
+              const secondsFromMinsFracSql = `((${totalMinsFromFracSql} - CAST(${totalMinsFromFracSql} AS INTEGER)) * 60)`;
+              
               // Has sub-second precision
               const hasSubSecond = millisecondsExpr || microsecondsExpr || nanosecondsExpr;
               
-              // Build total nanoseconds from all time components  
+              // Build total nanoseconds from all time components (including seconds from minutes fraction)
               // seconds * 1e9 + milliseconds * 1e6 + microseconds * 1e3 + nanoseconds
               const rawSecs = secondsSql?.sql ?? "0";
+              const totalSecsWithFrac = `(${rawSecs} + ${secondsFromMinsFracSql})`;
               const msNanos = millisecondsSql ? `((${millisecondsSql.sql}) * 1000000)` : "0";
               const usNanos = microsecondsSql ? `((${microsecondsSql.sql}) * 1000)` : "0";
               const nsNanos = nanosecondsSql ? `(${nanosecondsSql.sql})` : "0";
               
               // Total nanoseconds from seconds + sub-second parts
-              const totalNanosSql = `((${rawSecs}) * 1000000000 + ${msNanos} + ${usNanos} + ${nsNanos})`;
+              const totalNanosSql = `((${totalSecsWithFrac}) * 1000000000 + ${msNanos} + ${usNanos} + ${nsNanos})`;
               
               // Extract seconds and fractional part from total nanoseconds
               // Use truncation toward zero (SQLite's default behavior)
-              const totalSecondsSql = `(${totalNanosSql} / 1000000000)`;
-              const remainingNanosSql = `(${totalNanosSql} % 1000000000)`;
-              
-              const rawMins = minutesSql?.sql ?? "0";
-              const rawHours = hoursSql?.sql ?? "0";
+              const totalSecondsSql = `CAST(${totalNanosSql} / 1000000000 AS INTEGER)`;
+              const remainingNanosSql = `CAST(${totalNanosSql} % 1000000000 AS INTEGER)`;
               
               // Normalize: carry over seconds→minutes→hours
               // For values like 70 seconds → 1 min 10 sec
               // Always normalize based on total seconds (integer division truncates toward zero)
               const extraMinutesFromSecsSql = `(${totalSecondsSql} / 60)`;
               const finalSecondsSql = `(${totalSecondsSql} % 60)`;
-              const totalMinutesSql = `(${rawMins} + ${extraMinutesFromSecsSql})`;
+              const totalMinutesSql = `(${finalMinsBeforeNormSql} + ${extraMinutesFromSecsSql})`;
               const extraHoursFromMinsSql = `(${totalMinutesSql} / 60)`;
               const finalMinutesSql = `(${totalMinutesSql} % 60)`;
-              const finalHoursSql = `(${rawHours} + ${extraHoursFromMinsSql})`;
+              const finalHoursSql = `(${finalHoursBeforeNormSql} + ${extraHoursFromMinsSql})`;
               
               // Build ISO 8601 duration string
               // Format: P[nY][nM][nW][nD][T[nH][nM][nS]]
               const parts: string[] = [];
               const timeParts: string[] = [];
               
+              // Use normalized integer values for date parts
               if (yearsExpr) {
-                parts.push(`CASE WHEN ${yearsSql!.sql} != 0 THEN ${yearsSql!.sql} || 'Y' ELSE '' END`);
+                parts.push(`CASE WHEN ${finalYearsSql} != 0 THEN ${finalYearsSql} || 'Y' ELSE '' END`);
               }
-              if (monthsExpr) {
-                parts.push(`CASE WHEN ${monthsSql!.sql} != 0 THEN ${monthsSql!.sql} || 'M' ELSE '' END`);
+              if (monthsExpr || yearsExpr) {
+                // Include months if we have months OR if we have years (which might have fractional part)
+                parts.push(`CASE WHEN ${finalMonthsSql} != 0 THEN ${finalMonthsSql} || 'M' ELSE '' END`);
               }
               if (weeksExpr) {
-                parts.push(`CASE WHEN ${weeksSql!.sql} != 0 THEN ${weeksSql!.sql} || 'W' ELSE '' END`);
+                parts.push(`CASE WHEN ${finalWeeksSql} != 0 THEN ${finalWeeksSql} || 'W' ELSE '' END`);
               }
-              if (daysExpr) {
-                parts.push(`CASE WHEN ${daysSql!.sql} != 0 THEN ${daysSql!.sql} || 'D' ELSE '' END`);
+              if (daysExpr || monthsExpr || yearsExpr) {
+                // Include days if we have days OR higher units (which might cascade fractions)
+                parts.push(`CASE WHEN ${finalDaysSql} != 0 THEN ${finalDaysSql} || 'D' ELSE '' END`);
               }
               
               // Use normalized values for time parts
-              if (hoursExpr || minutesExpr || secondsExpr) {
+              const needsTimePart = hoursExpr || minutesExpr || secondsExpr || daysExpr || monthsExpr || yearsExpr;
+              if (needsTimePart) {
                 timeParts.push(`CASE WHEN ${finalHoursSql} != 0 THEN ${finalHoursSql} || 'H' ELSE '' END`);
               }
-              if (minutesExpr || secondsExpr) {
+              if (needsTimePart) {
                 timeParts.push(`CASE WHEN ${finalMinutesSql} != 0 THEN ${finalMinutesSql} || 'M' ELSE '' END`);
               }
-              if (secondsExpr || hasSubSecond) {
+              if (needsTimePart || hasSubSecond) {
                 let secPart: string;
                 if (hasSubSecond) {
                   // Format: seconds.nanoseconds (up to 9 digits, trim trailing zeros)
@@ -13704,30 +13746,77 @@ SELECT COALESCE(json_group_array(CAST(n AS INTEGER)), json_array()) FROM r)`,
           }
           if (this.isMapPropertyValue(arg0)) {
             const map = evalMapArg(arg0);
-            const years = Number(map.years ?? 0);
-            const months = Number(map.months ?? 0);
+            const milliseconds = Number(map.milliseconds ?? 0);
+            const microseconds = Number(map.microseconds ?? 0);
+            let rawNanos = Number(map.nanoseconds ?? 0);
+            
+            // Normalize fractional values:
+            // - 0.5 years = 6 months (12 months/year)
+            // - 0.5 months = 15 days (30 days/month per Cypher spec)
+            // - 0.5 days = 12 hours (24 hours/day)
+            // - 0.5 hours = 30 minutes
+            // - 0.5 minutes = 30 seconds
+            
+            const rawYears = Number(map.years ?? 0);
+            const finalYears = Math.trunc(rawYears);
+            const monthsFromYearsFrac = (rawYears - finalYears) * 12;
+            
+            const rawMonths = Number(map.months ?? 0) + monthsFromYearsFrac;
+            const finalMonths = Math.trunc(rawMonths);
+            const daysFromMonthsFrac = (rawMonths - finalMonths) * 30; // 30 days/month per Cypher spec
+            
             const weeks = Number(map.weeks ?? 0);
-            const days = Number(map.days ?? 0);
-            const hours = Number(map.hours ?? 0);
-            const minutes = Number(map.minutes ?? 0);
-            const seconds = Number(map.seconds ?? 0);
-            const nanoseconds = Number(map.nanoseconds ?? 0);
+            const finalWeeks = Math.trunc(weeks);
+            
+            const rawDays = Number(map.days ?? 0) + daysFromMonthsFrac;
+            // Use Math.round for days to handle values like 29.5 → 30 (Cypher rounds half up)
+            const finalDays = Math.round(rawDays);
+            const hoursFromDaysFrac = (rawDays - Math.trunc(rawDays)) * 24;
+            
+            const rawHours = Number(map.hours ?? 0) + hoursFromDaysFrac;
+            let finalHours = Math.trunc(rawHours);
+            const minutesFromHoursFrac = (rawHours - finalHours) * 60;
+            
+            const rawMinutes = Number(map.minutes ?? 0) + minutesFromHoursFrac;
+            let finalMinutes = Math.trunc(rawMinutes);
+            const secondsFromMinutesFrac = (rawMinutes - finalMinutes) * 60;
+            
+            const rawSeconds = Number(map.seconds ?? 0) + secondsFromMinutesFrac;
+            
+            // Convert all to nanoseconds for normalization
+            const totalNanos = rawSeconds * 1e9 + milliseconds * 1e6 + microseconds * 1e3 + rawNanos;
+            let totalSeconds = Math.trunc(totalNanos / 1e9);
+            const remainingNanos = Math.trunc(totalNanos % 1e9);
+            
+            // Normalize seconds → minutes → hours
+            const extraMinutesFromSecs = Math.trunc(totalSeconds / 60);
+            let finalSeconds = totalSeconds % 60;
+            const totalMinutesWithCarry = finalMinutes + extraMinutesFromSecs;
+            const extraHoursFromMins = Math.trunc(totalMinutesWithCarry / 60);
+            finalMinutes = totalMinutesWithCarry % 60;
+            finalHours = finalHours + extraHoursFromMins;
             
             // Build ISO 8601 duration string
             let datePart = "";
-            if (years !== 0) datePart += `${years}Y`;
-            if (months !== 0) datePart += `${months}M`;
-            if (weeks !== 0) datePart += `${weeks}W`;
-            if (days !== 0) datePart += `${days}D`;
+            if (finalYears !== 0) datePart += `${finalYears}Y`;
+            if (finalMonths !== 0) datePart += `${finalMonths}M`;
+            if (finalWeeks !== 0) datePart += `${finalWeeks}W`;
+            if (finalDays !== 0) datePart += `${finalDays}D`;
             
             let timePart = "";
-            if (hours !== 0) timePart += `${hours}H`;
-            if (minutes !== 0) timePart += `${minutes}M`;
-            if (seconds !== 0 || nanoseconds !== 0) {
-              if (nanoseconds !== 0) {
-                timePart += `${seconds}.${String(Math.trunc(nanoseconds)).padStart(9, "0")}S`;
+            if (finalHours !== 0) timePart += `${finalHours}H`;
+            if (finalMinutes !== 0) timePart += `${finalMinutes}M`;
+            if (finalSeconds !== 0 || remainingNanos !== 0) {
+              if (remainingNanos !== 0) {
+                // Trim trailing zeros from nanoseconds
+                const nanoStr = String(Math.abs(remainingNanos)).padStart(9, "0").replace(/0+$/, "");
+                if (finalSeconds === 0 && remainingNanos < 0) {
+                  timePart += `-0.${nanoStr}S`;
+                } else {
+                  timePart += `${finalSeconds}.${nanoStr}S`;
+                }
               } else {
-                timePart += `${seconds}S`;
+                timePart += `${finalSeconds}S`;
               }
             }
             

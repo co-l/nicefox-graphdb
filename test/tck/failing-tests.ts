@@ -1712,7 +1712,7 @@ export const FAILING_TESTS = new Set<string>([
   // "expressions/temporal > Temporal7 - Compare Temporal Values|6:8",
   // "expressions/temporal > Temporal8 - Compute Arithmetic Operations on Temporal Values|1:1",
   // "expressions/temporal > Temporal8 - Compute Arithmetic Operations on Temporal Values|1:2",
-  "expressions/temporal > Temporal8 - Compute Arithmetic Operations on Temporal Values|1:3",
+  // "expressions/temporal > Temporal8 - Compute Arithmetic Operations on Temporal Values|1:3",
   "expressions/temporal > Temporal8 - Compute Arithmetic Operations on Temporal Values|2:1",
   "expressions/temporal > Temporal8 - Compute Arithmetic Operations on Temporal Values|2:2",
   "expressions/temporal > Temporal8 - Compute Arithmetic Operations on Temporal Values|2:3",
