@@ -6711,7 +6711,17 @@ SELECT COALESCE(json_group_array(CAST(n AS INTEGER)), json_array()) FROM r)`,
               };
             }
 
-            throw new Error("time() currently supports only map arguments");
+            // time('21:40:32+01:00') - parse time string with timezone
+            // The time value is stored as-is since it already includes the timezone
+            // Also supports compact formats:
+            // - HHMM+TZ (e.g., 2140+01:00)
+            // - HHMMSS+TZ (e.g., 214032+01:00)
+            const argResult = this.translateFunctionArg(arg);
+            tables.push(...argResult.tables);
+            params.push(...argResult.params);
+            // Just return the string as-is - it's already in the correct format
+            // The string includes the timezone component
+            return { sql: argResult.sql, tables, params };
           }
           // time() - current time with timezone isn't supported (needs timezone context)
           throw new Error("time() requires an argument");
