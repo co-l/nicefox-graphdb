@@ -6407,6 +6407,37 @@ SELECT COALESCE(json_group_array(CAST(n AS INTEGER)), json_array()) FROM r)`,
                 };
               }
 
+              // Date projection with ordinalDay: date({date: D, ordinalDay: N})
+              // Extract year from source and compute date from ordinal day
+              if (dateExpr && ordinalDayExpr) {
+                const dateResult = this.translateExpression(dateExpr);
+                tables.push(...dateResult.tables);
+                params.push(...dateResult.params);
+                
+                const ordinalDayResult = this.translateExpression(ordinalDayExpr);
+                tables.push(...ordinalDayResult.tables);
+                params.push(...ordinalDayResult.params);
+                
+                // Get year from source date or override
+                let yearSql: string;
+                if (yearExpr) {
+                  const yearResult = this.translateExpression(yearExpr);
+                  tables.push(...yearResult.tables);
+                  params.push(...yearResult.params);
+                  yearSql = `CAST(${yearResult.sql} AS INTEGER)`;
+                } else {
+                  yearSql = `CAST(substr(${dateResult.sql}, 1, 4) AS INTEGER)`;
+                }
+                
+                const ordinalDaySql = `CAST(${ordinalDayResult.sql} AS INTEGER)`;
+                
+                return {
+                  sql: `DATE(printf('%04d-01-01', ${yearSql}), '+' || (${ordinalDaySql} - 1) || ' days')`,
+                  tables,
+                  params,
+                };
+              }
+
               // Date projection: date({date: D, year: Y}) or date({date: D, month: M}) etc.
               // Take base date from dateExpr and override components
               if (dateExpr && (yearExpr || monthExpr || dayExpr)) {
