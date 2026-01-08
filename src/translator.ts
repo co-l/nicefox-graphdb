@@ -6661,17 +6661,105 @@ SELECT COALESCE(json_group_array(CAST(n AS INTEGER)), json_array()) FROM r)`,
 
             // localtime({hour: 10, minute: 35, second: 13, nanosecond: 645876123})
             // Also supports millisecond and microsecond which combine with nanosecond
+            // Also supports localtime({time: other, ...}) to project from another temporal
             if (arg.type === "object") {
               const props = arg.properties ?? [];
               const byKey = new Map<string, Expression>();
               for (const prop of props) byKey.set(prop.key.toLowerCase(), prop.value);
 
+              const timeExpr = byKey.get("time");
               const hourExpr = byKey.get("hour");
               const minuteExpr = byKey.get("minute");
               const secondExpr = byKey.get("second");
               const nanosecondExpr = byKey.get("nanosecond");
               const millisecondExpr = byKey.get("millisecond");
               const microsecondExpr = byKey.get("microsecond");
+
+              // Time projection: localtime({time: other, hour: H, minute: M, ...})
+              // Extract time from source temporal and apply overrides
+              if (timeExpr) {
+                const timeResult = this.translateExpression(timeExpr);
+                tables.push(...timeResult.tables);
+                params.push(...timeResult.params);
+                
+                const hasOverrides = hourExpr || minuteExpr || secondExpr || nanosecondExpr || millisecondExpr || microsecondExpr;
+                
+                if (!hasOverrides) {
+                  // Just extract time portion - find time after 'T' or use as is
+                  // For datetime like "1984-10-11T12:00:00+01:00", extract "12:00:00"
+                  // For localtime like "12:00:00.123456789", use as is
+                  return {
+                    sql: `(SELECT CASE WHEN instr(_t, 'T') > 0 THEN substr(_t, instr(_t, 'T') + 1, 8) || CASE WHEN instr(substr(_t, instr(_t, 'T') + 1), '.') > 0 THEN substr(substr(_t, instr(_t, 'T') + 1), instr(substr(_t, instr(_t, 'T') + 1), '.')) ELSE '' END ELSE _t END FROM (SELECT ${timeResult.sql} AS _t))`,
+                    tables,
+                    params,
+                  };
+                }
+                
+                // With overrides, need to extract components from source and apply overrides
+                // Time format after extraction: HH:MM:SS or HH:MM:SS.NNNNNNNNN
+                const needHour = !hourExpr;
+                const needMinute = !minuteExpr;
+                const needSecond = !secondExpr;
+                const needFrac = !nanosecondExpr && !millisecondExpr && !microsecondExpr;
+                const sourceComponentsNeeded = (needHour ? 1 : 0) + (needMinute ? 1 : 0) + (needSecond ? 1 : 0) + (needFrac ? 1 : 0);
+                
+                // Helper to compute fractional seconds SQL
+                const getFracSql = (srcRef: string) => {
+                  if (nanosecondExpr) {
+                    const r = this.translateExpression(nanosecondExpr);
+                    tables.push(...r.tables); params.push(...r.params);
+                    return `'.' || printf('%09d', CAST(${r.sql} AS INTEGER))`;
+                  } else if (millisecondExpr) {
+                    const r = this.translateExpression(millisecondExpr);
+                    tables.push(...r.tables); params.push(...r.params);
+                    return `'.' || printf('%09d', CAST(${r.sql} AS INTEGER) * 1000000)`;
+                  } else if (microsecondExpr) {
+                    const r = this.translateExpression(microsecondExpr);
+                    tables.push(...r.tables); params.push(...r.params);
+                    return `'.' || printf('%09d', CAST(${r.sql} AS INTEGER) * 1000)`;
+                  } else {
+                    // Extract fractional from source if present
+                    return `COALESCE(CASE WHEN instr(${srcRef}, '.') > 0 THEN substr(${srcRef}, instr(${srcRef}, '.')) ELSE '' END, '')`;
+                  }
+                };
+                
+                if (sourceComponentsNeeded <= 1) {
+                  // Extract time part from source 
+                  const timeExtract = `(SELECT CASE WHEN instr(_t, 'T') > 0 THEN substr(_t, instr(_t, 'T') + 1) ELSE _t END FROM (SELECT ${timeResult.sql} AS _t))`;
+                  const hourSql = hourExpr
+                    ? (() => { const r = this.translateExpression(hourExpr); tables.push(...r.tables); params.push(...r.params); return `printf('%02d', CAST(${r.sql} AS INTEGER))`; })()
+                    : `substr(${timeExtract}, 1, 2)`;
+                  const minuteSql = minuteExpr
+                    ? (() => { const r = this.translateExpression(minuteExpr); tables.push(...r.tables); params.push(...r.params); return `printf('%02d', CAST(${r.sql} AS INTEGER))`; })()
+                    : `substr(${timeExtract}, 4, 2)`;
+                  const secondSql = secondExpr
+                    ? (() => { const r = this.translateExpression(secondExpr); tables.push(...r.tables); params.push(...r.params); return `printf('%02d', CAST(${r.sql} AS INTEGER))`; })()
+                    : `substr(${timeExtract}, 7, 2)`;
+                  const fracSql = getFracSql(timeExtract);
+                  return {
+                    sql: `(${hourSql} || ':' || ${minuteSql} || ':' || ${secondSql} || ${fracSql})`,
+                    tables,
+                    params,
+                  };
+                } else {
+                  // Multiple components - use subquery
+                  const hourSql = hourExpr
+                    ? (() => { const r = this.translateExpression(hourExpr); tables.push(...r.tables); params.push(...r.params); return `printf('%02d', CAST(${r.sql} AS INTEGER))`; })()
+                    : `_t_hour`;
+                  const minuteSql = minuteExpr
+                    ? (() => { const r = this.translateExpression(minuteExpr); tables.push(...r.tables); params.push(...r.params); return `printf('%02d', CAST(${r.sql} AS INTEGER))`; })()
+                    : `_t_minute`;
+                  const secondSql = secondExpr
+                    ? (() => { const r = this.translateExpression(secondExpr); tables.push(...r.tables); params.push(...r.params); return `printf('%02d', CAST(${r.sql} AS INTEGER))`; })()
+                    : `_t_second`;
+                  const fracSql = getFracSql('_t_raw');
+                  return {
+                    sql: `(SELECT ${hourSql} || ':' || ${minuteSql} || ':' || ${secondSql} || ${fracSql} FROM (SELECT substr(_t_raw, 1, 2) AS _t_hour, substr(_t_raw, 4, 2) AS _t_minute, COALESCE(substr(_t_raw, 7, 2), '00') AS _t_second, _t_raw FROM (SELECT CASE WHEN instr(_t, 'T') > 0 THEN substr(_t, instr(_t, 'T') + 1) ELSE _t END AS _t_raw FROM (SELECT ${timeResult.sql} AS _t))))`,
+                    tables,
+                    params,
+                  };
+                }
+              }
 
               if (!hourExpr || !minuteExpr) {
                 throw new Error("localtime(map) requires hour and minute");
