@@ -6885,8 +6885,8 @@ SELECT COALESCE(json_group_array(CAST(n AS INTEGER)), json_array()) FROM r)`,
               const microsecondExpr = byKey.get("microsecond");
               const timezoneExpr = byKey.get("timezone");
 
-              if (!yearExpr || !monthExpr || !dayExpr || !hourExpr || !minuteExpr || !timezoneExpr) {
-                throw new Error("datetime(map) requires year, month, day, hour, minute, and timezone");
+              if (!yearExpr || !monthExpr || !dayExpr || !hourExpr || !minuteExpr) {
+                throw new Error("datetime(map) requires year, month, day, hour, and minute");
               }
 
               const yearResult = this.translateExpression(yearExpr);
@@ -6894,7 +6894,10 @@ SELECT COALESCE(json_group_array(CAST(n AS INTEGER)), json_array()) FROM r)`,
               const dayResult = this.translateExpression(dayExpr);
               const hourResult = this.translateExpression(hourExpr);
               const minuteResult = this.translateExpression(minuteExpr);
-              const tzResult = this.translateExpression(timezoneExpr);
+              // Default timezone to 'Z' (UTC) if not provided
+              const tzResult = timezoneExpr 
+                ? this.translateExpression(timezoneExpr)
+                : { sql: "'Z'", tables: [] as string[], params: [] as unknown[] };
               tables.push(
                 ...yearResult.tables,
                 ...monthResult.tables,
