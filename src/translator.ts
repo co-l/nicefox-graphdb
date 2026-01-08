@@ -3006,17 +3006,42 @@ export class Translator {
       // an earlier alias (e.g. `collect(x)`), we still need any upstream aliases that `x`
       // depends on (e.g. `values`) to be available when `x` is expanded.
       const preserving = new Set<string>();
+      const withAliasesStack = (this.ctx as any).withAliasesStack as Map<string, Expression>[] | undefined;
+      
       const preserveAlias = (aliasName: string) => {
-        if (!oldWithAliases.has(aliasName)) return;
-        if (newWithAliases.has(aliasName)) return;
         if (preserving.has(aliasName)) return;
         preserving.add(aliasName);
 
-        const expr = oldWithAliases.get(aliasName)!;
-        newWithAliases.set(aliasName, expr);
+        // If this alias is already in newWithAliases (e.g., passed through from WITH items),
+        // we still need to traverse its dependencies to ensure they're preserved.
+        // The expression may reference other aliases that need to be available.
+        const expr = newWithAliases.get(aliasName) ?? oldWithAliases.get(aliasName);
+        if (!expr) return;
 
+        // If not already in newWithAliases, add it
+        if (!newWithAliases.has(aliasName) && oldWithAliases.has(aliasName)) {
+          newWithAliases.set(aliasName, expr);
+        }
+
+        // Recursively preserve dependencies
         for (const dep of this.findVariablesInExpression(expr)) {
           preserveAlias(dep);
+        }
+        
+        // For self-referential aliases (e.g., WITH list + x AS list), the inner reference
+        // to `list` should resolve to an earlier definition. Look through the stack to find
+        // and preserve dependencies from ALL definitions of this alias, not just the latest.
+        if (withAliasesStack) {
+          for (let i = withAliasesStack.length - 1; i >= 0; i--) {
+            const scope = withAliasesStack[i];
+            const olderExpr = scope.get(aliasName);
+            if (olderExpr && olderExpr !== expr) {
+              // Found an older definition - preserve its dependencies too
+              for (const dep of this.findVariablesInExpression(olderExpr)) {
+                preserveAlias(dep);
+              }
+            }
+          }
         }
       };
 
@@ -7710,7 +7735,7 @@ SELECT COALESCE(json_group_array(CAST(n AS INTEGER)), json_array()) FROM r)`,
     };
   }
 
-  private isListExpression(expr: Expression): boolean {
+  private isListExpression(expr: Expression, visitedVars?: Set<string>): boolean {
     // Check if expression is likely a list/array type
     if (expr.type === "literal" && Array.isArray(expr.value)) {
       return true;
@@ -7719,8 +7744,16 @@ SELECT COALESCE(json_group_array(CAST(n AS INTEGER)), json_array()) FROM r)`,
       // Check if this variable is a WITH alias that references an array
       const withAliases = (this.ctx as any).withAliases as Map<string, Expression> | undefined;
       if (withAliases && withAliases.has(expr.variable!)) {
+        // Track visited variables to prevent infinite recursion on self-referential aliases
+        // (e.g., WITH list + x AS list)
+        const visited = visitedVars ?? new Set<string>();
+        if (visited.has(expr.variable!)) {
+          // Already visited this variable - break the cycle
+          return false;
+        }
+        visited.add(expr.variable!);
         const originalExpr = withAliases.get(expr.variable!)!;
-        return this.isListExpression(originalExpr);
+        return this.isListExpression(originalExpr, visited);
       }
     }
     // Note: we cannot assume property access is a list - it could be a number or string.
@@ -7728,7 +7761,7 @@ SELECT COALESCE(json_group_array(CAST(n AS INTEGER)), json_array()) FROM r)`,
     // in translateBinaryExpression.
     if (expr.type === "binary" && expr.operator === "+") {
       // Nested binary + could be chained list concatenation, but only if one side is definitely a list
-      return this.isListExpression(expr.left!) || this.isListExpression(expr.right!);
+      return this.isListExpression(expr.left!, visitedVars) || this.isListExpression(expr.right!, visitedVars);
     }
     if (expr.type === "function") {
       // List-returning functions like collect(), range(), etc.
@@ -7738,7 +7771,7 @@ SELECT COALESCE(json_group_array(CAST(n AS INTEGER)), json_array()) FROM r)`,
     return false;
   }
 
-  private isObjectExpression(expr: Expression): boolean {
+  private isObjectExpression(expr: Expression, visitedVars?: Set<string>): boolean {
     // Check if expression is a map/object type
     if (expr.type === "object") {
       return true;
@@ -7747,8 +7780,15 @@ SELECT COALESCE(json_group_array(CAST(n AS INTEGER)), json_array()) FROM r)`,
       // Check if this variable is a WITH alias that references an object
       const withAliases = (this.ctx as any).withAliases as Map<string, Expression> | undefined;
       if (withAliases && withAliases.has(expr.variable!)) {
+        // Track visited variables to prevent infinite recursion on self-referential aliases
+        const visited = visitedVars ?? new Set<string>();
+        if (visited.has(expr.variable!)) {
+          // Already visited this variable - break the cycle
+          return false;
+        }
+        visited.add(expr.variable!);
         const originalExpr = withAliases.get(expr.variable!)!;
-        return this.isObjectExpression(originalExpr);
+        return this.isObjectExpression(originalExpr, visited);
       }
     }
     if (expr.type === "function") {
@@ -8571,14 +8611,20 @@ SELECT COALESCE(json_group_array(CAST(n AS INTEGER)), json_array()) FROM r)`,
         if (funcName === "ABS") {
           return { sql: `ABS(${funcArgs[0]})`, params };
         }
+        if (funcName === "RAND") {
+          // SQLite's RANDOM() returns integer, convert to 0-1 range
+          return { sql: `((RANDOM() + 9223372036854775808) / 18446744073709551615.0)`, params };
+        }
         
-        return { sql: `${funcName}(${funcArgs.join(", ")})`, params };
+        // Fall back to regular translation for unknown functions
+        const result = this.translateExpression(expr);
+        return { sql: result.sql, params: result.params };
       }
       
       default:
         // Fall back to regular translation
-        const result = this.translateExpression(expr);
-        return { sql: result.sql, params: result.params };
+        const result2 = this.translateExpression(expr);
+        return { sql: result2.sql, params: result2.params };
     }
   }
 
@@ -9954,10 +10000,47 @@ SELECT COALESCE(json_group_array(CAST(n AS INTEGER)), json_array()) FROM r)`,
         return { sql: "?", tables, params };
       }
       case "variable": {
-        // WITH alias: treat as the underlying expression (same precedence as translateExpression)
+        // WITH alias: treat as the underlying expression, using lookupWithAliasExpression
+        // for proper self-reference tracking (handles WITH x + 1 AS x patterns)
         const withAliases = (this.ctx as any).withAliases as Map<string, Expression> | undefined;
         if (withAliases && withAliases.has(expr.variable!)) {
-          return this.translateExpression(withAliases.get(expr.variable!)!);
+          const aliasName = expr.variable!;
+          const selfRefDepths =
+            (((this.ctx as any)._withAliasSelfRefDepths as Map<string, number> | undefined) ??= new Map<
+              string,
+              number
+            >());
+          const currentDepth = selfRefDepths.get(aliasName);
+
+          if (currentDepth === undefined) {
+            // First time seeing this alias - look it up at depth 0
+            selfRefDepths.set(aliasName, 0);
+            try {
+              const originalExpr = this.lookupWithAliasExpression(aliasName, 0);
+              if (!originalExpr) {
+                throw new Error(`Unknown variable: ${aliasName}`);
+              }
+              return this.translateExpression(originalExpr);
+            } finally {
+              selfRefDepths.delete(aliasName);
+              if (selfRefDepths.size === 0) {
+                (this.ctx as any)._withAliasSelfRefDepths = undefined;
+              }
+            }
+          }
+
+          // Self-reference detected - look up previous definition
+          const nextDepth = currentDepth + 1;
+          const previousExpr = this.lookupWithAliasExpression(aliasName, nextDepth);
+          if (previousExpr) {
+            selfRefDepths.set(aliasName, nextDepth);
+            try {
+              return this.translateExpression(previousExpr);
+            } finally {
+              selfRefDepths.set(aliasName, currentDepth);
+            }
+          }
+          // No previous definition found - fall through to other resolution methods
         }
 
         // UNWIND variable: access the json_each value column
