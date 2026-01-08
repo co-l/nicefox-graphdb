@@ -6590,10 +6590,24 @@ SELECT COALESCE(json_group_array(CAST(n AS INTEGER)), json_array()) FROM r)`,
             }
 
             // localtime('12:34:56.123') - parse time string
+            // Also supports compact formats:
+            // - HHMM (4 digits): 2140 = 21:40:00
+            // - HHMMSS (6 digits): 214032 = 21:40:32
+            // - HHMMSSfff... (9+ digits): 214032123 = 21:40:32.123 (milliseconds appended)
             const argResult = this.translateFunctionArg(arg);
             tables.push(...argResult.tables);
             params.push(...argResult.params);
-            return { sql: `TIME(${argResult.sql})`, tables, params };
+            const timeArg = argResult.sql;
+            const sql = `(SELECT CASE
+              WHEN length(t) = 4 AND t GLOB '[0-9][0-9][0-9][0-9]'
+              THEN TIME(substr(t, 1, 2) || ':' || substr(t, 3, 2) || ':00')
+              WHEN length(t) = 6 AND t GLOB '[0-9][0-9][0-9][0-9][0-9][0-9]'
+              THEN TIME(substr(t, 1, 2) || ':' || substr(t, 3, 2) || ':' || substr(t, 5, 2))
+              WHEN length(t) >= 9 AND t GLOB '[0-9][0-9][0-9][0-9][0-9][0-9][0-9]*'
+              THEN TIME(substr(t, 1, 2) || ':' || substr(t, 3, 2) || ':' || substr(t, 5, 2) || '.' || substr(t, 7))
+              ELSE TIME(t)
+            END FROM (SELECT ${timeArg} AS t))`;
+            return { sql, tables, params };
           }
           // localtime() - current local time
           return { sql: `TIME('now')`, tables, params };
