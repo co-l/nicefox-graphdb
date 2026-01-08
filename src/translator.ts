@@ -8651,6 +8651,16 @@ SELECT COALESCE(json_group_array(CAST(n AS INTEGER)), json_array()) FROM r)`,
         // Fall through to regular translation
         const varResult = this.translateExpression(expr);
         return { sql: varResult.sql, params: varResult.params };
+      
+      case "property":
+        // Handle property access on the comprehension variable (e.g., x.a in "none(x IN list WHERE x.a = 2)")
+        if (expr.variable === compVar) {
+          // Extract property from the JSON value in the list element
+          return { sql: `json_extract(${tableAlias}.value, '$.${expr.property}')`, params };
+        }
+        // Fall through to regular translation for other variables
+        const propResult = this.translateExpression(expr);
+        return { sql: propResult.sql, params: propResult.params };
         
       case "binary": {
         const left = this.translateListComprehensionExpr(expr.left!, compVar, tableAlias);
