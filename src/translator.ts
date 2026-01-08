@@ -7047,68 +7047,125 @@ SELECT COALESCE(json_group_array(CAST(n AS INTEGER)), json_array()) FROM r)`,
                 const millisecondOverride = byKey.get("millisecond");
                 const microsecondOverride = byKey.get("microsecond");
                 
+                const hasDateOverrides = yearOverride || monthOverride || dayOverride;
+                const hasTimeOverrides = hourOverride || minuteOverride || secondOverride || nanosecondOverride || millisecondOverride || microsecondOverride;
+                
                 // Build date part: YYYY-MM-DD from source with overrides
-                // Date source is first 10 chars of dateExpr
-                const dateSource = `substr(${dateResult.sql}, 1, 10)`;
+                // When we have partial overrides, we need to extract remaining components from source
+                // Use a subquery with lateral join pattern to avoid duplicating source with params
                 let datePart: string;
                 
-                if (yearOverride || monthOverride || dayOverride) {
-                  // Extract components from source date and apply overrides
-                  const yearSql = yearOverride 
-                    ? (() => { const r = this.translateExpression(yearOverride); tables.push(...r.tables); params.push(...r.params); return `printf('%04d', CAST(${r.sql} AS INTEGER))`; })()
-                    : `substr(${dateSource}, 1, 4)`;
-                  const monthSql = monthOverride
-                    ? (() => { const r = this.translateExpression(monthOverride); tables.push(...r.tables); params.push(...r.params); return `printf('%02d', CAST(${r.sql} AS INTEGER))`; })()
-                    : `substr(${dateSource}, 6, 2)`;
-                  const daySql = dayOverride
-                    ? (() => { const r = this.translateExpression(dayOverride); tables.push(...r.tables); params.push(...r.params); return `printf('%02d', CAST(${r.sql} AS INTEGER))`; })()
-                    : `substr(${dateSource}, 9, 2)`;
-                  datePart = `(${yearSql} || '-' || ${monthSql} || '-' || ${daySql})`;
+                if (hasDateOverrides) {
+                  // Count how many components we need from the source date
+                  const needYear = !yearOverride;
+                  const needMonth = !monthOverride;
+                  const needDay = !dayOverride;
+                  const sourceComponentsNeeded = (needYear ? 1 : 0) + (needMonth ? 1 : 0) + (needDay ? 1 : 0);
+                  
+                  if (sourceComponentsNeeded === 0) {
+                    // All components are overridden, no need to reference source at all
+                    const yearSql = (() => { const r = this.translateExpression(yearOverride!); tables.push(...r.tables); params.push(...r.params); return `printf('%04d', CAST(${r.sql} AS INTEGER))`; })();
+                    const monthSql = (() => { const r = this.translateExpression(monthOverride!); tables.push(...r.tables); params.push(...r.params); return `printf('%02d', CAST(${r.sql} AS INTEGER))`; })();
+                    const daySql = (() => { const r = this.translateExpression(dayOverride!); tables.push(...r.tables); params.push(...r.params); return `printf('%02d', CAST(${r.sql} AS INTEGER))`; })();
+                    datePart = `(${yearSql} || '-' || ${monthSql} || '-' || ${daySql})`;
+                  } else if (sourceComponentsNeeded === 1) {
+                    // Only one component from source - use substr directly (no duplication issue)
+                    const dateSource = `substr(${dateResult.sql}, 1, 10)`;
+                    const yearSql = yearOverride 
+                      ? (() => { const r = this.translateExpression(yearOverride); tables.push(...r.tables); params.push(...r.params); return `printf('%04d', CAST(${r.sql} AS INTEGER))`; })()
+                      : `substr(${dateSource}, 1, 4)`;
+                    const monthSql = monthOverride
+                      ? (() => { const r = this.translateExpression(monthOverride); tables.push(...r.tables); params.push(...r.params); return `printf('%02d', CAST(${r.sql} AS INTEGER))`; })()
+                      : `substr(${dateSource}, 6, 2)`;
+                    const daySql = dayOverride
+                      ? (() => { const r = this.translateExpression(dayOverride); tables.push(...r.tables); params.push(...r.params); return `printf('%02d', CAST(${r.sql} AS INTEGER))`; })()
+                      : `substr(${dateSource}, 9, 2)`;
+                    datePart = `(${yearSql} || '-' || ${monthSql} || '-' || ${daySql})`;
+                  } else {
+                    // Multiple components needed from source - use subquery pattern
+                    // (SELECT year || '-' || month || '-' || day FROM (SELECT substr(d,1,4) as year, substr(d,6,2) as month, substr(d,9,2) as day FROM (SELECT substr(...) as d)))
+                    const yearSql = yearOverride 
+                      ? (() => { const r = this.translateExpression(yearOverride); tables.push(...r.tables); params.push(...r.params); return `printf('%04d', CAST(${r.sql} AS INTEGER))`; })()
+                      : `_d_year`;
+                    const monthSql = monthOverride
+                      ? (() => { const r = this.translateExpression(monthOverride); tables.push(...r.tables); params.push(...r.params); return `printf('%02d', CAST(${r.sql} AS INTEGER))`; })()
+                      : `_d_month`;
+                    const daySql = dayOverride
+                      ? (() => { const r = this.translateExpression(dayOverride); tables.push(...r.tables); params.push(...r.params); return `printf('%02d', CAST(${r.sql} AS INTEGER))`; })()
+                      : `_d_day`;
+                    datePart = `(SELECT ${yearSql} || '-' || ${monthSql} || '-' || ${daySql} FROM (SELECT substr(_d, 1, 4) AS _d_year, substr(_d, 6, 2) AS _d_month, substr(_d, 9, 2) AS _d_day FROM (SELECT substr(${dateResult.sql}, 1, 10) AS _d)))`;
+                  }
                 } else {
-                  datePart = dateSource;
+                  datePart = `substr(${dateResult.sql}, 1, 10)`;
                 }
                 
                 // Build time part: HH:MM:SS.NNNNNNNNN from source with overrides
-                // Time source could be just time (HH:MM:SS.NNN) or datetime (has T, take after T)
-                // For localtime it's format HH:MM:SS.NNNNNNNNN directly
-                const timeSource = timeResult.sql;
                 let timePart: string;
                 
-                if (hourOverride || minuteOverride || secondOverride || nanosecondOverride || millisecondOverride || microsecondOverride) {
-                  // Extract components from source time and apply overrides
-                  // Time format: HH:MM:SS.NNNNNNNNN
-                  const hourSql = hourOverride
-                    ? (() => { const r = this.translateExpression(hourOverride); tables.push(...r.tables); params.push(...r.params); return `printf('%02d', CAST(${r.sql} AS INTEGER))`; })()
-                    : `substr(${timeSource}, 1, 2)`;
-                  const minuteSql = minuteOverride
-                    ? (() => { const r = this.translateExpression(minuteOverride); tables.push(...r.tables); params.push(...r.params); return `printf('%02d', CAST(${r.sql} AS INTEGER))`; })()
-                    : `substr(${timeSource}, 4, 2)`;
-                  const secondSql = secondOverride
-                    ? (() => { const r = this.translateExpression(secondOverride); tables.push(...r.tables); params.push(...r.params); return `printf('%02d', CAST(${r.sql} AS INTEGER))`; })()
-                    : `substr(${timeSource}, 7, 2)`;
+                if (hasTimeOverrides) {
+                  // Count how many components we need from the source time  
+                  const needHour = !hourOverride;
+                  const needMinute = !minuteOverride;
+                  const needSecond = !secondOverride;
+                  const needFrac = !nanosecondOverride && !millisecondOverride && !microsecondOverride;
+                  const sourceComponentsNeeded = (needHour ? 1 : 0) + (needMinute ? 1 : 0) + (needSecond ? 1 : 0) + (needFrac ? 1 : 0);
                   
-                  // Handle fractional seconds - nanosecond/millisecond/microsecond overrides or take from source
-                  let fracSql: string;
-                  if (nanosecondOverride) {
-                    const r = this.translateExpression(nanosecondOverride);
-                    tables.push(...r.tables); params.push(...r.params);
-                    fracSql = `'.' || printf('%09d', CAST(${r.sql} AS INTEGER))`;
-                  } else if (millisecondOverride) {
-                    const r = this.translateExpression(millisecondOverride);
-                    tables.push(...r.tables); params.push(...r.params);
-                    fracSql = `'.' || printf('%09d', CAST(${r.sql} AS INTEGER) * 1000000)`;
-                  } else if (microsecondOverride) {
-                    const r = this.translateExpression(microsecondOverride);
-                    tables.push(...r.tables); params.push(...r.params);
-                    fracSql = `'.' || printf('%09d', CAST(${r.sql} AS INTEGER) * 1000)`;
+                  // Handle fractional part computation
+                  const getFracSql = (srcRef: string) => {
+                    if (nanosecondOverride) {
+                      const r = this.translateExpression(nanosecondOverride);
+                      tables.push(...r.tables); params.push(...r.params);
+                      return `'.' || printf('%09d', CAST(${r.sql} AS INTEGER))`;
+                    } else if (millisecondOverride) {
+                      const r = this.translateExpression(millisecondOverride);
+                      tables.push(...r.tables); params.push(...r.params);
+                      return `'.' || printf('%09d', CAST(${r.sql} AS INTEGER) * 1000000)`;
+                    } else if (microsecondOverride) {
+                      const r = this.translateExpression(microsecondOverride);
+                      tables.push(...r.tables); params.push(...r.params);
+                      return `'.' || printf('%09d', CAST(${r.sql} AS INTEGER) * 1000)`;
+                    } else {
+                      return `substr(${srcRef}, 9)`;
+                    }
+                  };
+                  
+                  if (sourceComponentsNeeded === 0) {
+                    // All components are overridden
+                    const hourSql = (() => { const r = this.translateExpression(hourOverride!); tables.push(...r.tables); params.push(...r.params); return `printf('%02d', CAST(${r.sql} AS INTEGER))`; })();
+                    const minuteSql = (() => { const r = this.translateExpression(minuteOverride!); tables.push(...r.tables); params.push(...r.params); return `printf('%02d', CAST(${r.sql} AS INTEGER))`; })();
+                    const secondSql = (() => { const r = this.translateExpression(secondOverride!); tables.push(...r.tables); params.push(...r.params); return `printf('%02d', CAST(${r.sql} AS INTEGER))`; })();
+                    const fracSql = getFracSql('');
+                    timePart = `(${hourSql} || ':' || ${minuteSql} || ':' || ${secondSql} || ${fracSql})`;
+                  } else if (sourceComponentsNeeded === 1) {
+                    // Only one component from source
+                    const timeSource = timeResult.sql;
+                    const hourSql = hourOverride
+                      ? (() => { const r = this.translateExpression(hourOverride); tables.push(...r.tables); params.push(...r.params); return `printf('%02d', CAST(${r.sql} AS INTEGER))`; })()
+                      : `substr(${timeSource}, 1, 2)`;
+                    const minuteSql = minuteOverride
+                      ? (() => { const r = this.translateExpression(minuteOverride); tables.push(...r.tables); params.push(...r.params); return `printf('%02d', CAST(${r.sql} AS INTEGER))`; })()
+                      : `substr(${timeSource}, 4, 2)`;
+                    const secondSql = secondOverride
+                      ? (() => { const r = this.translateExpression(secondOverride); tables.push(...r.tables); params.push(...r.params); return `printf('%02d', CAST(${r.sql} AS INTEGER))`; })()
+                      : `substr(${timeSource}, 7, 2)`;
+                    const fracSql = getFracSql(timeSource);
+                    timePart = `(${hourSql} || ':' || ${minuteSql} || ':' || ${secondSql} || ${fracSql})`;
                   } else {
-                    // Keep fractional part from source (position 9 onwards: .NNNNNNNNN)
-                    fracSql = `substr(${timeSource}, 9)`;
+                    // Multiple components needed - use subquery pattern
+                    const hourSql = hourOverride
+                      ? (() => { const r = this.translateExpression(hourOverride); tables.push(...r.tables); params.push(...r.params); return `printf('%02d', CAST(${r.sql} AS INTEGER))`; })()
+                      : `_t_hour`;
+                    const minuteSql = minuteOverride
+                      ? (() => { const r = this.translateExpression(minuteOverride); tables.push(...r.tables); params.push(...r.params); return `printf('%02d', CAST(${r.sql} AS INTEGER))`; })()
+                      : `_t_minute`;
+                    const secondSql = secondOverride
+                      ? (() => { const r = this.translateExpression(secondOverride); tables.push(...r.tables); params.push(...r.params); return `printf('%02d', CAST(${r.sql} AS INTEGER))`; })()
+                      : `_t_second`;
+                    const fracSql = getFracSql('_t');
+                    timePart = `(SELECT ${hourSql} || ':' || ${minuteSql} || ':' || ${secondSql} || ${fracSql} FROM (SELECT substr(_t, 1, 2) AS _t_hour, substr(_t, 4, 2) AS _t_minute, substr(_t, 7, 2) AS _t_second, _t FROM (SELECT ${timeResult.sql} AS _t)))`;
                   }
-                  
-                  timePart = `(${hourSql} || ':' || ${minuteSql} || ':' || ${secondSql} || ${fracSql})`;
                 } else {
-                  timePart = timeSource;
+                  timePart = timeResult.sql;
                 }
                 
                 return {
