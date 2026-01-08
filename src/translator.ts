@@ -8824,6 +8824,15 @@ SELECT COALESCE(json_group_array(CAST(n AS INTEGER)), json_array()) FROM r)`,
         };
       }
       
+      case "listPredicate": {
+        // Handle nested list predicates (e.g., none(x IN list WHERE none(y IN x WHERE y = 'abc')))
+        const nestedResult = this.translateNestedListPredicate(condition as unknown as Expression, compVar, tableAlias);
+        return {
+          sql: nestedResult.sql,
+          params: nestedResult.params,
+        };
+      }
+      
       default:
         throw new Error(`Unsupported condition type in list comprehension: ${condition.type}`);
     }
@@ -8935,6 +8944,83 @@ SELECT COALESCE(json_group_array(CAST(n AS INTEGER)), json_array()) FROM r)`,
     }
     
     return { sql, tables, params };
+  }
+
+  /**
+   * Translate a nested list predicate within a list comprehension context.
+   * This handles cases like: none(x IN list WHERE none(y IN x WHERE y = 'abc'))
+   * 
+   * @param expr The nested list predicate expression
+   * @param outerCompVar The comprehension variable from the outer context
+   * @param outerTableAlias The table alias from the outer context
+   */
+  private translateNestedListPredicate(
+    expr: Expression,
+    outerCompVar: string,
+    outerTableAlias: string
+  ): { sql: string; params: unknown[] } {
+    const params: unknown[] = [];
+    
+    const predicateType = expr.predicateType!;
+    const innerVariable = expr.variable!;
+    const listExpr = expr.listExpr!;
+    const filterCondition = expr.filterCondition!;
+    
+    // Generate a unique alias for the inner predicate
+    // Use the outer alias + "i" to create a nested alias (e.g., __lp__i, __lp__ii, etc.)
+    const innerAlias = outerTableAlias + "i";
+    
+    // Translate the list expression using the outer context
+    // This converts references to the outer variable (e.g., x) to the outer table alias (e.g., __lp__.value)
+    const listResult = this.translateListComprehensionExpr(listExpr, outerCompVar, outerTableAlias);
+    const listSql = listResult.sql;
+    const listParams = listResult.params;
+    
+    // Translate the filter condition with the inner variable and inner alias
+    const condResult = this.translateListComprehensionCondition(filterCondition, innerVariable, innerAlias);
+    const condParams = condResult.params;
+    
+    // Build the SQL using the same pattern as translateListPredicate but with the inner alias
+    const totalCountSql = `(SELECT COUNT(*) FROM json_each(${listSql}) AS ${innerAlias})`;
+    const matchCountSql = `(SELECT COUNT(*) FROM json_each(${listSql}) AS ${innerAlias} WHERE ${condResult.sql})`;
+    const nonMatchCountSql = `(SELECT COUNT(*) FROM json_each(${listSql}) AS ${innerAlias} WHERE NOT (${condResult.sql}))`;
+    const hasUnknownsSql = `(${totalCountSql} - ${matchCountSql} - ${nonMatchCountSql}) > 0`;
+    const matchesSql = `EXISTS (SELECT 1 FROM json_each(${listSql}) AS ${innerAlias} WHERE ${condResult.sql})`;
+    const failsSql = `EXISTS (SELECT 1 FROM json_each(${listSql}) AS ${innerAlias} WHERE NOT (${condResult.sql}))`;
+    
+    let sql: string;
+    
+    switch (predicateType) {
+      case "ALL":
+        sql = `(CASE WHEN ${failsSql} THEN 0 WHEN ${hasUnknownsSql} THEN NULL ELSE 1 END)`;
+        params.push(...listParams, ...condParams);
+        params.push(...listParams, ...listParams, ...condParams, ...listParams, ...condParams);
+        break;
+        
+      case "ANY":
+        sql = `(CASE WHEN ${matchesSql} THEN 1 WHEN ${hasUnknownsSql} THEN NULL ELSE 0 END)`;
+        params.push(...listParams, ...condParams);
+        params.push(...listParams, ...listParams, ...condParams, ...listParams, ...condParams);
+        break;
+        
+      case "NONE":
+        sql = `(CASE WHEN ${matchesSql} THEN 0 WHEN ${hasUnknownsSql} THEN NULL ELSE 1 END)`;
+        params.push(...listParams, ...condParams);
+        params.push(...listParams, ...listParams, ...condParams, ...listParams, ...condParams);
+        break;
+        
+      case "SINGLE":
+        sql = `(CASE WHEN ${matchCountSql} > 1 THEN 0 WHEN ${hasUnknownsSql} THEN NULL WHEN ${matchCountSql} = 1 THEN 1 ELSE 0 END)`;
+        params.push(...listParams, ...condParams);
+        params.push(...listParams, ...listParams, ...condParams, ...listParams, ...condParams);
+        params.push(...listParams, ...condParams);
+        break;
+        
+      default:
+        throw new Error(`Unknown list predicate type: ${predicateType}`);
+    }
+    
+    return { sql, params };
   }
 
   /**
