@@ -6948,34 +6948,48 @@ SELECT COALESCE(json_group_array(CAST(n AS INTEGER)), json_array()) FROM r)`,
 
             // localdatetime('2015-07-21T21:40:32') - parse datetime string
             // Also supports ordinal date: '2015-202T21:40:32' = 2015, day 202 at 21:40:32
+            // Also supports year-only with compact time: '2015T214032' = 2015-01-01T21:40:32
             const argResult = this.translateFunctionArg(arg);
             tables.push(...argResult.tables);
             params.push(...argResult.params);
             const dtArg = argResult.sql;
             // Parse various datetime formats and normalize to ISO format
             // Format: date part 'T' time part
-            // Date part can be: YYYY-MM-DD, YYYY-DDD (ordinal), YYYY-Www-D (week date)
+            // Date part can be: YYYY-MM-DD, YYYY-DDD (ordinal), YYYY-Www-D (week date), YYYY (year only)
+            // Time part can be: HH:MM:SS, HHMMSS (compact)
+            // Helper: normalize compact time HHMMSS to HH:MM:SS
+            const normalizeTime = (timeExpr: string) => `CASE
+              WHEN ${timeExpr} GLOB '[0-9][0-9][0-9][0-9][0-9][0-9].*'
+              THEN substr(${timeExpr}, 1, 2) || ':' || substr(${timeExpr}, 3, 2) || ':' || substr(${timeExpr}, 5, 2) || substr(${timeExpr}, 7)
+              WHEN ${timeExpr} GLOB '[0-9][0-9][0-9][0-9][0-9][0-9]'
+              THEN substr(${timeExpr}, 1, 2) || ':' || substr(${timeExpr}, 3, 2) || ':' || substr(${timeExpr}, 5, 2)
+              WHEN ${timeExpr} GLOB '[0-9][0-9][0-9][0-9]'
+              THEN substr(${timeExpr}, 1, 2) || ':' || substr(${timeExpr}, 3, 2) || ':00'
+              ELSE ${timeExpr}
+            END`;
             const sql = `(SELECT CASE
+              WHEN d GLOB '[0-9][0-9][0-9][0-9]T[0-9]*'
+              THEN substr(d, 1, 4) || '-01-01T' || (${normalizeTime("substr(d, 6)")})
               WHEN d GLOB '[0-9][0-9][0-9][0-9]-[0-9][0-9][0-9]T*'
               THEN DATE(printf('%04d-01-01', CAST(substr(d, 1, 4) AS INTEGER)),
-                        '+' || (CAST(substr(d, 6, 3) AS INTEGER) - 1) || ' days') || 'T' || substr(d, 10)
+                        '+' || (CAST(substr(d, 6, 3) AS INTEGER) - 1) || ' days') || 'T' || (${normalizeTime("substr(d, 10)")})
               WHEN d GLOB '[0-9][0-9][0-9][0-9][0-9][0-9][0-9]T*'
               THEN DATE(printf('%04d-01-01', CAST(substr(d, 1, 4) AS INTEGER)),
-                        '+' || (CAST(substr(d, 5, 3) AS INTEGER) - 1) || ' days') || 'T' || substr(d, 9)
+                        '+' || (CAST(substr(d, 5, 3) AS INTEGER) - 1) || ' days') || 'T' || (${normalizeTime("substr(d, 9)")})
               WHEN d GLOB '[0-9][0-9][0-9][0-9]-W[0-9][0-9]-[0-9]T*'
               THEN DATE(
                 julianday(printf('%04d-01-04', CAST(substr(d, 1, 4) AS INTEGER)))
                 - ((CAST(strftime('%w', printf('%04d-01-04', CAST(substr(d, 1, 4) AS INTEGER))) AS INTEGER) + 6) % 7)
                 + (CAST(substr(d, 7, 2) AS INTEGER) - 1) * 7
                 + (CAST(substr(d, 10, 1) AS INTEGER) - 1)
-              ) || 'T' || substr(d, 12)
+              ) || 'T' || (${normalizeTime("substr(d, 12)")})
               WHEN d GLOB '[0-9][0-9][0-9][0-9]W[0-9][0-9][0-9]T*'
               THEN DATE(
                 julianday(printf('%04d-01-04', CAST(substr(d, 1, 4) AS INTEGER)))
                 - ((CAST(strftime('%w', printf('%04d-01-04', CAST(substr(d, 1, 4) AS INTEGER))) AS INTEGER) + 6) % 7)
                 + (CAST(substr(d, 6, 2) AS INTEGER) - 1) * 7
                 + (CAST(substr(d, 8, 1) AS INTEGER) - 1)
-              ) || 'T' || substr(d, 10)
+              ) || 'T' || (${normalizeTime("substr(d, 10)")})
               ELSE d
             END FROM (SELECT ${dtArg} AS d))`;
             return { sql, tables, params };
