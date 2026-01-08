@@ -6471,12 +6471,24 @@ SELECT COALESCE(json_group_array(CAST(n AS INTEGER)), json_array()) FROM r)`,
               WHEN d GLOB '[0-9][0-9][0-9][0-9]-[0-9][0-9][0-9]'
               THEN DATE(printf('%04d-01-01', CAST(substr(d, 1, 4) AS INTEGER)),
                         '+' || (CAST(substr(d, 6, 3) AS INTEGER) - 1) || ' days')
+              WHEN d GLOB '[0-9][0-9][0-9][0-9]W[0-9][0-9]'
+              THEN DATE(
+                julianday(printf('%04d-01-04', CAST(substr(d, 1, 4) AS INTEGER)))
+                - ((CAST(strftime('%w', printf('%04d-01-04', CAST(substr(d, 1, 4) AS INTEGER))) AS INTEGER) + 6) % 7)
+                + (CAST(substr(d, 6, 2) AS INTEGER) - 1) * 7
+              )
               WHEN d GLOB '[0-9][0-9][0-9][0-9]W[0-9][0-9][0-9]'
               THEN DATE(
                 julianday(printf('%04d-01-04', CAST(substr(d, 1, 4) AS INTEGER)))
                 - ((CAST(strftime('%w', printf('%04d-01-04', CAST(substr(d, 1, 4) AS INTEGER))) AS INTEGER) + 6) % 7)
                 + (CAST(substr(d, 6, 2) AS INTEGER) - 1) * 7
                 + (CAST(substr(d, 8, 1) AS INTEGER) - 1)
+              )
+              WHEN d GLOB '[0-9][0-9][0-9][0-9]-W[0-9][0-9]'
+              THEN DATE(
+                julianday(printf('%04d-01-04', CAST(substr(d, 1, 4) AS INTEGER)))
+                - ((CAST(strftime('%w', printf('%04d-01-04', CAST(substr(d, 1, 4) AS INTEGER))) AS INTEGER) + 6) % 7)
+                + (CAST(substr(d, 7, 2) AS INTEGER) - 1) * 7
               )
               WHEN d GLOB '[0-9][0-9][0-9][0-9]-W[0-9][0-9]-[0-9]'
               THEN DATE(
