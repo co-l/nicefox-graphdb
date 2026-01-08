@@ -8051,10 +8051,11 @@ SELECT COALESCE(json_group_array(CAST(n AS INTEGER)), json_array()) FROM r)`,
         };
       } else {
         // <> is NOT equals: invert the result, but preserve null
+        // We need to duplicate params because cypher_equals appears twice in the SQL
         return {
           sql: `CASE WHEN cypher_equals(${leftSql}, ${rightSql}) IS NULL THEN NULL WHEN cypher_equals(${leftSql}, ${rightSql}) = 1 THEN 0 ELSE 1 END`,
           tables,
-          params,
+          params: [...params, ...params],
         };
       }
     }

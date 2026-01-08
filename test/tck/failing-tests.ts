@@ -1100,7 +1100,7 @@ export const FAILING_TESTS = new Set<string>([
   // "expressions/precedence > Precedence1 - On boolean values|8",
   // "expressions/precedence > Precedence1 - On boolean values|9",
   // "expressions/precedence > Precedence3 - On list values|6:1",
-  "expressions/precedence > Precedence3 - On list values|6:2",
+  // "expressions/precedence > Precedence3 - On list values|6:2",
   // "expressions/precedence > Precedence4 - On null value|1:1",
   // "expressions/precedence > Precedence4 - On null value|1:2",
   // "expressions/precedence > Precedence4 - On null value|1:3",
