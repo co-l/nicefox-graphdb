@@ -8861,6 +8861,43 @@ SELECT COALESCE(json_group_array(CAST(n AS INTEGER)), json_array()) FROM r)`,
           throw new Error("SLICE requires list, start, and end arguments");
         }
 
+        // Instant temporal functions: time.transaction(), datetime.statement(), etc.
+        // These return the current instant at the time of transaction/statement/realtime
+        // When called with null, they should return null
+        const instantTemporalFunctions: string[] = [
+          "TIME.TRANSACTION", "TIME.STATEMENT", "TIME.REALTIME",
+          "LOCALTIME.TRANSACTION", "LOCALTIME.STATEMENT", "LOCALTIME.REALTIME",
+          "DATE.TRANSACTION", "DATE.STATEMENT", "DATE.REALTIME",
+          "DATETIME.TRANSACTION", "DATETIME.STATEMENT", "DATETIME.REALTIME",
+          "LOCALDATETIME.TRANSACTION", "LOCALDATETIME.STATEMENT", "LOCALDATETIME.REALTIME"
+        ];
+        if (expr.functionName && instantTemporalFunctions.includes(expr.functionName)) {
+          // When passed null argument, return null
+          if (expr.args && expr.args.length > 0) {
+            const argResult = this.translateExpression(expr.args[0]);
+            tables.push(...argResult.tables);
+            // Need params twice since we use argResult.sql twice in the CASE expression
+            params.push(...argResult.params, ...argResult.params);
+            return { sql: `CASE WHEN ${argResult.sql} IS NULL THEN NULL ELSE ${argResult.sql} END`, tables, params };
+          }
+          // No argument - return current time in appropriate format
+          // For simplicity, use SQLite's current timestamp functions
+          // Note: SQLite doesn't distinguish transaction/statement/realtime, so we use 'now'
+          const baseFn = expr.functionName.split(".")[0]; // TIME, LOCALTIME, DATE, DATETIME, LOCALDATETIME
+          switch (baseFn) {
+            case "TIME":
+              return { sql: `(strftime('%H:%M:%S', 'now') || 'Z')`, tables, params };
+            case "LOCALTIME":
+              return { sql: `strftime('%H:%M:%S', 'now')`, tables, params };
+            case "DATE":
+              return { sql: `DATE('now')`, tables, params };
+            case "DATETIME":
+              return { sql: `(strftime('%Y-%m-%dT%H:%M:%S', 'now') || 'Z')`, tables, params };
+            case "LOCALDATETIME":
+              return { sql: `strftime('%Y-%m-%dT%H:%M:%S', 'now')`, tables, params };
+          }
+        }
+
         throw new Error(`Unknown function: ${expr.functionName}`);
       }
 
