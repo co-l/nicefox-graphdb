@@ -1018,6 +1018,172 @@ export class Executor {
       for (const v of this.getExpressionVariables(expr.right)) {
         vars.add(v);
       }
+    } else if (expr.type === "comparison" && expr.left && expr.right) {
+      // Handle comparison expressions like: a = b, x > y, etc.
+      for (const v of this.getExpressionVariables(expr.left)) {
+        vars.add(v);
+      }
+      for (const v of this.getExpressionVariables(expr.right)) {
+        vars.add(v);
+      }
+    } else if (expr.type === "listPredicate") {
+      // Handle ALL/ANY/NONE/SINGLE(x IN list WHERE condition)
+      // Note: expr.variable is the loop variable (x), not a referenced variable
+      if (expr.listExpr) {
+        for (const v of this.getExpressionVariables(expr.listExpr)) {
+          vars.add(v);
+        }
+      }
+      // filterCondition may reference external variables (not the loop variable)
+      if (expr.filterCondition) {
+        const filterVars = this.getWhereVariables(expr.filterCondition as WhereCondition);
+        for (const v of filterVars) {
+          // Don't include the loop variable itself
+          if (v !== expr.variable) {
+            vars.add(v);
+          }
+        }
+      }
+    } else if (expr.type === "listComprehension") {
+      // Handle [x IN list WHERE cond | mapExpr]
+      if (expr.listExpr) {
+        for (const v of this.getExpressionVariables(expr.listExpr)) {
+          vars.add(v);
+        }
+      }
+      if (expr.filterCondition) {
+        const filterVars = this.getWhereVariables(expr.filterCondition as WhereCondition);
+        for (const v of filterVars) {
+          if (v !== expr.variable) {
+            vars.add(v);
+          }
+        }
+      }
+      if (expr.mapExpr) {
+        for (const v of this.getExpressionVariables(expr.mapExpr)) {
+          if (v !== expr.variable) {
+            vars.add(v);
+          }
+        }
+      }
+    } else if (expr.type === "case") {
+      // Handle CASE WHEN ... THEN ... ELSE ... END
+      if (expr.expression) {
+        for (const v of this.getExpressionVariables(expr.expression)) {
+          vars.add(v);
+        }
+      }
+      if (expr.whens) {
+        for (const when of expr.whens) {
+          // CaseWhen has condition (WhereCondition) and result (Expression)
+          if (when.condition) {
+            const condVars = this.getWhereVariables(when.condition);
+            for (const v of condVars) {
+              vars.add(v);
+            }
+          }
+          if (when.result) {
+            for (const v of this.getExpressionVariables(when.result)) {
+              vars.add(v);
+            }
+          }
+        }
+      }
+      if (expr.elseExpr) {
+        for (const v of this.getExpressionVariables(expr.elseExpr)) {
+          vars.add(v);
+        }
+      }
+    } else if (expr.type === "unary" && expr.operand) {
+      // Handle NOT expr, -expr, etc.
+      for (const v of this.getExpressionVariables(expr.operand)) {
+        vars.add(v);
+      }
+    } else if (expr.type === "propertyAccess" && expr.object) {
+      // Handle expr.property
+      for (const v of this.getExpressionVariables(expr.object)) {
+        vars.add(v);
+      }
+    } else if (expr.type === "indexAccess") {
+      // Handle list[index]
+      if (expr.array) {
+        for (const v of this.getExpressionVariables(expr.array)) {
+          vars.add(v);
+        }
+      }
+      if (expr.index) {
+        for (const v of this.getExpressionVariables(expr.index)) {
+          vars.add(v);
+        }
+      }
+    } else if (expr.type === "object" && expr.properties) {
+      // Handle object literals {a: expr1, b: expr2}
+      for (const prop of expr.properties) {
+        if (prop.value) {
+          for (const v of this.getExpressionVariables(prop.value)) {
+            vars.add(v);
+          }
+        }
+      }
+    } else if (expr.type === "in") {
+      // Handle value IN list
+      if (expr.left) {
+        for (const v of this.getExpressionVariables(expr.left)) {
+          vars.add(v);
+        }
+      }
+      if (expr.list) {
+        for (const v of this.getExpressionVariables(expr.list)) {
+          vars.add(v);
+        }
+      }
+    }
+    
+    return vars;
+  }
+
+  /**
+   * Get all variable names referenced in a WHERE condition
+   */
+  private getWhereVariables(cond: WhereCondition): Set<string> {
+    const vars = new Set<string>();
+    
+    if (cond.left) {
+      for (const v of this.getExpressionVariables(cond.left)) {
+        vars.add(v);
+      }
+    }
+    if (cond.right) {
+      for (const v of this.getExpressionVariables(cond.right)) {
+        vars.add(v);
+      }
+    }
+    if (cond.list) {
+      for (const v of this.getExpressionVariables(cond.list)) {
+        vars.add(v);
+      }
+    }
+    if (cond.listExpr) {
+      for (const v of this.getExpressionVariables(cond.listExpr)) {
+        vars.add(v);
+      }
+    }
+    if (cond.conditions) {
+      for (const subCond of cond.conditions) {
+        for (const v of this.getWhereVariables(subCond)) {
+          vars.add(v);
+        }
+      }
+    }
+    if (cond.condition) {
+      for (const v of this.getWhereVariables(cond.condition)) {
+        vars.add(v);
+      }
+    }
+    if (cond.filterCondition) {
+      for (const v of this.getWhereVariables(cond.filterCondition)) {
+        vars.add(v);
+      }
     }
     
     return vars;
@@ -1032,6 +1198,12 @@ export class Executor {
     if (clause.type === "WITH") {
       for (const item of clause.items) {
         for (const v of this.getExpressionVariables(item.expression)) {
+          vars.add(v);
+        }
+      }
+      // Also check WHERE clause for variable references
+      if (clause.where) {
+        for (const v of this.getWhereVariables(clause.where)) {
           vars.add(v);
         }
       }
@@ -3202,6 +3374,27 @@ export class Executor {
         const right = this.evaluateExpressionInRow(expr.right!, row, params);
         return this.evaluateComparison(left, right, expr.comparisonOperator || "=");
       }
+      
+      case "unary": {
+        // Evaluate unary expressions: NOT, -, +
+        const operandValue = this.evaluateExpressionInRow(expr.operand!, row, params);
+        switch (expr.operator) {
+          case "NOT":
+            // Handle boolean negation
+            if (operandValue === null || operandValue === undefined) return null;
+            return !operandValue;
+          case "-":
+            // Handle numeric negation
+            if (typeof operandValue === "number") return -operandValue;
+            return null;
+          case "+":
+            // Unary plus (identity for numbers)
+            if (typeof operandValue === "number") return operandValue;
+            return null;
+          default:
+            return null;
+        }
+      }
         
       default:
         return null;
@@ -3625,6 +3818,47 @@ export class Executor {
         
       case "not":
         return !this.evaluateWhereInRow(condition.condition!, row, params);
+      
+      case "listPredicate": {
+        // Handle ALL/ANY/NONE/SINGLE(x IN list WHERE condition) in WHERE clause
+        const condExpr = condition as unknown as Expression;
+        const listValue = this.evaluateExpressionInRow(condExpr.listExpr!, row, params);
+        if (!Array.isArray(listValue)) return false;
+        
+        let matchCount = 0;
+        for (const item of listValue) {
+          // Create a new row with the loop variable
+          const itemRow = new Map(row);
+          if (condExpr.variable) {
+            itemRow.set(condExpr.variable, item);
+          }
+          
+          // Check filter condition
+          let passesFilter = true;
+          if (condExpr.filterCondition) {
+            const rowRecord = Object.fromEntries(itemRow);
+            passesFilter = this.evaluateWhereConditionOnRow(condExpr.filterCondition, rowRecord, params);
+          }
+          
+          if (passesFilter) {
+            matchCount++;
+          }
+        }
+        
+        // Return result based on predicate type
+        switch (condExpr.predicateType) {
+          case "ALL":
+            return matchCount === listValue.length;
+          case "ANY":
+            return matchCount > 0;
+          case "NONE":
+            return matchCount === 0;
+          case "SINGLE":
+            return matchCount === 1;
+          default:
+            return false;
+        }
+      }
         
       default:
         return true;

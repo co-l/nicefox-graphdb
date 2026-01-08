@@ -1118,20 +1118,20 @@ export const FAILING_TESTS = new Set<string>([
   // "expressions/quantifier > Quantifier10 - Single quantifier invariants|4:5",
   // "expressions/quantifier > Quantifier11 - Any quantifier invariants|1",
   // "expressions/quantifier > Quantifier11 - Any quantifier invariants|2",
-  "expressions/quantifier > Quantifier11 - Any quantifier invariants|3:1",
-  "expressions/quantifier > Quantifier11 - Any quantifier invariants|3:2",
-  "expressions/quantifier > Quantifier11 - Any quantifier invariants|3:3",
-  "expressions/quantifier > Quantifier11 - Any quantifier invariants|3:4",
-  "expressions/quantifier > Quantifier11 - Any quantifier invariants|3:5",
-  "expressions/quantifier > Quantifier11 - Any quantifier invariants|4:1",
-  "expressions/quantifier > Quantifier11 - Any quantifier invariants|4:2", // Re-added: boolean evaluation edge case
-  "expressions/quantifier > Quantifier11 - Any quantifier invariants|4:3",
+  // "expressions/quantifier > Quantifier11 - Any quantifier invariants|3:1",
+  // "expressions/quantifier > Quantifier11 - Any quantifier invariants|3:2",
+  // "expressions/quantifier > Quantifier11 - Any quantifier invariants|3:3",
+  // "expressions/quantifier > Quantifier11 - Any quantifier invariants|3:4",
+  // "expressions/quantifier > Quantifier11 - Any quantifier invariants|3:5",
+  // "expressions/quantifier > Quantifier11 - Any quantifier invariants|4:1",
+  // "expressions/quantifier > Quantifier11 - Any quantifier invariants|4:2", // Re-added: boolean evaluation edge case
+  // "expressions/quantifier > Quantifier11 - Any quantifier invariants|4:3",
   // "expressions/quantifier > Quantifier11 - Any quantifier invariants|4:4",
   // "expressions/quantifier > Quantifier11 - Any quantifier invariants|4:5",
-  "expressions/quantifier > Quantifier11 - Any quantifier invariants|5:1",
-  "expressions/quantifier > Quantifier11 - Any quantifier invariants|5:2", // Re-added: boolean evaluation edge case
-  "expressions/quantifier > Quantifier11 - Any quantifier invariants|5:3", // Re-added: boolean evaluation edge case
-  "expressions/quantifier > Quantifier11 - Any quantifier invariants|5:4", // Re-added: boolean evaluation edge case
+  // "expressions/quantifier > Quantifier11 - Any quantifier invariants|5:1",
+  // "expressions/quantifier > Quantifier11 - Any quantifier invariants|5:2", // Re-added: boolean evaluation edge case
+  // "expressions/quantifier > Quantifier11 - Any quantifier invariants|5:3", // Re-added: boolean evaluation edge case
+  // "expressions/quantifier > Quantifier11 - Any quantifier invariants|5:4", // Re-added: boolean evaluation edge case
   // "expressions/quantifier > Quantifier11 - Any quantifier invariants|5:5",
   // "expressions/quantifier > Quantifier11 - Any quantifier invariants|6:1",
   // "expressions/quantifier > Quantifier11 - Any quantifier invariants|6:2",
@@ -1144,12 +1144,12 @@ export const FAILING_TESTS = new Set<string>([
   // "expressions/quantifier > Quantifier12 - All quantifier invariants|3:2",
   // "expressions/quantifier > Quantifier12 - All quantifier invariants|3:3",
   // "expressions/quantifier > Quantifier12 - All quantifier invariants|3:4",
-  "expressions/quantifier > Quantifier12 - All quantifier invariants|3:5", // Re-added: boolean evaluation edge case
+  // "expressions/quantifier > Quantifier12 - All quantifier invariants|3:5", // Re-added: boolean evaluation edge case
   // "expressions/quantifier > Quantifier12 - All quantifier invariants|4:1",
-  "expressions/quantifier > Quantifier12 - All quantifier invariants|4:2",
-  "expressions/quantifier > Quantifier12 - All quantifier invariants|4:3",
+  // "expressions/quantifier > Quantifier12 - All quantifier invariants|4:2",
+  // "expressions/quantifier > Quantifier12 - All quantifier invariants|4:3",
   // "expressions/quantifier > Quantifier12 - All quantifier invariants|4:4",
-  "expressions/quantifier > Quantifier12 - All quantifier invariants|4:5",
+  // "expressions/quantifier > Quantifier12 - All quantifier invariants|4:5",
   // "expressions/quantifier > Quantifier12 - All quantifier invariants|5:1",
   // "expressions/quantifier > Quantifier12 - All quantifier invariants|5:2",
   // "expressions/quantifier > Quantifier12 - All quantifier invariants|5:3",
@@ -1456,15 +1456,15 @@ export const FAILING_TESTS = new Set<string>([
   // "expressions/quantifier > Quantifier8 - All quantifier interop|5:5",
   // "expressions/quantifier > Quantifier9 - None quantifier invariants|1",
   // "expressions/quantifier > Quantifier9 - None quantifier invariants|2",
-  "expressions/quantifier > Quantifier9 - None quantifier invariants|3:1",
-  "expressions/quantifier > Quantifier9 - None quantifier invariants|3:2",
-  "expressions/quantifier > Quantifier9 - None quantifier invariants|3:3",
+  // "expressions/quantifier > Quantifier9 - None quantifier invariants|3:1",
+  // "expressions/quantifier > Quantifier9 - None quantifier invariants|3:2",
+  // "expressions/quantifier > Quantifier9 - None quantifier invariants|3:3",
   // "expressions/quantifier > Quantifier9 - None quantifier invariants|3:4",
   // "expressions/quantifier > Quantifier9 - None quantifier invariants|3:5",
-  "expressions/quantifier > Quantifier9 - None quantifier invariants|4:1",
-  "expressions/quantifier > Quantifier9 - None quantifier invariants|4:2", // Re-added: boolean evaluation edge case
-  "expressions/quantifier > Quantifier9 - None quantifier invariants|4:3", // Re-added: boolean evaluation edge case
-  "expressions/quantifier > Quantifier9 - None quantifier invariants|4:4",
+  // "expressions/quantifier > Quantifier9 - None quantifier invariants|4:1",
+  // "expressions/quantifier > Quantifier9 - None quantifier invariants|4:2", // Re-added: boolean evaluation edge case
+  // "expressions/quantifier > Quantifier9 - None quantifier invariants|4:3", // Re-added: boolean evaluation edge case
+  // "expressions/quantifier > Quantifier9 - None quantifier invariants|4:4",
   // "expressions/quantifier > Quantifier9 - None quantifier invariants|4:5",
   // "expressions/quantifier > Quantifier9 - None quantifier invariants|5:1",
   // "expressions/quantifier > Quantifier9 - None quantifier invariants|5:2",
