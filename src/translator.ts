@@ -6271,7 +6271,7 @@ SELECT COALESCE(json_group_array(CAST(n AS INTEGER)), json_array()) FROM r)`,
           if (expr.args && expr.args.length > 0) {
             const arg = expr.args[0];
 
-            // date({year: 1984, month: 10, day: 11})
+            // date({year: 1984, month: 10, day: 11}) or date({year: 1817, week: 1})
             if (arg.type === "object") {
               const props = arg.properties ?? [];
               const byKey = new Map<string, Expression>();
@@ -6280,25 +6280,79 @@ SELECT COALESCE(json_group_array(CAST(n AS INTEGER)), json_array()) FROM r)`,
               const yearExpr = byKey.get("year");
               const monthExpr = byKey.get("month");
               const dayExpr = byKey.get("day");
-              if (!yearExpr || !monthExpr || !dayExpr) {
-                throw new Error("date(map) requires year, month, and day");
+              const weekExpr = byKey.get("week");
+              const dayOfWeekExpr = byKey.get("dayofweek");
+              const dateExpr = byKey.get("date");
+
+              // ISO week date: date({year: Y, week: W}) or date({year: Y, week: W, dayOfWeek: D})
+              // Or with base date: date({date: D, week: W})
+              if (weekExpr) {
+                // Determine the year source
+                let yearSql: string;
+                if (yearExpr) {
+                  const yearResult = this.translateExpression(yearExpr);
+                  tables.push(...yearResult.tables);
+                  params.push(...yearResult.params);
+                  yearSql = `CAST(${yearResult.sql} AS INTEGER)`;
+                } else if (dateExpr) {
+                  // Extract year from the date expression
+                  const dateResult = this.translateExpression(dateExpr);
+                  tables.push(...dateResult.tables);
+                  params.push(...dateResult.params);
+                  yearSql = `CAST(strftime('%Y', ${dateResult.sql}) AS INTEGER)`;
+                } else {
+                  throw new Error("date(map) with week requires year or date");
+                }
+
+                const weekResult = this.translateExpression(weekExpr);
+                tables.push(...weekResult.tables);
+                params.push(...weekResult.params);
+                const weekSql = `CAST(${weekResult.sql} AS INTEGER)`;
+
+                // Default dayOfWeek is 1 (Monday)
+                let dayOfWeekSql = "1";
+                if (dayOfWeekExpr) {
+                  const dowResult = this.translateExpression(dayOfWeekExpr);
+                  tables.push(...dowResult.tables);
+                  params.push(...dowResult.params);
+                  dayOfWeekSql = `CAST(${dowResult.sql} AS INTEGER)`;
+                }
+
+                // ISO week date formula:
+                // Monday of week W in year Y = Jan 4 of Y - (weekday of Jan 4 as 0-6 Mon-Sun) + (W-1)*7
+                // Then add (dayOfWeek - 1) for other days
+                // SQLite strftime('%w') returns 0=Sun, 1=Mon, ..., 6=Sat
+                // Convert to 0=Mon, ..., 6=Sun: (strftime('%w') + 6) % 7
+                const sql = `DATE(
+                  julianday(printf('%04d-01-04', ${yearSql}))
+                  - ((CAST(strftime('%w', printf('%04d-01-04', ${yearSql})) AS INTEGER) + 6) % 7)
+                  + (${weekSql} - 1) * 7
+                  + (${dayOfWeekSql} - 1)
+                )`;
+
+                return { sql, tables, params };
               }
 
-              const yearResult = this.translateExpression(yearExpr);
-              const monthResult = this.translateExpression(monthExpr);
-              const dayResult = this.translateExpression(dayExpr);
-              tables.push(...yearResult.tables, ...monthResult.tables, ...dayResult.tables);
-              params.push(...yearResult.params, ...monthResult.params, ...dayResult.params);
+              // Calendar date: date({year: Y, month: M, day: D})
+              if (yearExpr && monthExpr && dayExpr) {
+                const yearResult = this.translateExpression(yearExpr);
+                const monthResult = this.translateExpression(monthExpr);
+                const dayResult = this.translateExpression(dayExpr);
+                tables.push(...yearResult.tables, ...monthResult.tables, ...dayResult.tables);
+                params.push(...yearResult.params, ...monthResult.params, ...dayResult.params);
 
-              const yearSql = `CAST(${yearResult.sql} AS INTEGER)`;
-              const monthSql = `CAST(${monthResult.sql} AS INTEGER)`;
-              const daySql = `CAST(${dayResult.sql} AS INTEGER)`;
+                const yearSql = `CAST(${yearResult.sql} AS INTEGER)`;
+                const monthSql = `CAST(${monthResult.sql} AS INTEGER)`;
+                const daySql = `CAST(${dayResult.sql} AS INTEGER)`;
 
-              return {
-                sql: `DATE(printf('%04d-%02d-%02d', ${yearSql}, ${monthSql}, ${daySql}))`,
-                tables,
-                params,
-              };
+                return {
+                  sql: `DATE(printf('%04d-%02d-%02d', ${yearSql}, ${monthSql}, ${daySql}))`,
+                  tables,
+                  params,
+                };
+              }
+
+              throw new Error("date(map) requires year/month/day or year/week");
             }
 
             // date('2024-01-15') - parse date string
