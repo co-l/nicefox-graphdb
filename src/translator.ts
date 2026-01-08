@@ -6667,6 +6667,8 @@ SELECT COALESCE(json_group_array(CAST(n AS INTEGER)), json_array()) FROM r)`,
               const weekExpr = byKey.get("week");
               const dayOfWeekExpr = byKey.get("dayofweek");
               const ordinalDayExpr = byKey.get("ordinalday");
+              const quarterExpr = byKey.get("quarter");
+              const dayOfQuarterExpr = byKey.get("dayofquarter");
               const hourExpr = byKey.get("hour");
               const minuteExpr = byKey.get("minute");
               const secondExpr = byKey.get("second");
@@ -6679,13 +6681,14 @@ SELECT COALESCE(json_group_array(CAST(n AS INTEGER)), json_array()) FROM r)`,
                 throw new Error("localdatetime(map) requires year, hour, and minute");
               }
 
-              // Either month+day or week (with optional dayOfWeek) or ordinalDay
+              // Either month+day or week (with optional dayOfWeek) or ordinalDay or quarter
               const hasCalendarDate = monthExpr && dayExpr;
               const hasWeekDate = weekExpr;
               const hasOrdinalDate = ordinalDayExpr;
+              const hasQuarterDate = quarterExpr;
 
-              if (!hasCalendarDate && !hasWeekDate && !hasOrdinalDate) {
-                throw new Error("localdatetime(map) requires month/day or week or ordinalDay");
+              if (!hasCalendarDate && !hasWeekDate && !hasOrdinalDate && !hasQuarterDate) {
+                throw new Error("localdatetime(map) requires month/day or week or ordinalDay or quarter");
               }
 
               const yearResult = this.translateExpression(yearExpr);
@@ -6747,6 +6750,27 @@ SELECT COALESCE(json_group_array(CAST(n AS INTEGER)), json_array()) FROM r)`,
 
                 // Start from Jan 1 and add (ordinalDay - 1) days
                 dateSql = `DATE(printf('%04d-01-01', ${yearSql}), '+' || (${ordinalDaySql} - 1) || ' days')`;
+              } else if (hasQuarterDate) {
+                // Quarter date: localdatetime({year: Y, quarter: Q, dayOfQuarter: D, ...})
+                // Quarter 1 starts Jan 1, Q2 starts Apr 1, Q3 starts Jul 1, Q4 starts Oct 1
+                // dayOfQuarter defaults to 1
+                const quarterResult = this.translateExpression(quarterExpr!);
+                tables.push(...quarterResult.tables);
+                params.push(...quarterResult.params);
+                const quarterSql = `CAST(${quarterResult.sql} AS INTEGER)`;
+
+                let dayOfQuarterSql = "1";
+                if (dayOfQuarterExpr) {
+                  const dayOfQuarterResult = this.translateExpression(dayOfQuarterExpr);
+                  tables.push(...dayOfQuarterResult.tables);
+                  params.push(...dayOfQuarterResult.params);
+                  dayOfQuarterSql = `CAST(${dayOfQuarterResult.sql} AS INTEGER)`;
+                }
+
+                // Quarter start months: Q1=1, Q2=4, Q3=7, Q4=10
+                // Formula: (quarter - 1) * 3 + 1
+                // Start from first day of quarter, then add (dayOfQuarter - 1) days
+                dateSql = `DATE(printf('%04d-%02d-01', ${yearSql}, (${quarterSql} - 1) * 3 + 1), '+' || (${dayOfQuarterSql} - 1) || ' days')`;
               } else {
                 // Calendar date: month/day
                 const monthResult = this.translateExpression(monthExpr!);
