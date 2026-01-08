@@ -12615,13 +12615,21 @@ SELECT COALESCE(json_group_array(CAST(n AS INTEGER)), json_array()) FROM r)`,
       "dayOfQuarter": `CAST(strftime('%j', ${valueExpr}) AS INTEGER) - CASE CAST((CAST(strftime('%m', ${valueExpr}) AS INTEGER) + 2) / 3 AS INTEGER) WHEN 1 THEN 0 WHEN 2 THEN 90 + (CASE WHEN strftime('%Y', ${valueExpr}) % 4 = 0 AND (strftime('%Y', ${valueExpr}) % 100 != 0 OR strftime('%Y', ${valueExpr}) % 400 = 0) THEN 1 ELSE 0 END) WHEN 3 THEN 181 + (CASE WHEN strftime('%Y', ${valueExpr}) % 4 = 0 AND (strftime('%Y', ${valueExpr}) % 100 != 0 OR strftime('%Y', ${valueExpr}) % 400 = 0) THEN 1 ELSE 0 END) ELSE 273 + (CASE WHEN strftime('%Y', ${valueExpr}) % 4 = 0 AND (strftime('%Y', ${valueExpr}) % 100 != 0 OR strftime('%Y', ${valueExpr}) % 400 = 0) THEN 1 ELSE 0 END) END`,
       // Time accessors (for time/datetime/localtime/localdatetime)
       // Time format: HH:MM:SS.NNNNNNNNN or datetime: ...THH:MM:SS.NNNNNNNNN
-      "hour": `CAST(strftime('%H', ${valueExpr}) AS INTEGER)`,
-      "minute": `CAST(strftime('%M', ${valueExpr}) AS INTEGER)`,
-      "second": `CAST(strftime('%S', ${valueExpr}) AS INTEGER)`,
+      // Use CASE to detect if there's a 'T' separator (datetime format) vs pure time format
+      // Extract directly via substr to avoid strftime's UTC conversion when timezone is present
+      "hour": `CAST(CASE WHEN instr(${valueExpr}, 'T') > 0 THEN substr(${valueExpr}, instr(${valueExpr}, 'T') + 1, 2) ELSE substr(${valueExpr}, 1, 2) END AS INTEGER)`,
+      "minute": `CAST(CASE WHEN instr(${valueExpr}, 'T') > 0 THEN substr(${valueExpr}, instr(${valueExpr}, 'T') + 4, 2) ELSE substr(${valueExpr}, 4, 2) END AS INTEGER)`,
+      "second": `CAST(CASE WHEN instr(${valueExpr}, 'T') > 0 THEN substr(${valueExpr}, instr(${valueExpr}, 'T') + 7, 2) ELSE substr(${valueExpr}, 7, 2) END AS INTEGER)`,
       // Fractional seconds - extract nanoseconds from ISO format
       "nanosecond": `CAST(COALESCE(substr(${valueExpr}, instr(${valueExpr}, '.') + 1, 9), '0') AS INTEGER)`,
       "millisecond": `CAST(COALESCE(substr(${valueExpr}, instr(${valueExpr}, '.') + 1, 3), '0') AS INTEGER)`,
       "microsecond": `CAST(COALESCE(substr(${valueExpr}, instr(${valueExpr}, '.') + 1, 6), '0') AS INTEGER)`,
+      // Timezone accessors - extract from the end of the string (e.g., +01:00, -05:30, Z)
+      // Find the timezone part by looking for +, -, or Z after the time portion
+      "timezone": `(SELECT CASE WHEN _tz = '' THEN NULL ELSE _tz END FROM (SELECT CASE WHEN instr(substr(${valueExpr}, -6), '+') > 0 THEN substr(${valueExpr}, -6) WHEN instr(substr(${valueExpr}, -6), '-') > 0 THEN substr(${valueExpr}, -6) WHEN substr(${valueExpr}, -1) = 'Z' THEN 'Z' ELSE '' END AS _tz))`,
+      "offset": `(SELECT CASE WHEN _tz = '' THEN NULL ELSE _tz END FROM (SELECT CASE WHEN instr(substr(${valueExpr}, -6), '+') > 0 THEN substr(${valueExpr}, -6) WHEN instr(substr(${valueExpr}, -6), '-') > 0 THEN substr(${valueExpr}, -6) WHEN substr(${valueExpr}, -1) = 'Z' THEN '+00:00' ELSE '' END AS _tz))`,
+      "offsetMinutes": `(SELECT CASE WHEN _tz = '' THEN NULL ELSE CAST(substr(_tz, 1, 1) || '1' AS INTEGER) * (CAST(substr(_tz, 2, 2) AS INTEGER) * 60 + CAST(substr(_tz, 5, 2) AS INTEGER)) END FROM (SELECT CASE WHEN instr(substr(${valueExpr}, -6), '+') > 0 THEN substr(${valueExpr}, -6) WHEN instr(substr(${valueExpr}, -6), '-') > 0 THEN substr(${valueExpr}, -6) WHEN substr(${valueExpr}, -1) = 'Z' THEN '+00:00' ELSE '' END AS _tz))`,
+      "offsetSeconds": `(SELECT CASE WHEN _tz = '' THEN NULL ELSE CAST(substr(_tz, 1, 1) || '1' AS INTEGER) * (CAST(substr(_tz, 2, 2) AS INTEGER) * 3600 + CAST(substr(_tz, 5, 2) AS INTEGER) * 60) END FROM (SELECT CASE WHEN instr(substr(${valueExpr}, -6), '+') > 0 THEN substr(${valueExpr}, -6) WHEN instr(substr(${valueExpr}, -6), '-') > 0 THEN substr(${valueExpr}, -6) WHEN substr(${valueExpr}, -1) = 'Z' THEN '+00:00' ELSE '' END AS _tz))`,
     };
 
     return temporalAccessors[propertyName] ?? null;
