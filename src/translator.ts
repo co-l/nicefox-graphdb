@@ -12649,7 +12649,52 @@ SELECT COALESCE(json_group_array(CAST(n AS INTEGER)), json_array()) FROM r)`,
       "epochMillis": `(CAST((julianday(${cleanExpr}) - 2440587.5) * 86400 AS INTEGER) * 1000 + CAST(COALESCE(substr(${valueExpr}, instr(${valueExpr}, '.') + 1, 3), '0') AS INTEGER))`,
     };
 
-    return temporalAccessors[propertyName] ?? null;
+    // Duration accessors - parse ISO 8601 duration format: P1Y4M10DT1H1M1.111111111S
+    // P = period marker, Y = years, M = months (before T), D = days
+    // T = time marker, H = hours, M = minutes (after T), S = seconds (may have fractional part)
+    // Helper expressions for extracting duration components:
+    // - Years: between P and Y
+    // - Months: between Y (or P) and M, before T
+    // - Days: between M (or Y or P) and D
+    // - Hours: between T and H
+    // - Minutes: between H (or T) and M (after T)
+    // - Seconds: between M (after T, or H) and S (may have decimal point)
+    const durationAccessors: Record<string, string> = {
+      // Basic component accessors
+      "years": `CAST(COALESCE((SELECT CASE WHEN instr(${valueExpr}, 'Y') > 0 THEN substr(${valueExpr}, 2, instr(${valueExpr}, 'Y') - 2) ELSE '0' END), '0') AS INTEGER)`,
+      // months = years * 12 + months-component
+      "months": `(CAST(COALESCE((SELECT CASE WHEN instr(${valueExpr}, 'Y') > 0 THEN substr(${valueExpr}, 2, instr(${valueExpr}, 'Y') - 2) ELSE '0' END), '0') AS INTEGER) * 12 + CAST(COALESCE((SELECT CASE WHEN instr(${valueExpr}, 'M') > 0 AND (instr(${valueExpr}, 'T') = 0 OR instr(${valueExpr}, 'M') < instr(${valueExpr}, 'T')) THEN substr(${valueExpr}, COALESCE(NULLIF(instr(${valueExpr}, 'Y'), 0), 1) + 1, instr(${valueExpr}, 'M') - COALESCE(NULLIF(instr(${valueExpr}, 'Y'), 0), 1) - 1) ELSE '0' END), '0') AS INTEGER))`,
+      // quarters = months / 3
+      "quarters": `((CAST(COALESCE((SELECT CASE WHEN instr(${valueExpr}, 'Y') > 0 THEN substr(${valueExpr}, 2, instr(${valueExpr}, 'Y') - 2) ELSE '0' END), '0') AS INTEGER) * 12 + CAST(COALESCE((SELECT CASE WHEN instr(${valueExpr}, 'M') > 0 AND (instr(${valueExpr}, 'T') = 0 OR instr(${valueExpr}, 'M') < instr(${valueExpr}, 'T')) THEN substr(${valueExpr}, COALESCE(NULLIF(instr(${valueExpr}, 'Y'), 0), 1) + 1, instr(${valueExpr}, 'M') - COALESCE(NULLIF(instr(${valueExpr}, 'Y'), 0), 1) - 1) ELSE '0' END), '0') AS INTEGER)) / 3)`,
+      // weeks = days / 7
+      "weeks": `(CAST(COALESCE((SELECT CASE WHEN instr(${valueExpr}, 'D') > 0 THEN substr(${valueExpr}, CASE WHEN instr(${valueExpr}, 'M') > 0 AND (instr(${valueExpr}, 'T') = 0 OR instr(${valueExpr}, 'M') < instr(${valueExpr}, 'T')) THEN instr(${valueExpr}, 'M') + 1 WHEN instr(${valueExpr}, 'Y') > 0 THEN instr(${valueExpr}, 'Y') + 1 ELSE 2 END, instr(${valueExpr}, 'D') - CASE WHEN instr(${valueExpr}, 'M') > 0 AND (instr(${valueExpr}, 'T') = 0 OR instr(${valueExpr}, 'M') < instr(${valueExpr}, 'T')) THEN instr(${valueExpr}, 'M') + 1 WHEN instr(${valueExpr}, 'Y') > 0 THEN instr(${valueExpr}, 'Y') + 1 ELSE 2 END) ELSE '0' END), '0') AS INTEGER) / 7)`,
+      // days = days component (not total)
+      "days": `CAST(COALESCE((SELECT CASE WHEN instr(${valueExpr}, 'D') > 0 THEN substr(${valueExpr}, CASE WHEN instr(${valueExpr}, 'M') > 0 AND (instr(${valueExpr}, 'T') = 0 OR instr(${valueExpr}, 'M') < instr(${valueExpr}, 'T')) THEN instr(${valueExpr}, 'M') + 1 WHEN instr(${valueExpr}, 'Y') > 0 THEN instr(${valueExpr}, 'Y') + 1 ELSE 2 END, instr(${valueExpr}, 'D') - CASE WHEN instr(${valueExpr}, 'M') > 0 AND (instr(${valueExpr}, 'T') = 0 OR instr(${valueExpr}, 'M') < instr(${valueExpr}, 'T')) THEN instr(${valueExpr}, 'M') + 1 WHEN instr(${valueExpr}, 'Y') > 0 THEN instr(${valueExpr}, 'Y') + 1 ELSE 2 END) ELSE '0' END), '0') AS INTEGER)`,
+      // hours component
+      "hours": `CAST(COALESCE((SELECT CASE WHEN instr(${valueExpr}, 'H') > 0 THEN substr(${valueExpr}, instr(${valueExpr}, 'T') + 1, instr(${valueExpr}, 'H') - instr(${valueExpr}, 'T') - 1) ELSE '0' END), '0') AS INTEGER)`,
+      // minutes = hours * 60 + minutes-component  
+      "minutes": `(CAST(COALESCE((SELECT CASE WHEN instr(${valueExpr}, 'H') > 0 THEN substr(${valueExpr}, instr(${valueExpr}, 'T') + 1, instr(${valueExpr}, 'H') - instr(${valueExpr}, 'T') - 1) ELSE '0' END), '0') AS INTEGER) * 60 + CAST(COALESCE((SELECT CASE WHEN instr(substr(${valueExpr}, instr(${valueExpr}, 'T')), 'M') > 0 THEN substr(${valueExpr}, COALESCE(NULLIF(instr(${valueExpr}, 'H'), 0), instr(${valueExpr}, 'T')) + 1, instr(substr(${valueExpr}, instr(${valueExpr}, 'T')), 'M') + instr(${valueExpr}, 'T') - 1 - COALESCE(NULLIF(instr(${valueExpr}, 'H'), 0), instr(${valueExpr}, 'T')) - 1) ELSE '0' END), '0') AS INTEGER))`,
+      // seconds = hours * 3600 + minutes * 60 + seconds (integer part only)
+      "seconds": `(CAST(COALESCE((SELECT CASE WHEN instr(${valueExpr}, 'H') > 0 THEN substr(${valueExpr}, instr(${valueExpr}, 'T') + 1, instr(${valueExpr}, 'H') - instr(${valueExpr}, 'T') - 1) ELSE '0' END), '0') AS INTEGER) * 3600 + CAST(COALESCE((SELECT CASE WHEN instr(substr(${valueExpr}, instr(${valueExpr}, 'T')), 'M') > 0 THEN substr(${valueExpr}, COALESCE(NULLIF(instr(${valueExpr}, 'H'), 0), instr(${valueExpr}, 'T')) + 1, instr(substr(${valueExpr}, instr(${valueExpr}, 'T')), 'M') + instr(${valueExpr}, 'T') - 1 - COALESCE(NULLIF(instr(${valueExpr}, 'H'), 0), instr(${valueExpr}, 'T')) - 1) ELSE '0' END), '0') AS INTEGER) * 60 + CAST(COALESCE((SELECT CASE WHEN instr(${valueExpr}, 'S') > 0 THEN substr(${valueExpr}, COALESCE(NULLIF(CASE WHEN instr(substr(${valueExpr}, instr(${valueExpr}, 'T')), 'M') > 0 THEN instr(substr(${valueExpr}, instr(${valueExpr}, 'T')), 'M') + instr(${valueExpr}, 'T') - 1 ELSE NULL END, 0), NULLIF(instr(${valueExpr}, 'H'), 0), instr(${valueExpr}, 'T')) + 1, instr(${valueExpr}, CASE WHEN instr(${valueExpr}, '.') > 0 THEN '.' ELSE 'S' END) - COALESCE(NULLIF(CASE WHEN instr(substr(${valueExpr}, instr(${valueExpr}, 'T')), 'M') > 0 THEN instr(substr(${valueExpr}, instr(${valueExpr}, 'T')), 'M') + instr(${valueExpr}, 'T') - 1 ELSE NULL END, 0), NULLIF(instr(${valueExpr}, 'H'), 0), instr(${valueExpr}, 'T')) - 1) ELSE '0' END), '0') AS INTEGER))`,
+      // milliseconds = total seconds * 1000 + millis from fractional
+      "milliseconds": `(CAST(COALESCE((SELECT CASE WHEN instr(${valueExpr}, 'H') > 0 THEN substr(${valueExpr}, instr(${valueExpr}, 'T') + 1, instr(${valueExpr}, 'H') - instr(${valueExpr}, 'T') - 1) ELSE '0' END), '0') AS INTEGER) * 3600000 + CAST(COALESCE((SELECT CASE WHEN instr(substr(${valueExpr}, instr(${valueExpr}, 'T')), 'M') > 0 THEN substr(${valueExpr}, COALESCE(NULLIF(instr(${valueExpr}, 'H'), 0), instr(${valueExpr}, 'T')) + 1, instr(substr(${valueExpr}, instr(${valueExpr}, 'T')), 'M') + instr(${valueExpr}, 'T') - 1 - COALESCE(NULLIF(instr(${valueExpr}, 'H'), 0), instr(${valueExpr}, 'T')) - 1) ELSE '0' END), '0') AS INTEGER) * 60000 + CAST(COALESCE((SELECT CASE WHEN instr(${valueExpr}, 'S') > 0 THEN substr(${valueExpr}, COALESCE(NULLIF(CASE WHEN instr(substr(${valueExpr}, instr(${valueExpr}, 'T')), 'M') > 0 THEN instr(substr(${valueExpr}, instr(${valueExpr}, 'T')), 'M') + instr(${valueExpr}, 'T') - 1 ELSE NULL END, 0), NULLIF(instr(${valueExpr}, 'H'), 0), instr(${valueExpr}, 'T')) + 1, instr(${valueExpr}, CASE WHEN instr(${valueExpr}, '.') > 0 THEN '.' ELSE 'S' END) - COALESCE(NULLIF(CASE WHEN instr(substr(${valueExpr}, instr(${valueExpr}, 'T')), 'M') > 0 THEN instr(substr(${valueExpr}, instr(${valueExpr}, 'T')), 'M') + instr(${valueExpr}, 'T') - 1 ELSE NULL END, 0), NULLIF(instr(${valueExpr}, 'H'), 0), instr(${valueExpr}, 'T')) - 1) ELSE '0' END), '0') AS INTEGER) * 1000 + CAST(COALESCE(NULLIF(substr(${valueExpr}, instr(${valueExpr}, '.') + 1, 3), ''), '0') AS INTEGER))`,
+      // microseconds = total seconds * 1000000 + micros from fractional
+      "microseconds": `(CAST(COALESCE((SELECT CASE WHEN instr(${valueExpr}, 'H') > 0 THEN substr(${valueExpr}, instr(${valueExpr}, 'T') + 1, instr(${valueExpr}, 'H') - instr(${valueExpr}, 'T') - 1) ELSE '0' END), '0') AS INTEGER) * 3600000000 + CAST(COALESCE((SELECT CASE WHEN instr(substr(${valueExpr}, instr(${valueExpr}, 'T')), 'M') > 0 THEN substr(${valueExpr}, COALESCE(NULLIF(instr(${valueExpr}, 'H'), 0), instr(${valueExpr}, 'T')) + 1, instr(substr(${valueExpr}, instr(${valueExpr}, 'T')), 'M') + instr(${valueExpr}, 'T') - 1 - COALESCE(NULLIF(instr(${valueExpr}, 'H'), 0), instr(${valueExpr}, 'T')) - 1) ELSE '0' END), '0') AS INTEGER) * 60000000 + CAST(COALESCE((SELECT CASE WHEN instr(${valueExpr}, 'S') > 0 THEN substr(${valueExpr}, COALESCE(NULLIF(CASE WHEN instr(substr(${valueExpr}, instr(${valueExpr}, 'T')), 'M') > 0 THEN instr(substr(${valueExpr}, instr(${valueExpr}, 'T')), 'M') + instr(${valueExpr}, 'T') - 1 ELSE NULL END, 0), NULLIF(instr(${valueExpr}, 'H'), 0), instr(${valueExpr}, 'T')) + 1, instr(${valueExpr}, CASE WHEN instr(${valueExpr}, '.') > 0 THEN '.' ELSE 'S' END) - COALESCE(NULLIF(CASE WHEN instr(substr(${valueExpr}, instr(${valueExpr}, 'T')), 'M') > 0 THEN instr(substr(${valueExpr}, instr(${valueExpr}, 'T')), 'M') + instr(${valueExpr}, 'T') - 1 ELSE NULL END, 0), NULLIF(instr(${valueExpr}, 'H'), 0), instr(${valueExpr}, 'T')) - 1) ELSE '0' END), '0') AS INTEGER) * 1000000 + CAST(COALESCE(NULLIF(substr(${valueExpr}, instr(${valueExpr}, '.') + 1, 6), ''), '0') AS INTEGER))`,
+      // nanoseconds = total seconds * 1000000000 + nanos from fractional
+      "nanoseconds": `(CAST(COALESCE((SELECT CASE WHEN instr(${valueExpr}, 'H') > 0 THEN substr(${valueExpr}, instr(${valueExpr}, 'T') + 1, instr(${valueExpr}, 'H') - instr(${valueExpr}, 'T') - 1) ELSE '0' END), '0') AS INTEGER) * 3600000000000 + CAST(COALESCE((SELECT CASE WHEN instr(substr(${valueExpr}, instr(${valueExpr}, 'T')), 'M') > 0 THEN substr(${valueExpr}, COALESCE(NULLIF(instr(${valueExpr}, 'H'), 0), instr(${valueExpr}, 'T')) + 1, instr(substr(${valueExpr}, instr(${valueExpr}, 'T')), 'M') + instr(${valueExpr}, 'T') - 1 - COALESCE(NULLIF(instr(${valueExpr}, 'H'), 0), instr(${valueExpr}, 'T')) - 1) ELSE '0' END), '0') AS INTEGER) * 60000000000 + CAST(COALESCE((SELECT CASE WHEN instr(${valueExpr}, 'S') > 0 THEN substr(${valueExpr}, COALESCE(NULLIF(CASE WHEN instr(substr(${valueExpr}, instr(${valueExpr}, 'T')), 'M') > 0 THEN instr(substr(${valueExpr}, instr(${valueExpr}, 'T')), 'M') + instr(${valueExpr}, 'T') - 1 ELSE NULL END, 0), NULLIF(instr(${valueExpr}, 'H'), 0), instr(${valueExpr}, 'T')) + 1, instr(${valueExpr}, CASE WHEN instr(${valueExpr}, '.') > 0 THEN '.' ELSE 'S' END) - COALESCE(NULLIF(CASE WHEN instr(substr(${valueExpr}, instr(${valueExpr}, 'T')), 'M') > 0 THEN instr(substr(${valueExpr}, instr(${valueExpr}, 'T')), 'M') + instr(${valueExpr}, 'T') - 1 ELSE NULL END, 0), NULLIF(instr(${valueExpr}, 'H'), 0), instr(${valueExpr}, 'T')) - 1) ELSE '0' END), '0') AS INTEGER) * 1000000000 + CAST(COALESCE(NULLIF(substr(${valueExpr}, instr(${valueExpr}, '.') + 1, 9), ''), '0') AS INTEGER))`,
+      // Component-of accessors (just the component, not cumulative)
+      "quartersOfYear": `((CAST(COALESCE((SELECT CASE WHEN instr(${valueExpr}, 'M') > 0 AND (instr(${valueExpr}, 'T') = 0 OR instr(${valueExpr}, 'M') < instr(${valueExpr}, 'T')) THEN substr(${valueExpr}, COALESCE(NULLIF(instr(${valueExpr}, 'Y'), 0), 1) + 1, instr(${valueExpr}, 'M') - COALESCE(NULLIF(instr(${valueExpr}, 'Y'), 0), 1) - 1) ELSE '0' END), '0') AS INTEGER)) / 3)`,
+      "monthsOfQuarter": `((CAST(COALESCE((SELECT CASE WHEN instr(${valueExpr}, 'M') > 0 AND (instr(${valueExpr}, 'T') = 0 OR instr(${valueExpr}, 'M') < instr(${valueExpr}, 'T')) THEN substr(${valueExpr}, COALESCE(NULLIF(instr(${valueExpr}, 'Y'), 0), 1) + 1, instr(${valueExpr}, 'M') - COALESCE(NULLIF(instr(${valueExpr}, 'Y'), 0), 1) - 1) ELSE '0' END), '0') AS INTEGER)) % 3)`,
+      "monthsOfYear": `CAST(COALESCE((SELECT CASE WHEN instr(${valueExpr}, 'M') > 0 AND (instr(${valueExpr}, 'T') = 0 OR instr(${valueExpr}, 'M') < instr(${valueExpr}, 'T')) THEN substr(${valueExpr}, COALESCE(NULLIF(instr(${valueExpr}, 'Y'), 0), 1) + 1, instr(${valueExpr}, 'M') - COALESCE(NULLIF(instr(${valueExpr}, 'Y'), 0), 1) - 1) ELSE '0' END), '0') AS INTEGER)`,
+      "daysOfWeek": `(CAST(COALESCE((SELECT CASE WHEN instr(${valueExpr}, 'D') > 0 THEN substr(${valueExpr}, CASE WHEN instr(${valueExpr}, 'M') > 0 AND (instr(${valueExpr}, 'T') = 0 OR instr(${valueExpr}, 'M') < instr(${valueExpr}, 'T')) THEN instr(${valueExpr}, 'M') + 1 WHEN instr(${valueExpr}, 'Y') > 0 THEN instr(${valueExpr}, 'Y') + 1 ELSE 2 END, instr(${valueExpr}, 'D') - CASE WHEN instr(${valueExpr}, 'M') > 0 AND (instr(${valueExpr}, 'T') = 0 OR instr(${valueExpr}, 'M') < instr(${valueExpr}, 'T')) THEN instr(${valueExpr}, 'M') + 1 WHEN instr(${valueExpr}, 'Y') > 0 THEN instr(${valueExpr}, 'Y') + 1 ELSE 2 END) ELSE '0' END), '0') AS INTEGER) % 7)`,
+      "minutesOfHour": `CAST(COALESCE((SELECT CASE WHEN instr(substr(${valueExpr}, instr(${valueExpr}, 'T')), 'M') > 0 THEN substr(${valueExpr}, COALESCE(NULLIF(instr(${valueExpr}, 'H'), 0), instr(${valueExpr}, 'T')) + 1, instr(substr(${valueExpr}, instr(${valueExpr}, 'T')), 'M') + instr(${valueExpr}, 'T') - 1 - COALESCE(NULLIF(instr(${valueExpr}, 'H'), 0), instr(${valueExpr}, 'T')) - 1) ELSE '0' END), '0') AS INTEGER)`,
+      "secondsOfMinute": `CAST(COALESCE((SELECT CASE WHEN instr(${valueExpr}, 'S') > 0 THEN substr(${valueExpr}, COALESCE(NULLIF(CASE WHEN instr(substr(${valueExpr}, instr(${valueExpr}, 'T')), 'M') > 0 THEN instr(substr(${valueExpr}, instr(${valueExpr}, 'T')), 'M') + instr(${valueExpr}, 'T') - 1 ELSE NULL END, 0), NULLIF(instr(${valueExpr}, 'H'), 0), instr(${valueExpr}, 'T')) + 1, instr(${valueExpr}, CASE WHEN instr(${valueExpr}, '.') > 0 THEN '.' ELSE 'S' END) - COALESCE(NULLIF(CASE WHEN instr(substr(${valueExpr}, instr(${valueExpr}, 'T')), 'M') > 0 THEN instr(substr(${valueExpr}, instr(${valueExpr}, 'T')), 'M') + instr(${valueExpr}, 'T') - 1 ELSE NULL END, 0), NULLIF(instr(${valueExpr}, 'H'), 0), instr(${valueExpr}, 'T')) - 1) ELSE '0' END), '0') AS INTEGER)`,
+      "millisecondsOfSecond": `CAST(COALESCE(NULLIF(substr(${valueExpr}, instr(${valueExpr}, '.') + 1, 3), ''), '0') AS INTEGER)`,
+      "microsecondsOfSecond": `CAST(COALESCE(NULLIF(substr(${valueExpr}, instr(${valueExpr}, '.') + 1, 6), ''), '0') AS INTEGER)`,
+      "nanosecondsOfSecond": `CAST(COALESCE(NULLIF(substr(${valueExpr}, instr(${valueExpr}, '.') + 1, 9), ''), '0') AS INTEGER)`,
+    };
+
+    return temporalAccessors[propertyName] ?? durationAccessors[propertyName] ?? null;
   }
 
   private isRelationshipPattern(pattern: NodePattern | RelationshipPattern): pattern is RelationshipPattern {
@@ -13311,6 +13356,53 @@ SELECT COALESCE(json_group_array(CAST(n AS INTEGER)), json_array()) FROM r)`,
           }
           const arg0 = this.evaluatePropertyValue(args[0]);
           return String(arg0);
+        }
+        case "DURATION": {
+          // duration(string) parses an ISO 8601 duration string
+          // duration(map) builds duration from components
+          // Format: P[nY][nM][nW][nD][T[nH][nM][n.nS]]
+          if (args.length === 0) throw new Error("duration() requires an argument");
+          const arg0 = args[0];
+          if (arg0 !== null && typeof arg0 === "object" && !Array.isArray(arg0) && (arg0 as any).type === "literal" && (arg0 as any).value === null) {
+            return null;
+          }
+          if (this.isMapPropertyValue(arg0)) {
+            const map = evalMapArg(arg0);
+            const years = Number(map.years ?? 0);
+            const months = Number(map.months ?? 0);
+            const weeks = Number(map.weeks ?? 0);
+            const days = Number(map.days ?? 0);
+            const hours = Number(map.hours ?? 0);
+            const minutes = Number(map.minutes ?? 0);
+            const seconds = Number(map.seconds ?? 0);
+            const nanoseconds = Number(map.nanoseconds ?? 0);
+            
+            // Build ISO 8601 duration string
+            let datePart = "";
+            if (years !== 0) datePart += `${years}Y`;
+            if (months !== 0) datePart += `${months}M`;
+            if (weeks !== 0) datePart += `${weeks}W`;
+            if (days !== 0) datePart += `${days}D`;
+            
+            let timePart = "";
+            if (hours !== 0) timePart += `${hours}H`;
+            if (minutes !== 0) timePart += `${minutes}M`;
+            if (seconds !== 0 || nanoseconds !== 0) {
+              if (nanoseconds !== 0) {
+                timePart += `${seconds}.${String(Math.trunc(nanoseconds)).padStart(9, "0")}S`;
+              } else {
+                timePart += `${seconds}S`;
+              }
+            }
+            
+            if (timePart !== "") {
+              return `P${datePart}T${timePart}`;
+            }
+            return `P${datePart || "T0S"}`;
+          }
+          // If string literal, return as-is
+          const evald = this.evaluatePropertyValue(arg0);
+          return String(evald);
         }
         default:
           throw new Error(`Unknown function in property value: ${fn}`);

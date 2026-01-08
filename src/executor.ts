@@ -3698,6 +3698,53 @@ export class Executor {
         return null;
       }
       
+      case "DURATION": {
+        // duration(string) parses an ISO 8601 duration string
+        // duration(map) builds duration from components
+        // Format: P[nY][nM][nW][nD][T[nH][nM][n.nS]]
+        if (args.length > 0) {
+          const arg = this.evaluateExpressionInRow(args[0], row, params);
+          if (arg === null) return null;
+          if (arg && typeof arg === "object" && !Array.isArray(arg)) {
+            const map = arg as Record<string, unknown>;
+            const years = Number(map.years ?? 0);
+            const months = Number(map.months ?? 0);
+            const weeks = Number(map.weeks ?? 0);
+            const days = Number(map.days ?? 0);
+            const hours = Number(map.hours ?? 0);
+            const minutes = Number(map.minutes ?? 0);
+            const seconds = Number(map.seconds ?? 0);
+            const nanoseconds = Number(map.nanoseconds ?? 0);
+            
+            // Build ISO 8601 duration string
+            let datePart = "";
+            if (years !== 0) datePart += `${years}Y`;
+            if (months !== 0) datePart += `${months}M`;
+            if (weeks !== 0) datePart += `${weeks}W`;
+            if (days !== 0) datePart += `${days}D`;
+            
+            let timePart = "";
+            if (hours !== 0) timePart += `${hours}H`;
+            if (minutes !== 0) timePart += `${minutes}M`;
+            if (seconds !== 0 || nanoseconds !== 0) {
+              if (nanoseconds !== 0) {
+                timePart += `${seconds}.${String(Math.trunc(nanoseconds)).padStart(9, "0")}S`;
+              } else {
+                timePart += `${seconds}S`;
+              }
+            }
+            
+            if (timePart !== "") {
+              return `P${datePart}T${timePart}`;
+            }
+            return `P${datePart || "T0S"}`;
+          }
+          // If string, return as-is
+          return String(arg);
+        }
+        throw new Error("duration() requires an argument");
+      }
+      
       default:
         return null;
     }
@@ -5607,6 +5654,52 @@ export class Executor {
           return String(arg);
         }
         return new Date().toISOString().split("T")[1].split(".")[0];
+      }
+      case "DURATION": {
+        // duration(string) parses an ISO 8601 duration string
+        // duration(map) builds duration from components
+        // Format: P[nY][nM][nW][nD][T[nH][nM][n.nS]]
+        if (args.length > 0) {
+          const arg = this.resolvePropertyValueWithUnwind(args[0], params, unwindContext);
+          if (arg === null) return null;
+          if (arg && typeof arg === "object" && !Array.isArray(arg)) {
+            const map = arg as Record<string, unknown>;
+            const years = Number(map.years ?? 0);
+            const months = Number(map.months ?? 0);
+            const weeks = Number(map.weeks ?? 0);
+            const days = Number(map.days ?? 0);
+            const hours = Number(map.hours ?? 0);
+            const minutes = Number(map.minutes ?? 0);
+            const seconds = Number(map.seconds ?? 0);
+            const nanoseconds = Number(map.nanoseconds ?? 0);
+            
+            // Build ISO 8601 duration string
+            let datePart = "";
+            if (years !== 0) datePart += `${years}Y`;
+            if (months !== 0) datePart += `${months}M`;
+            if (weeks !== 0) datePart += `${weeks}W`;
+            if (days !== 0) datePart += `${days}D`;
+            
+            let timePart = "";
+            if (hours !== 0) timePart += `${hours}H`;
+            if (minutes !== 0) timePart += `${minutes}M`;
+            if (seconds !== 0 || nanoseconds !== 0) {
+              if (nanoseconds !== 0) {
+                timePart += `${seconds}.${String(Math.trunc(nanoseconds)).padStart(9, "0")}S`;
+              } else {
+                timePart += `${seconds}S`;
+              }
+            }
+            
+            if (timePart !== "") {
+              return `P${datePart}T${timePart}`;
+            }
+            return `P${datePart || "T0S"}`;
+          }
+          // If string, return as-is
+          return String(arg);
+        }
+        throw new Error("duration() requires an argument");
       }
       case "TIMESTAMP": {
         // timestamp() returns milliseconds since epoch
