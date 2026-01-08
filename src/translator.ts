@@ -7239,7 +7239,7 @@ SELECT COALESCE(json_group_array(CAST(n AS INTEGER)), json_array()) FROM r)`,
               const microsecondExpr = byKey.get("microsecond");
 
               // Localdatetime projection: localdatetime({date: other, hour: H, minute: M, ...})
-              // Take date from source and add time components
+              // Take date from source and add time components, with optional date component overrides
               if (dateExpr && hourExpr && minuteExpr) {
                 const dateResult = this.translateExpression(dateExpr);
                 tables.push(...dateResult.tables);
@@ -7280,8 +7280,26 @@ SELECT COALESCE(json_group_array(CAST(n AS INTEGER)), json_array()) FROM r)`,
                   nanoSql = `(CAST(${usResult.sql} AS INTEGER) * 1000)`;
                 }
                 
-                // Extract date part (first 10 chars) from source
-                const datePart = `substr(${dateResult.sql}, 1, 10)`;
+                // Extract date part (first 10 chars) from source, with optional overrides
+                // Date format is YYYY-MM-DD
+                let datePart: string;
+                const hasDateOverrides = yearExpr || monthExpr || dayExpr;
+                
+                if (hasDateOverrides) {
+                  // Apply overrides to the source date components
+                  const yearSqlDate = yearExpr
+                    ? (() => { const r = this.translateExpression(yearExpr); tables.push(...r.tables); params.push(...r.params); return `printf('%04d', CAST(${r.sql} AS INTEGER))`; })()
+                    : `substr(${dateResult.sql}, 1, 4)`;
+                  const monthSqlDate = monthExpr
+                    ? (() => { const r = this.translateExpression(monthExpr); tables.push(...r.tables); params.push(...r.params); return `printf('%02d', CAST(${r.sql} AS INTEGER))`; })()
+                    : `substr(${dateResult.sql}, 6, 2)`;
+                  const daySqlDate = dayExpr
+                    ? (() => { const r = this.translateExpression(dayExpr); tables.push(...r.tables); params.push(...r.params); return `printf('%02d', CAST(${r.sql} AS INTEGER))`; })()
+                    : `substr(${dateResult.sql}, 9, 2)`;
+                  datePart = `(${yearSqlDate} || '-' || ${monthSqlDate} || '-' || ${daySqlDate})`;
+                } else {
+                  datePart = `substr(${dateResult.sql}, 1, 10)`;
+                }
                 
                 // Build time part
                 let timePart: string;
