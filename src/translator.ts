@@ -6407,6 +6407,65 @@ SELECT COALESCE(json_group_array(CAST(n AS INTEGER)), json_array()) FROM r)`,
                 };
               }
 
+              // Date projection: date({date: D, year: Y}) or date({date: D, month: M}) etc.
+              // Take base date from dateExpr and override components
+              if (dateExpr && (yearExpr || monthExpr || dayExpr)) {
+                const dateResult = this.translateExpression(dateExpr);
+                tables.push(...dateResult.tables);
+                params.push(...dateResult.params);
+                
+                // Count how many components we need from the source
+                const needYear = !yearExpr;
+                const needMonth = !monthExpr;
+                const needDay = !dayExpr;
+                const sourceComponentsNeeded = (needYear ? 1 : 0) + (needMonth ? 1 : 0) + (needDay ? 1 : 0);
+                
+                if (sourceComponentsNeeded === 0) {
+                  // All components are overridden
+                  const yearSql = (() => { const r = this.translateExpression(yearExpr!); tables.push(...r.tables); params.push(...r.params); return `CAST(${r.sql} AS INTEGER)`; })();
+                  const monthSql = (() => { const r = this.translateExpression(monthExpr!); tables.push(...r.tables); params.push(...r.params); return `CAST(${r.sql} AS INTEGER)`; })();
+                  const daySql = (() => { const r = this.translateExpression(dayExpr!); tables.push(...r.tables); params.push(...r.params); return `CAST(${r.sql} AS INTEGER)`; })();
+                  return {
+                    sql: `DATE(printf('%04d-%02d-%02d', ${yearSql}, ${monthSql}, ${daySql}))`,
+                    tables,
+                    params,
+                  };
+                } else if (sourceComponentsNeeded === 1) {
+                  // Only one component from source - use substr directly
+                  const dateSource = `substr(${dateResult.sql}, 1, 10)`;
+                  const yearSql = yearExpr
+                    ? (() => { const r = this.translateExpression(yearExpr); tables.push(...r.tables); params.push(...r.params); return `printf('%04d', CAST(${r.sql} AS INTEGER))`; })()
+                    : `substr(${dateSource}, 1, 4)`;
+                  const monthSql = monthExpr
+                    ? (() => { const r = this.translateExpression(monthExpr); tables.push(...r.tables); params.push(...r.params); return `printf('%02d', CAST(${r.sql} AS INTEGER))`; })()
+                    : `substr(${dateSource}, 6, 2)`;
+                  const daySql = dayExpr
+                    ? (() => { const r = this.translateExpression(dayExpr); tables.push(...r.tables); params.push(...r.params); return `printf('%02d', CAST(${r.sql} AS INTEGER))`; })()
+                    : `substr(${dateSource}, 9, 2)`;
+                  return {
+                    sql: `(${yearSql} || '-' || ${monthSql} || '-' || ${daySql})`,
+                    tables,
+                    params,
+                  };
+                } else {
+                  // Multiple components from source - use subquery to avoid parameter duplication
+                  const yearSql = yearExpr
+                    ? (() => { const r = this.translateExpression(yearExpr); tables.push(...r.tables); params.push(...r.params); return `printf('%04d', CAST(${r.sql} AS INTEGER))`; })()
+                    : `_d_year`;
+                  const monthSql = monthExpr
+                    ? (() => { const r = this.translateExpression(monthExpr); tables.push(...r.tables); params.push(...r.params); return `printf('%02d', CAST(${r.sql} AS INTEGER))`; })()
+                    : `_d_month`;
+                  const daySql = dayExpr
+                    ? (() => { const r = this.translateExpression(dayExpr); tables.push(...r.tables); params.push(...r.params); return `printf('%02d', CAST(${r.sql} AS INTEGER))`; })()
+                    : `_d_day`;
+                  return {
+                    sql: `(SELECT ${yearSql} || '-' || ${monthSql} || '-' || ${daySql} FROM (SELECT substr(_d, 1, 4) AS _d_year, substr(_d, 6, 2) AS _d_month, substr(_d, 9, 2) AS _d_day FROM (SELECT substr(${dateResult.sql}, 1, 10) AS _d)))`,
+                    tables,
+                    params,
+                  };
+                }
+              }
+
               // Calendar date: date({year: Y, month: M, day: D})
               // month defaults to 1, day defaults to 1
               if (yearExpr) {
@@ -6437,8 +6496,20 @@ SELECT COALESCE(json_group_array(CAST(n AS INTEGER)), json_array()) FROM r)`,
                   params,
                 };
               }
+              
+              // date({date: D}) - just extract date from temporal value
+              if (dateExpr) {
+                const dateResult = this.translateExpression(dateExpr);
+                tables.push(...dateResult.tables);
+                params.push(...dateResult.params);
+                return {
+                  sql: `substr(${dateResult.sql}, 1, 10)`,
+                  tables,
+                  params,
+                };
+              }
 
-              throw new Error("date(map) requires year/month/day or year/week");
+              throw new Error("date(map) requires year/month/day or year/week or date");
             }
 
             // date('2024-01-15') - parse date string
