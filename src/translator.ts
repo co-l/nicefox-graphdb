@@ -4873,6 +4873,13 @@ export class Translator {
                 const objectResult = this.translateExpression(originalExpr);
                 tables.push(...objectResult.tables);
                 params.push(...objectResult.params);
+                
+                // Check if this is a temporal property accessor (year, month, day, etc.)
+                const temporalSql = this.translateTemporalPropertyAccess(objectResult.sql, expr.property!);
+                if (temporalSql) {
+                  return { sql: temporalSql, tables, params };
+                }
+                
                 // Access property from the result using json_extract
                 return {
                   sql: `json_extract(${objectResult.sql}, '$.${expr.property}')`,
@@ -4906,9 +4913,17 @@ export class Translator {
           if (unwindClause) {
             tables.push(unwindClause.alias);
             // UNWIND variables use the 'value' column from json_each
+            const baseSql = `${unwindClause.alias}.value`;
+            
+            // Check if this is a temporal property accessor
+            const temporalSql = this.translateTemporalPropertyAccess(baseSql, expr.property!);
+            if (temporalSql) {
+              return { sql: temporalSql, tables, params };
+            }
+            
             // Access property from the unwound value using json_extract
             return {
-              sql: `json_extract(${unwindClause.alias}.value, '$.${expr.property}')`,
+              sql: `json_extract(${baseSql}, '$.${expr.property}')`,
               tables,
               params,
             };
@@ -12562,6 +12577,54 @@ SELECT COALESCE(json_group_array(CAST(n AS INTEGER)), json_array()) FROM r)`,
         // For nested function calls, use translateExpression
         return this.translateExpression(expr);
     }
+  }
+
+  /**
+   * Check if a property name is a temporal accessor (like year, month, day, etc.)
+   * and return the SQL expression to extract it from a temporal value.
+   * Returns null if not a temporal accessor.
+   */
+  private translateTemporalPropertyAccess(baseSql: string, propertyName: string): string | null {
+    // If baseSql uses the -> operator, we need to use json_extract to get the actual value
+    // (the -> operator preserves JSON formatting with quotes)
+    let valueExpr = baseSql;
+    if (baseSql.includes(" -> ")) {
+      // Convert "alias.properties -> '$.prop'" to "json_extract(alias.properties, '$.prop')"
+      const match = baseSql.match(/^(.+) -> '(\$.+)'$/);
+      if (match) {
+        valueExpr = `json_extract(${match[1]}, '${match[2]}')`;
+      }
+    }
+    
+    // Temporal accessor properties for date/datetime/time values
+    // These extract components from ISO 8601 formatted strings
+    const temporalAccessors: Record<string, string> = {
+      // Date accessors
+      "year": `CAST(strftime('%Y', ${valueExpr}) AS INTEGER)`,
+      "month": `CAST(strftime('%m', ${valueExpr}) AS INTEGER)`,
+      "day": `CAST(strftime('%d', ${valueExpr}) AS INTEGER)`,
+      // Week-based accessors
+      "week": `CAST(strftime('%W', ${valueExpr}) AS INTEGER)`, // ISO week number
+      "weekYear": `CAST(strftime('%Y', ${valueExpr}) AS INTEGER)`, // ISO week year (simplified)
+      "weekDay": `CAST(CASE WHEN strftime('%w', ${valueExpr}) = '0' THEN 7 ELSE strftime('%w', ${valueExpr}) END AS INTEGER)`, // 1=Monday, 7=Sunday
+      "dayOfWeek": `CAST(CASE WHEN strftime('%w', ${valueExpr}) = '0' THEN 7 ELSE strftime('%w', ${valueExpr}) END AS INTEGER)`,
+      // Ordinal accessors
+      "ordinalDay": `CAST(strftime('%j', ${valueExpr}) AS INTEGER)`,
+      // Quarter accessors
+      "quarter": `CAST((CAST(strftime('%m', ${valueExpr}) AS INTEGER) + 2) / 3 AS INTEGER)`,
+      "dayOfQuarter": `CAST(strftime('%j', ${valueExpr}) AS INTEGER) - CASE CAST((CAST(strftime('%m', ${valueExpr}) AS INTEGER) + 2) / 3 AS INTEGER) WHEN 1 THEN 0 WHEN 2 THEN 90 + (CASE WHEN strftime('%Y', ${valueExpr}) % 4 = 0 AND (strftime('%Y', ${valueExpr}) % 100 != 0 OR strftime('%Y', ${valueExpr}) % 400 = 0) THEN 1 ELSE 0 END) WHEN 3 THEN 181 + (CASE WHEN strftime('%Y', ${valueExpr}) % 4 = 0 AND (strftime('%Y', ${valueExpr}) % 100 != 0 OR strftime('%Y', ${valueExpr}) % 400 = 0) THEN 1 ELSE 0 END) ELSE 273 + (CASE WHEN strftime('%Y', ${valueExpr}) % 4 = 0 AND (strftime('%Y', ${valueExpr}) % 100 != 0 OR strftime('%Y', ${valueExpr}) % 400 = 0) THEN 1 ELSE 0 END) END`,
+      // Time accessors (for time/datetime/localtime/localdatetime)
+      // Time format: HH:MM:SS.NNNNNNNNN or datetime: ...THH:MM:SS.NNNNNNNNN
+      "hour": `CAST(strftime('%H', ${valueExpr}) AS INTEGER)`,
+      "minute": `CAST(strftime('%M', ${valueExpr}) AS INTEGER)`,
+      "second": `CAST(strftime('%S', ${valueExpr}) AS INTEGER)`,
+      // Fractional seconds - extract nanoseconds from ISO format
+      "nanosecond": `CAST(COALESCE(substr(${valueExpr}, instr(${valueExpr}, '.') + 1, 9), '0') AS INTEGER)`,
+      "millisecond": `CAST(COALESCE(substr(${valueExpr}, instr(${valueExpr}, '.') + 1, 3), '0') AS INTEGER)`,
+      "microsecond": `CAST(COALESCE(substr(${valueExpr}, instr(${valueExpr}, '.') + 1, 6), '0') AS INTEGER)`,
+    };
+
+    return temporalAccessors[propertyName] ?? null;
   }
 
   private isRelationshipPattern(pattern: NodePattern | RelationshipPattern): pattern is RelationshipPattern {
