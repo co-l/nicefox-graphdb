@@ -6666,6 +6666,7 @@ SELECT COALESCE(json_group_array(CAST(n AS INTEGER)), json_array()) FROM r)`,
               const dayExpr = byKey.get("day");
               const weekExpr = byKey.get("week");
               const dayOfWeekExpr = byKey.get("dayofweek");
+              const ordinalDayExpr = byKey.get("ordinalday");
               const hourExpr = byKey.get("hour");
               const minuteExpr = byKey.get("minute");
               const secondExpr = byKey.get("second");
@@ -6678,12 +6679,13 @@ SELECT COALESCE(json_group_array(CAST(n AS INTEGER)), json_array()) FROM r)`,
                 throw new Error("localdatetime(map) requires year, hour, and minute");
               }
 
-              // Either month+day or week (with optional dayOfWeek)
+              // Either month+day or week (with optional dayOfWeek) or ordinalDay
               const hasCalendarDate = monthExpr && dayExpr;
               const hasWeekDate = weekExpr;
+              const hasOrdinalDate = ordinalDayExpr;
 
-              if (!hasCalendarDate && !hasWeekDate) {
-                throw new Error("localdatetime(map) requires month/day or week");
+              if (!hasCalendarDate && !hasWeekDate && !hasOrdinalDate) {
+                throw new Error("localdatetime(map) requires month/day or week or ordinalDay");
               }
 
               const yearResult = this.translateExpression(yearExpr);
@@ -6735,6 +6737,16 @@ SELECT COALESCE(json_group_array(CAST(n AS INTEGER)), json_array()) FROM r)`,
                   + (${weekSql} - 1) * 7
                   + (${dayOfWeekSql} - 1)
                 )`;
+              } else if (hasOrdinalDate) {
+                // Ordinal date: localdatetime({year: Y, ordinalDay: D, ...})
+                // ordinalDay is the day of the year (1-366)
+                const ordinalDayResult = this.translateExpression(ordinalDayExpr!);
+                tables.push(...ordinalDayResult.tables);
+                params.push(...ordinalDayResult.params);
+                const ordinalDaySql = `CAST(${ordinalDayResult.sql} AS INTEGER)`;
+
+                // Start from Jan 1 and add (ordinalDay - 1) days
+                dateSql = `DATE(printf('%04d-01-01', ${yearSql}), '+' || (${ordinalDaySql} - 1) || ' days')`;
               } else {
                 // Calendar date: month/day
                 const monthResult = this.translateExpression(monthExpr!);
