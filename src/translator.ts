@@ -6283,6 +6283,7 @@ SELECT COALESCE(json_group_array(CAST(n AS INTEGER)), json_array()) FROM r)`,
               const weekExpr = byKey.get("week");
               const dayOfWeekExpr = byKey.get("dayofweek");
               const dateExpr = byKey.get("date");
+              const ordinalDayExpr = byKey.get("ordinalday");
 
               // ISO week date: date({year: Y, week: W}) or date({year: Y, week: W, dayOfWeek: D})
               // Or with base date: date({date: D, week: W})
@@ -6349,6 +6350,27 @@ SELECT COALESCE(json_group_array(CAST(n AS INTEGER)), json_array()) FROM r)`,
                 )`;
 
                 return { sql, tables, params };
+              }
+
+              // Ordinal date: date({year: Y, ordinalDay: D})
+              // ordinalDay is the day of the year (1-366)
+              if (yearExpr && ordinalDayExpr) {
+                const yearResult = this.translateExpression(yearExpr);
+                tables.push(...yearResult.tables);
+                params.push(...yearResult.params);
+                const yearSql = `CAST(${yearResult.sql} AS INTEGER)`;
+
+                const ordinalDayResult = this.translateExpression(ordinalDayExpr);
+                tables.push(...ordinalDayResult.tables);
+                params.push(...ordinalDayResult.params);
+                const ordinalDaySql = `CAST(${ordinalDayResult.sql} AS INTEGER)`;
+
+                // Start from Jan 1 and add (ordinalDay - 1) days
+                return {
+                  sql: `DATE(printf('%04d-01-01', ${yearSql}), '+' || (${ordinalDaySql} - 1) || ' days')`,
+                  tables,
+                  params,
+                };
               }
 
               // Calendar date: date({year: Y, month: M, day: D})
