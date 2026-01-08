@@ -9376,8 +9376,9 @@ SELECT COALESCE(json_group_array(CAST(n AS INTEGER)), json_array()) FROM r)`,
       case "contains": {
         const left = this.translateWhereExpression(condition.left!);
         const right = this.translateWhereExpression(condition.right!);
+        // Use INSTR for case-sensitive substring search (returns position, 0 if not found)
         return {
-          sql: `${left.sql} LIKE '%' || ${right.sql} || '%'`,
+          sql: `INSTR(${left.sql}, ${right.sql}) > 0`,
           params: [...left.params, ...right.params],
         };
       }
@@ -9385,18 +9386,25 @@ SELECT COALESCE(json_group_array(CAST(n AS INTEGER)), json_array()) FROM r)`,
       case "startsWith": {
         const left = this.translateWhereExpression(condition.left!);
         const right = this.translateWhereExpression(condition.right!);
+        // Use SUBSTR for case-sensitive prefix match
+        // Note: right.sql appears twice, so right.params must be included twice
         return {
-          sql: `${left.sql} LIKE ${right.sql} || '%'`,
-          params: [...left.params, ...right.params],
+          sql: `SUBSTR(${left.sql}, 1, LENGTH(${right.sql})) = ${right.sql}`,
+          params: [...left.params, ...right.params, ...right.params],
         };
       }
 
       case "endsWith": {
         const left = this.translateWhereExpression(condition.left!);
         const right = this.translateWhereExpression(condition.right!);
+        // Use CASE to handle: 1) NULL propagation, 2) empty suffix edge case, 3) case-sensitive suffix match
+        // - If left or right is NULL, return NULL (proper three-valued logic)
+        // - If suffix is empty, every string matches (LENGTH(right) = 0 returns 1)
+        // - Otherwise, use SUBSTR with negative offset for case-sensitive comparison
+        // Note: left.sql appears 3 times, right.sql appears 4 times
         return {
-          sql: `${left.sql} LIKE '%' || ${right.sql}`,
-          params: [...left.params, ...right.params],
+          sql: `CASE WHEN ${left.sql} IS NULL OR ${right.sql} IS NULL THEN NULL WHEN LENGTH(${right.sql}) = 0 THEN 1 ELSE SUBSTR(${left.sql}, -LENGTH(${right.sql})) = ${right.sql} END`,
+          params: [...left.params, ...right.params, ...right.params, ...left.params, ...right.params, ...right.params],
         };
       }
 

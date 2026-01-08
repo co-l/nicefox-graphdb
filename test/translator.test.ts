@@ -369,8 +369,9 @@ describe("Translator", () => {
         "MATCH (n:Person) WHERE n.name CONTAINS 'ali' RETURN n"
       );
 
-      expect(result.statements[0].sql).toContain("LIKE '%' ||");
-      expect(result.statements[0].sql).toContain("|| '%'");
+      // Uses INSTR for case-sensitive substring search
+      expect(result.statements[0].sql).toContain("INSTR(");
+      expect(result.statements[0].sql).toContain(") > 0");
     });
 
     it("translates STARTS WITH", () => {
@@ -378,8 +379,9 @@ describe("Translator", () => {
         "MATCH (n:Person) WHERE n.name STARTS WITH 'A' RETURN n"
       );
 
-      expect(result.statements[0].sql).toContain("LIKE");
-      expect(result.statements[0].sql).toContain("|| '%'");
+      // Uses SUBSTR for case-sensitive prefix match
+      expect(result.statements[0].sql).toContain("SUBSTR(");
+      expect(result.statements[0].sql).toContain("LENGTH(");
     });
 
     it("translates ENDS WITH", () => {
@@ -387,7 +389,9 @@ describe("Translator", () => {
         "MATCH (n:Person) WHERE n.name ENDS WITH 'e' RETURN n"
       );
 
-      expect(result.statements[0].sql).toContain("LIKE '%' ||");
+      // Uses SUBSTR for case-sensitive suffix match
+      expect(result.statements[0].sql).toContain("SUBSTR(");
+      expect(result.statements[0].sql).toContain("-LENGTH(");
     });
 
     it("translates parameter in WHERE", () => {
