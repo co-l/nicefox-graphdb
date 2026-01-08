@@ -10321,13 +10321,18 @@ SELECT COALESCE(json_group_array(CAST(n AS INTEGER)), json_array()) FROM r)`,
       // For zoned types, append timezone to result
       const tzAppendSql = hasTimezone ? ` || _d._tz` : "";
       
+      // For datetime types (localdatetime/datetime), SQLite returns 'YYYY-MM-DD HH:MM:SS'
+      // but we need ISO 8601 format 'YYYY-MM-DDTHH:MM:SS', so wrap in replace()
+      const needsIsoFormat = temporalType === "datetime" || temporalType === "localdatetime";
+      const formatResult = (expr: string) => needsIsoFormat ? `replace(${expr}, ' ', 'T')` : expr;
+      
       // For zoned types, we need to nest the subquery so we can reference _basetime in column expressions
       if (hasTimezone) {
         return {
           sql: `(SELECT 
             CASE WHEN ${finalNanosSql} = 0 
-                 THEN ${sqliteTemporalFn}(_d._localtime, ${timeModifiers}) || _d._tz
-                 ELSE ${sqliteTemporalFn}(_d._localtime, ${timeModifiers}) || '.' || 
+                 THEN ${formatResult(`${sqliteTemporalFn}(_d._localtime, ${timeModifiers})`)} || _d._tz
+                 ELSE ${formatResult(`${sqliteTemporalFn}(_d._localtime, ${timeModifiers})`)} || '.' || 
                       substr('000000000' || CAST(${finalNanosSql} AS TEXT), -9) || _d._tz
             END
           FROM (
@@ -10349,8 +10354,8 @@ SELECT COALESCE(json_group_array(CAST(n AS INTEGER)), json_array()) FROM r)`,
       return {
         sql: `(SELECT 
           CASE WHEN ${finalNanosSql} = 0 
-               THEN ${sqliteTemporalFn}(_d._basetime, ${timeModifiers})
-               ELSE ${sqliteTemporalFn}(_d._basetime, ${timeModifiers}) || '.' || 
+               THEN ${formatResult(`${sqliteTemporalFn}(_d._basetime, ${timeModifiers})`)}
+               ELSE ${formatResult(`${sqliteTemporalFn}(_d._basetime, ${timeModifiers})`)} || '.' || 
                     substr('000000000' || CAST(${finalNanosSql} AS TEXT), -9)
           END
         FROM (
