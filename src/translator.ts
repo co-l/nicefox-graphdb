@@ -6352,16 +6352,28 @@ SELECT COALESCE(json_group_array(CAST(n AS INTEGER)), json_array()) FROM r)`,
               }
 
               // Calendar date: date({year: Y, month: M, day: D})
-              if (yearExpr && monthExpr && dayExpr) {
+              // month defaults to 1, day defaults to 1
+              if (yearExpr) {
                 const yearResult = this.translateExpression(yearExpr);
-                const monthResult = this.translateExpression(monthExpr);
-                const dayResult = this.translateExpression(dayExpr);
-                tables.push(...yearResult.tables, ...monthResult.tables, ...dayResult.tables);
-                params.push(...yearResult.params, ...monthResult.params, ...dayResult.params);
-
+                tables.push(...yearResult.tables);
+                params.push(...yearResult.params);
                 const yearSql = `CAST(${yearResult.sql} AS INTEGER)`;
-                const monthSql = `CAST(${monthResult.sql} AS INTEGER)`;
-                const daySql = `CAST(${dayResult.sql} AS INTEGER)`;
+
+                let monthSql = "1";
+                if (monthExpr) {
+                  const monthResult = this.translateExpression(monthExpr);
+                  tables.push(...monthResult.tables);
+                  params.push(...monthResult.params);
+                  monthSql = `CAST(${monthResult.sql} AS INTEGER)`;
+                }
+
+                let daySql = "1";
+                if (dayExpr) {
+                  const dayResult = this.translateExpression(dayExpr);
+                  tables.push(...dayResult.tables);
+                  params.push(...dayResult.params);
+                  daySql = `CAST(${dayResult.sql} AS INTEGER)`;
+                }
 
                 return {
                   sql: `DATE(printf('%04d-%02d-%02d', ${yearSql}, ${monthSql}, ${daySql}))`,
