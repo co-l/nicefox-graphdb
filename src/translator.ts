@@ -7422,6 +7422,52 @@ SELECT COALESCE(json_group_array(CAST(n AS INTEGER)), json_array()) FROM r)`,
         };
       }
 
+      case "stringOp": {
+        // String operations: CONTAINS, STARTS WITH, ENDS WITH
+        // For non-string operands, return NULL (proper Cypher semantics)
+        // 
+        // A value is a "true Cypher string" if:
+        //   typeof(X) = 'text' AND json_valid(X) = 0
+        // This distinguishes actual strings from serialized arrays/objects (which are text but json_valid)
+        const leftExpr = expr.left!;
+        const rightExpr = expr.right!;
+        const leftResult = this.translateExpression(leftExpr);
+        const rightResult = this.translateExpression(rightExpr);
+        const tables = [...leftResult.tables, ...rightResult.tables];
+        
+        // Helper to build "is true string" check
+        const isString = (sql: string) => `(typeof(${sql}) = 'text' AND json_valid(${sql}) = 0)`;
+        
+        const stringOp = expr.stringOperator;
+        
+        if (stringOp === "CONTAINS") {
+          // INSTR returns position (1-based) if found, 0 if not found
+          return {
+            sql: `CASE WHEN ${isString(leftResult.sql)} AND ${isString(rightResult.sql)} THEN INSTR(${leftResult.sql}, ${rightResult.sql}) > 0 ELSE NULL END`,
+            tables,
+            // leftResult.sql appears 3 times, rightResult.sql appears 3 times
+            params: [...leftResult.params, ...leftResult.params, ...rightResult.params, ...rightResult.params, ...leftResult.params, ...rightResult.params],
+          };
+        } else if (stringOp === "STARTS WITH") {
+          // Use SUBSTR for case-sensitive prefix match
+          return {
+            sql: `CASE WHEN ${isString(leftResult.sql)} AND ${isString(rightResult.sql)} THEN SUBSTR(${leftResult.sql}, 1, LENGTH(${rightResult.sql})) = ${rightResult.sql} ELSE NULL END`,
+            tables,
+            // leftResult.sql appears 3 times, rightResult.sql appears 5 times
+            params: [...leftResult.params, ...leftResult.params, ...rightResult.params, ...rightResult.params, ...leftResult.params, ...rightResult.params, ...rightResult.params],
+          };
+        } else {
+          // ENDS WITH
+          // Use CASE to handle: 1) type check 2) empty suffix edge case, 3) case-sensitive suffix match
+          return {
+            sql: `CASE WHEN NOT (${isString(leftResult.sql)} AND ${isString(rightResult.sql)}) THEN NULL WHEN LENGTH(${rightResult.sql}) = 0 THEN 1 ELSE SUBSTR(${leftResult.sql}, -LENGTH(${rightResult.sql})) = ${rightResult.sql} END`,
+            tables,
+            // leftResult.sql appears 4 times, rightResult.sql appears 6 times
+            params: [...leftResult.params, ...leftResult.params, ...rightResult.params, ...rightResult.params, ...rightResult.params, ...leftResult.params, ...rightResult.params, ...rightResult.params],
+          };
+        }
+      }
+
       default:
         throw new Error(`Unknown expression type: ${expr.type}`);
     }

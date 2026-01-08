@@ -116,7 +116,7 @@ export interface ObjectProperty {
 }
 
 export interface Expression {
-  type: "property" | "literal" | "parameter" | "variable" | "function" | "case" | "binary" | "object" | "comparison" | "listComprehension" | "listPredicate" | "patternComprehension" | "unary" | "labelPredicate" | "propertyAccess" | "indexAccess" | "in";
+  type: "property" | "literal" | "parameter" | "variable" | "function" | "case" | "binary" | "object" | "comparison" | "listComprehension" | "listPredicate" | "patternComprehension" | "unary" | "labelPredicate" | "propertyAccess" | "indexAccess" | "in" | "stringOp";
   variable?: string;
   property?: string;
   value?: PropertyValue;
@@ -162,6 +162,8 @@ export interface Expression {
   index?: Expression;
   // IN expression fields: value IN list
   list?: Expression;
+  // String operation fields: CONTAINS, STARTS WITH, ENDS WITH
+  stringOperator?: "CONTAINS" | "STARTS WITH" | "ENDS WITH";
 }
 
 export interface ReturnItem {
@@ -2554,6 +2556,27 @@ export class Parser {
       // but not operators that have lower precedence than IN
       const list = this.parseAdditiveExpression();
       return { type: "in", left, list };
+    }
+
+    // Handle string operators: CONTAINS, STARTS WITH, ENDS WITH
+    if (this.checkKeyword("CONTAINS")) {
+      this.advance();
+      const right = this.parseAdditiveExpression();
+      return { type: "stringOp", stringOperator: "CONTAINS", left, right };
+    }
+
+    if (this.checkKeyword("STARTS")) {
+      this.advance();
+      this.expect("KEYWORD", "WITH");
+      const right = this.parseAdditiveExpression();
+      return { type: "stringOp", stringOperator: "STARTS WITH", left, right };
+    }
+
+    if (this.checkKeyword("ENDS")) {
+      this.advance();
+      this.expect("KEYWORD", "WITH");
+      const right = this.parseAdditiveExpression();
+      return { type: "stringOp", stringOperator: "ENDS WITH", left, right };
     }
 
     return left;
