@@ -8779,6 +8779,22 @@ SELECT COALESCE(json_group_array(CAST(n AS INTEGER)), json_array()) FROM r)`,
         };
       }
       
+      case "isNull": {
+        const left = this.translateListComprehensionExpr(condition.left!, compVar, tableAlias);
+        return {
+          sql: `${left.sql} IS NULL`,
+          params: left.params,
+        };
+      }
+      
+      case "isNotNull": {
+        const left = this.translateListComprehensionExpr(condition.left!, compVar, tableAlias);
+        return {
+          sql: `${left.sql} IS NOT NULL`,
+          params: left.params,
+        };
+      }
+      
       case "expression": {
         // Handle bare expressions used as boolean conditions (e.g., all(x IN list WHERE x))
         const exprResult = this.translateListComprehensionExpr(condition.left!, compVar, tableAlias);
