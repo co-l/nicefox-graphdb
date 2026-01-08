@@ -835,6 +835,8 @@ export class Executor {
     
     // Track variables that are computed from aggregates
     const aggregateVariables = new Set<string>();
+    // Track variables that are computed from non-deterministic expressions (like rand())
+    const nonDeterministicVariables = new Set<string>();
     // Track all known variables in current phase
     const knownVariables = new Set<string>();
     // Track if we've seen OPTIONAL_MATCH (and no regular MATCH) before this WITH
@@ -916,6 +918,32 @@ export class Executor {
         }
       }
       
+      // Check if WITH/UNWIND/RETURN after a WITH with non-deterministic expressions - needs phase boundary
+      // This handles patterns like:
+      //   WITH [y IN list WHERE rand() > 0.5 | y] AS filtered WITH filtered + x AS result
+      // The rand() in the list comprehension must be evaluated once and the result used in subsequent clauses.
+      // Without phased execution, the translator would re-expand the expression, calling rand() multiple times.
+      // 
+      // HOWEVER: If the referencing clause has aggregation, we should NOT create a phase boundary,
+      // because the aggregation needs to operate on all the rows from the previous clause.
+      // In that case, the translator can still use SQL aggregation semantics.
+      if ((clause.type === "WITH" || clause.type === "UNWIND" || clause.type === "RETURN") && i > 0 && nonDeterministicVariables.size > 0) {
+        // Don't trigger for clauses with aggregation - let them be handled by the translator
+        const hasAggregation = clause.type === "WITH" && 
+          clause.items.some(item => this.expressionHasAggregate(item.expression));
+        
+        if (!hasAggregation) {
+          // Check if this clause references any non-deterministic variables
+          const referencedVars = this.getClauseReferencedVariables(clause);
+          for (const v of referencedVars) {
+            if (nonDeterministicVariables.has(v)) {
+              needsNewPhase = true;
+              break;
+            }
+          }
+        }
+      }
+      
       if (needsNewPhase && currentPhase.length > 0) {
         phases.push(currentPhase);
         currentPhase = [];
@@ -947,6 +975,13 @@ export class Executor {
             if (item.alias) {
               aggregateVariables.add(item.alias);
             }
+          }
+        }
+        
+        // Also check for non-deterministic expressions
+        for (const item of clause.items) {
+          if (item.alias && this.expressionHasNonDeterministic(item.expression)) {
+            nonDeterministicVariables.add(item.alias);
           }
         }
       }
@@ -982,6 +1017,33 @@ export class Executor {
       }
       for (const v of this.getExpressionVariables(expr.right)) {
         vars.add(v);
+      }
+    }
+    
+    return vars;
+  }
+
+  /**
+   * Get all variables referenced by a clause (not defined, just referenced)
+   */
+  private getClauseReferencedVariables(clause: Clause): Set<string> {
+    const vars = new Set<string>();
+    
+    if (clause.type === "WITH") {
+      for (const item of clause.items) {
+        for (const v of this.getExpressionVariables(item.expression)) {
+          vars.add(v);
+        }
+      }
+    } else if (clause.type === "UNWIND") {
+      for (const v of this.getExpressionVariables(clause.expression)) {
+        vars.add(v);
+      }
+    } else if (clause.type === "RETURN") {
+      for (const item of clause.items) {
+        for (const v of this.getExpressionVariables(item.expression)) {
+          vars.add(v);
+        }
       }
     }
     
@@ -1057,6 +1119,70 @@ export class Executor {
       const leftHas = expr.left ? this.expressionHasAggregate(expr.left) : false;
       const rightHas = expr.right ? this.expressionHasAggregate(expr.right) : false;
       return leftHas || rightHas;
+    }
+    return false;
+  }
+
+  /**
+   * Check if a WhereCondition contains non-deterministic functions
+   */
+  private whereConditionHasNonDeterministic(cond: WhereCondition): boolean {
+    if (cond.left && this.expressionHasNonDeterministic(cond.left)) return true;
+    if (cond.right && this.expressionHasNonDeterministic(cond.right)) return true;
+    if (cond.conditions) {
+      for (const c of cond.conditions) {
+        if (this.whereConditionHasNonDeterministic(c)) return true;
+      }
+    }
+    if (cond.condition && this.whereConditionHasNonDeterministic(cond.condition)) return true;
+    if (cond.list && this.expressionHasNonDeterministic(cond.list)) return true;
+    if (cond.listExpr && this.expressionHasNonDeterministic(cond.listExpr)) return true;
+    if (cond.filterCondition && this.whereConditionHasNonDeterministic(cond.filterCondition)) return true;
+    return false;
+  }
+
+  /**
+   * Check if an expression contains non-deterministic functions (like rand())
+   * These expressions cannot be safely inlined by the translator and require
+   * phased execution to materialize intermediate results.
+   */
+  private expressionHasNonDeterministic(expr: Expression): boolean {
+    if (expr.type === "function") {
+      const funcName = expr.functionName?.toUpperCase();
+      // rand() and randomUUID() are non-deterministic
+      if (["RAND", "RANDOMUUID"].includes(funcName || "")) {
+        return true;
+      }
+      // Check args recursively
+      if (expr.args) {
+        return expr.args.some(arg => this.expressionHasNonDeterministic(arg));
+      }
+    } else if (expr.type === "binary") {
+      const leftHas = expr.left ? this.expressionHasNonDeterministic(expr.left) : false;
+      const rightHas = expr.right ? this.expressionHasNonDeterministic(expr.right) : false;
+      return leftHas || rightHas;
+    } else if (expr.type === "case") {
+      // Check expression and else branches
+      if (expr.expression && this.expressionHasNonDeterministic(expr.expression)) return true;
+      if (expr.elseExpr && this.expressionHasNonDeterministic(expr.elseExpr)) return true;
+      if (expr.whens) {
+        for (const when of expr.whens) {
+          // CaseWhen.condition is a WhereCondition, not Expression
+          if (this.whereConditionHasNonDeterministic(when.condition)) return true;
+          if (this.expressionHasNonDeterministic(when.result)) return true;
+        }
+      }
+      return false;
+    } else if (expr.type === "listComprehension" || expr.type === "listPredicate") {
+      // Check the list expression and filter condition
+      if (expr.listExpr && this.expressionHasNonDeterministic(expr.listExpr)) return true;
+      if (expr.filterCondition && this.whereConditionHasNonDeterministic(expr.filterCondition)) return true;
+      if (expr.mapExpr && this.expressionHasNonDeterministic(expr.mapExpr)) return true;
+      return false;
+    } else if (expr.type === "comparison") {
+      if (expr.left && this.expressionHasNonDeterministic(expr.left)) return true;
+      if (expr.right && this.expressionHasNonDeterministic(expr.right)) return true;
+      return false;
     }
     return false;
   }
@@ -2981,6 +3107,102 @@ export class Executor {
         return result;
       }
         
+      case "listComprehension": {
+        // Evaluate list comprehension: [x IN list WHERE cond | mapExpr]
+        const listValue = this.evaluateExpressionInRow(expr.listExpr!, row, params);
+        if (!Array.isArray(listValue)) return [];
+        
+        const results: unknown[] = [];
+        for (const item of listValue) {
+          // Create a new row with the loop variable
+          const itemRow = new Map(row);
+          if (expr.variable) {
+            itemRow.set(expr.variable, item);
+          }
+          
+          // Check filter condition if present
+          let passesFilter = true;
+          if (expr.filterCondition) {
+            // Convert Map to Record for evaluateWhereConditionOnRow
+            const rowRecord = Object.fromEntries(itemRow);
+            passesFilter = this.evaluateWhereConditionOnRow(expr.filterCondition, rowRecord, params);
+          }
+          
+          if (passesFilter) {
+            // Apply map expression if present, otherwise use the item
+            const resultValue = expr.mapExpr 
+              ? this.evaluateExpressionInRow(expr.mapExpr, itemRow, params)
+              : item;
+            results.push(resultValue);
+          }
+        }
+        return results;
+      }
+      
+      case "case": {
+        // Evaluate CASE WHEN ... THEN ... ELSE ... END
+        // Simple form: CASE expr WHEN val THEN result ELSE result END
+        // Searched form: CASE WHEN condition THEN result ELSE result END
+        if (expr.whens) {
+          const rowRecord = Object.fromEntries(row);
+          for (const when of expr.whens) {
+            // Evaluate the condition (WhereCondition)
+            if (this.evaluateWhereConditionOnRow(when.condition, rowRecord, params)) {
+              return this.evaluateExpressionInRow(when.result, row, params);
+            }
+          }
+        }
+        // Return else expression or null
+        return expr.elseExpr ? this.evaluateExpressionInRow(expr.elseExpr, row, params) : null;
+      }
+      
+      case "listPredicate": {
+        // Evaluate ALL/ANY/NONE/SINGLE(x IN list WHERE condition)
+        const listValue = this.evaluateExpressionInRow(expr.listExpr!, row, params);
+        if (!Array.isArray(listValue)) return null;
+        
+        let matchCount = 0;
+        for (const item of listValue) {
+          // Create a new row with the loop variable
+          const itemRow = new Map(row);
+          if (expr.variable) {
+            itemRow.set(expr.variable, item);
+          }
+          
+          // Check filter condition
+          let passesFilter = true;
+          if (expr.filterCondition) {
+            const rowRecord = Object.fromEntries(itemRow);
+            passesFilter = this.evaluateWhereConditionOnRow(expr.filterCondition, rowRecord, params);
+          }
+          
+          if (passesFilter) {
+            matchCount++;
+          }
+        }
+        
+        // Return result based on predicate type
+        switch (expr.predicateType) {
+          case "ALL":
+            return matchCount === listValue.length;
+          case "ANY":
+            return matchCount > 0;
+          case "NONE":
+            return matchCount === 0;
+          case "SINGLE":
+            return matchCount === 1;
+          default:
+            return null;
+        }
+      }
+      
+      case "comparison": {
+        // Evaluate comparison expression: left op right
+        const left = this.evaluateExpressionInRow(expr.left!, row, params);
+        const right = this.evaluateExpressionInRow(expr.right!, row, params);
+        return this.evaluateComparison(left, right, expr.comparisonOperator || "=");
+      }
+        
       default:
         return null;
     }
@@ -3196,6 +3418,40 @@ export class Executor {
         const value = this.evaluateExpressionInRow(args[0], row, params);
         if (typeof value !== "number") return null;
         return Math.sqrt(value);
+      }
+      
+      case "RAND": {
+        // rand() returns a random float between 0 (inclusive) and 1 (exclusive)
+        return Math.random();
+      }
+      
+      case "RANDOMUUID": {
+        // randomUUID() returns a UUID v4
+        return crypto.randomUUID();
+      }
+      
+      case "COALESCE": {
+        // coalesce(a, b, ...) returns the first non-null value
+        for (const arg of args) {
+          const value = this.evaluateExpressionInRow(arg, row, params);
+          if (value !== null && value !== undefined) {
+            return value;
+          }
+        }
+        return null;
+      }
+      
+      case "REVERSE": {
+        // reverse(list) or reverse(string)
+        if (args.length === 0) return null;
+        const value = this.evaluateExpressionInRow(args[0], row, params);
+        if (Array.isArray(value)) {
+          return [...value].reverse();
+        }
+        if (typeof value === "string") {
+          return value.split("").reverse().join("");
+        }
+        return null;
       }
       
       default:
@@ -4280,6 +4536,13 @@ export class Executor {
       const right = this.evaluateExpressionOnRow(condition.right!, row, params);
       return this.evaluateComparison(left, right, condition.operator!);
     }
+    if (condition.type === "expression") {
+      // WHERE <expression> - evaluate the expression and check if it's truthy
+      // The expression is stored in condition.left
+      const value = this.evaluateExpressionOnRow(condition.left!, row, params);
+      // In Cypher, only true is truthy; false and null are falsy
+      return value === true || value === 1;
+    }
     // Default true for unsupported conditions
     return true;
   }
@@ -4307,6 +4570,16 @@ export class Executor {
         return (obj as Record<string, unknown>)[expr.property];
       }
       return null;
+    }
+    if (expr.type === "function") {
+      // Handle functions - convert row to Map for evaluateFunctionInRow
+      const rowMap = new Map(Object.entries(row));
+      return this.evaluateFunctionInRow(expr, rowMap, params);
+    }
+    if (expr.type === "binary") {
+      // Handle binary expressions
+      const rowMap = new Map(Object.entries(row));
+      return this.evaluateBinaryInRow(expr, rowMap, params);
     }
     // Default null for unsupported expressions
     return null;
