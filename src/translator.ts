@@ -8043,7 +8043,7 @@ SELECT COALESCE(json_group_array(CAST(n AS INTEGER)), json_array()) FROM r)`,
                 };
               }
 
-              // Datetime from explicit year/month/day with time source: datetime({year: Y, month: M, day: D, time: other})
+              // Datetime from explicit year/month/day with time source: datetime({year: Y, month: M, day: D, time: other, ...overrides})
               if (!dateExpr && timeExpr && yearExpr && monthExpr && dayExpr) {
                 const timeResult = this.translateExpression(timeExpr);
                 tables.push(...timeResult.tables);
@@ -8067,11 +8067,59 @@ SELECT COALESCE(json_group_array(CAST(n AS INTEGER)), json_array()) FROM r)`,
                 const daySql = `printf('%02d', CAST(${dayResult.sql} AS INTEGER))`;
                 const datePart = `(${yearSql} || '-' || ${monthSql} || '-' || ${daySql})`;
                 
-                // Extract time components from time source
-                // localtime format is HH:MM:SS.NNNNNNNNN (no timezone)
-                // time format is HH:MM:SS.NNNNNNNNN+HH:MM
-                // We need to strip any timezone info from the time source for datetime
-                const timePart = `(SELECT substr(_t, 1, 2) || ':' || substr(_t, 4, 2) || ':' || substr(_t, 7, 2) || CASE WHEN length(_t) > 8 AND substr(_t, 9, 1) = '.' THEN substr(_t, 9, CASE WHEN instr(substr(_t, 9), '+') > 0 THEN instr(substr(_t, 9), '+') - 1 WHEN instr(substr(_t, 9), '-') > 0 THEN instr(substr(_t, 9), '-') - 1 ELSE length(_t) - 8 END) ELSE '' END FROM (SELECT ${timeResult.sql} AS _t))`;
+                // Check for time component overrides
+                const hourOverride = hourExpr;
+                const minuteOverride = minuteExpr;
+                const secondOverride = secondExpr;
+                const nanosecondOverride = nanosecondExpr;
+                const millisecondOverride = millisecondExpr;
+                const microsecondOverride = microsecondExpr;
+                const hasTimeOverrides = hourOverride || minuteOverride || secondOverride || nanosecondOverride || millisecondOverride || microsecondOverride;
+                
+                let timePart: string;
+                
+                if (hasTimeOverrides) {
+                  // Build time with overrides from time source
+                  // Helper for fractional part
+                  const getFracSql = (srcRef: string) => {
+                    if (nanosecondOverride) {
+                      const r = this.translateExpression(nanosecondOverride);
+                      tables.push(...r.tables); params.push(...r.params);
+                      return `'.' || printf('%09d', CAST(${r.sql} AS INTEGER))`;
+                    } else if (millisecondOverride) {
+                      const r = this.translateExpression(millisecondOverride);
+                      tables.push(...r.tables); params.push(...r.params);
+                      return `'.' || printf('%09d', CAST(${r.sql} AS INTEGER) * 1000000)`;
+                    } else if (microsecondOverride) {
+                      const r = this.translateExpression(microsecondOverride);
+                      tables.push(...r.tables); params.push(...r.params);
+                      return `'.' || printf('%09d', CAST(${r.sql} AS INTEGER) * 1000)`;
+                    } else {
+                      // Extract fractional from source, stripping any timezone
+                      return `CASE WHEN length(${srcRef}) > 8 AND substr(${srcRef}, 9, 1) = '.' THEN substr(${srcRef}, 9, CASE WHEN instr(substr(${srcRef}, 9), '+') > 0 THEN instr(substr(${srcRef}, 9), '+') - 1 WHEN instr(substr(${srcRef}, 9), '-') > 0 THEN instr(substr(${srcRef}, 9), '-') - 1 ELSE length(${srcRef}) - 8 END) ELSE '' END`;
+                    }
+                  };
+                  
+                  // Use subquery to avoid repeating time source
+                  const hourSql = hourOverride
+                    ? (() => { const r = this.translateExpression(hourOverride); tables.push(...r.tables); params.push(...r.params); return `printf('%02d', CAST(${r.sql} AS INTEGER))`; })()
+                    : `substr(_t, 1, 2)`;
+                  const minuteSql = minuteOverride
+                    ? (() => { const r = this.translateExpression(minuteOverride); tables.push(...r.tables); params.push(...r.params); return `printf('%02d', CAST(${r.sql} AS INTEGER))`; })()
+                    : `substr(_t, 4, 2)`;
+                  const secondSql = secondOverride
+                    ? (() => { const r = this.translateExpression(secondOverride); tables.push(...r.tables); params.push(...r.params); return `printf('%02d', CAST(${r.sql} AS INTEGER))`; })()
+                    : `substr(_t, 7, 2)`;
+                  const fracSql = getFracSql('_t');
+                  
+                  timePart = `(SELECT ${hourSql} || ':' || ${minuteSql} || ':' || ${secondSql} || ${fracSql} FROM (SELECT ${timeResult.sql} AS _t))`;
+                } else {
+                  // Extract time components from time source without overrides
+                  // localtime format is HH:MM:SS.NNNNNNNNN (no timezone)
+                  // time format is HH:MM:SS.NNNNNNNNN+HH:MM
+                  // We need to strip any timezone info from the time source for datetime
+                  timePart = `(SELECT substr(_t, 1, 2) || ':' || substr(_t, 4, 2) || ':' || substr(_t, 7, 2) || CASE WHEN length(_t) > 8 AND substr(_t, 9, 1) = '.' THEN substr(_t, 9, CASE WHEN instr(substr(_t, 9), '+') > 0 THEN instr(substr(_t, 9), '+') - 1 WHEN instr(substr(_t, 9), '-') > 0 THEN instr(substr(_t, 9), '-') - 1 ELSE length(_t) - 8 END) ELSE '' END FROM (SELECT ${timeResult.sql} AS _t))`;
+                }
                 
                 return {
                   sql: `(${datePart} || 'T' || ${timePart} || ${tzResult.sql})`,
