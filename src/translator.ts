@@ -6656,20 +6656,37 @@ SELECT COALESCE(json_group_array(CAST(n AS INTEGER)), json_array()) FROM r)`,
           throw new Error("rtrim requires an argument");
         }
 
-        // REVERSE: reverse a string
+        // REVERSE: reverse a string or list
         if (expr.functionName === "REVERSE") {
           if (expr.args && expr.args.length > 0) {
-            const argResult = this.translateFunctionArg(expr.args[0]);
+            const arg = expr.args[0];
+            const argResult = this.translateFunctionArg(arg);
             tables.push(...argResult.tables);
-            // argResult.sql appears 2 times
-            params.push(...argResult.params, ...argResult.params);
-            // SQLite doesn't have native REVERSE, use recursive CTE
-            // Pattern: WITH RECURSIVE r AS (SELECT '', str UNION ALL SELECT SUBSTR(rest,1,1)||acc, SUBSTR(rest,2) FROM r WHERE rest<>'') SELECT acc
-            return { 
-              sql: `(SELECT CASE WHEN ${argResult.sql} IS NULL THEN NULL ELSE (WITH RECURSIVE rev(acc, rest) AS (VALUES('', ${argResult.sql}) UNION ALL SELECT SUBSTR(rest, 1, 1) || acc, SUBSTR(rest, 2) FROM rev WHERE rest <> '') SELECT acc FROM rev WHERE rest = '') END)`, 
-              tables, 
-              params 
-            };
+            
+            // Check if argument is a list
+            const argIsList = this.isListExpression(arg);
+            
+            if (argIsList) {
+              // List reversal: use json_each with descending rowid order
+              // argResult.sql appears 2 times
+              params.push(...argResult.params, ...argResult.params);
+              return {
+                sql: `(SELECT CASE WHEN ${argResult.sql} IS NULL THEN NULL ELSE (SELECT json_group_array(value) FROM (SELECT value FROM json_each(${argResult.sql}) ORDER BY key DESC)) END)`,
+                tables,
+                params,
+              };
+            } else {
+              // String reversal: use recursive CTE
+              // argResult.sql appears 2 times
+              params.push(...argResult.params, ...argResult.params);
+              // SQLite doesn't have native REVERSE, use recursive CTE
+              // Pattern: WITH RECURSIVE r AS (SELECT '', str UNION ALL SELECT SUBSTR(rest,1,1)||acc, SUBSTR(rest,2) FROM r WHERE rest<>'') SELECT acc
+              return { 
+                sql: `(SELECT CASE WHEN ${argResult.sql} IS NULL THEN NULL ELSE (WITH RECURSIVE rev(acc, rest) AS (VALUES('', ${argResult.sql}) UNION ALL SELECT SUBSTR(rest, 1, 1) || acc, SUBSTR(rest, 2) FROM rev WHERE rest <> '') SELECT acc FROM rev WHERE rest = '') END)`, 
+                tables, 
+                params 
+              };
+            }
           }
           throw new Error("reverse requires an argument");
         }
@@ -7514,11 +7531,12 @@ SELECT COALESCE(json_group_array(CAST(n AS INTEGER)), json_array()) FROM r)`,
     
     if (expr.operator === "+" && leftIsList && !rightIsList) {
       // list + scalar: append scalar to list
+      // Use json_quote() to properly convert any scalar (including strings) to JSON
       const leftArraySql = this.wrapForArray(expr.left!, leftResult.sql);
       const rightScalarSql = rightResult.sql;
       
       return {
-        sql: `(SELECT json_group_array(value) FROM (SELECT value FROM json_each(${leftArraySql}) UNION ALL SELECT json(${rightScalarSql})))`,
+        sql: `(SELECT json_group_array(value) FROM (SELECT value FROM json_each(${leftArraySql}) UNION ALL SELECT json_quote(${rightScalarSql})))`,
         tables,
         params,
       };
@@ -7562,11 +7580,12 @@ SELECT COALESCE(json_group_array(CAST(n AS INTEGER)), json_array()) FROM r)`,
     
     if (expr.operator === "+" && !leftIsList && rightIsList) {
       // scalar + list: prepend scalar to list (only for non-property scalars)
+      // Use json_quote() to properly convert any scalar (including strings) to JSON
       const leftScalarSql = leftResult.sql;
       const rightArraySql = this.wrapForArray(expr.right!, rightResult.sql);
       
       return {
-        sql: `(SELECT json_group_array(value) FROM (SELECT json(${leftScalarSql}) as value UNION ALL SELECT value FROM json_each(${rightArraySql})))`,
+        sql: `(SELECT json_group_array(value) FROM (SELECT json_quote(${leftScalarSql}) as value UNION ALL SELECT value FROM json_each(${rightArraySql})))`,
         tables,
         params,
       };
@@ -7765,8 +7784,22 @@ SELECT COALESCE(json_group_array(CAST(n AS INTEGER)), json_array()) FROM r)`,
     }
     if (expr.type === "function") {
       // List-returning functions like collect(), range(), etc.
-      const listFunctions = ["COLLECT", "RANGE", "KEYS", "LABELS", "SPLIT", "TAIL"];
+      const listFunctions = ["COLLECT", "RANGE", "KEYS", "LABELS", "SPLIT", "TAIL", "REVERSE"];
       return listFunctions.includes(expr.functionName || "");
+    }
+    if (expr.type === "case") {
+      // Check if CASE branches return lists
+      // A CASE is a list expression if any of its WHEN branches are list expressions
+      const whens = expr.whens || [];
+      for (const when of whens) {
+        if (when.result && this.isListExpression(when.result, visitedVars)) {
+          return true;
+        }
+      }
+      // Also check the else branch
+      if (expr.elseExpr && this.isListExpression(expr.elseExpr, visitedVars)) {
+        return true;
+      }
     }
     return false;
   }
@@ -8576,7 +8609,9 @@ SELECT COALESCE(json_group_array(CAST(n AS INTEGER)), json_array()) FROM r)`,
         if (expr.value === null) {
           return { sql: "NULL", params };
         }
-        params.push(expr.value);
+        // Convert booleans to 1/0 for SQLite (SQLite can only bind numbers, strings, bigints, buffers, and null)
+        const literalValue = expr.value === true ? 1 : expr.value === false ? 0 : expr.value;
+        params.push(literalValue);
         return { sql: "?", params };
         
       case "parameter":
