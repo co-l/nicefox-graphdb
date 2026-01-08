@@ -7086,11 +7086,14 @@ SELECT COALESCE(json_group_array(CAST(n AS INTEGER)), json_array()) FROM r)`,
 
             // localdatetime({year: 1984, month: 10, day: 11, hour: 12, minute: 30, second: 14, nanosecond: 12})
             // or localdatetime({year: 1984, week: 10, dayOfWeek: 3, hour: 12, minute: 31, second: 14})
+            // or localdatetime({date: other, hour: H, minute: M, ...})
             if (arg.type === "object") {
               const props = arg.properties ?? [];
               const byKey = new Map<string, Expression>();
               for (const prop of props) byKey.set(prop.key.toLowerCase(), prop.value);
 
+              const dateExpr = byKey.get("date");
+              const timeExpr = byKey.get("time");
               const yearExpr = byKey.get("year");
               const monthExpr = byKey.get("month");
               const dayExpr = byKey.get("day");
@@ -7105,6 +7108,68 @@ SELECT COALESCE(json_group_array(CAST(n AS INTEGER)), json_array()) FROM r)`,
               const nanosecondExpr = byKey.get("nanosecond");
               const millisecondExpr = byKey.get("millisecond");
               const microsecondExpr = byKey.get("microsecond");
+
+              // Localdatetime projection: localdatetime({date: other, hour: H, minute: M, ...})
+              // Take date from source and add time components
+              if (dateExpr && hourExpr && minuteExpr) {
+                const dateResult = this.translateExpression(dateExpr);
+                tables.push(...dateResult.tables);
+                params.push(...dateResult.params);
+                
+                const hourResult = this.translateExpression(hourExpr);
+                const minuteResult = this.translateExpression(minuteExpr);
+                tables.push(...hourResult.tables, ...minuteResult.tables);
+                params.push(...hourResult.params, ...minuteResult.params);
+                
+                const hourSql = `CAST(${hourResult.sql} AS INTEGER)`;
+                const minuteSql = `CAST(${minuteResult.sql} AS INTEGER)`;
+                
+                let secondSql = "0";
+                if (secondExpr) {
+                  const secondResult = this.translateExpression(secondExpr);
+                  tables.push(...secondResult.tables);
+                  params.push(...secondResult.params);
+                  secondSql = `CAST(${secondResult.sql} AS INTEGER)`;
+                }
+                
+                // Handle fractional seconds
+                let nanoSql = "0";
+                if (nanosecondExpr) {
+                  const nsResult = this.translateExpression(nanosecondExpr);
+                  tables.push(...nsResult.tables);
+                  params.push(...nsResult.params);
+                  nanoSql = `CAST(${nsResult.sql} AS INTEGER)`;
+                } else if (millisecondExpr) {
+                  const msResult = this.translateExpression(millisecondExpr);
+                  tables.push(...msResult.tables);
+                  params.push(...msResult.params);
+                  nanoSql = `(CAST(${msResult.sql} AS INTEGER) * 1000000)`;
+                } else if (microsecondExpr) {
+                  const usResult = this.translateExpression(microsecondExpr);
+                  tables.push(...usResult.tables);
+                  params.push(...usResult.params);
+                  nanoSql = `(CAST(${usResult.sql} AS INTEGER) * 1000)`;
+                }
+                
+                // Extract date part (first 10 chars) from source
+                const datePart = `substr(${dateResult.sql}, 1, 10)`;
+                
+                // Build time part
+                let timePart: string;
+                if (nanoSql === "0" && !secondExpr) {
+                  timePart = `printf('%02d:%02d', ${hourSql}, ${minuteSql})`;
+                } else if (nanoSql === "0") {
+                  timePart = `printf('%02d:%02d:%02d', ${hourSql}, ${minuteSql}, ${secondSql})`;
+                } else {
+                  timePart = `printf('%02d:%02d:%02d.%09d', ${hourSql}, ${minuteSql}, ${secondSql}, ${nanoSql})`;
+                }
+                
+                return {
+                  sql: `(${datePart} || 'T' || ${timePart})`,
+                  tables,
+                  params,
+                };
+              }
 
               // Must have year, hour, minute in all cases
               if (!yearExpr || !hourExpr || !minuteExpr) {
