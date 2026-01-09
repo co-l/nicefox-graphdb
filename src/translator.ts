@@ -13889,9 +13889,9 @@ SELECT COALESCE(json_group_array(CAST(n AS INTEGER)), json_array()) FROM r)`,
             const microseconds = Number(map.microseconds ?? 0);
             let rawNanos = Number(map.nanoseconds ?? 0);
             
-            // Normalize fractional values:
+            // Normalize fractional values (Neo4j behavior):
             // - 0.5 years = 6 months (12 months/year)
-            // - 0.5 months = 15.21875 days (30.436875 days/month, Gregorian average)
+            // - 0.5 months = ~15.2 days (365.2425/12 = 30.436875 days/month, Gregorian average)
             // - 0.5 days = 12 hours (24 hours/day)
             // - 0.5 hours = 30 minutes
             // - 0.5 minutes = 30 seconds
@@ -13902,15 +13902,15 @@ SELECT COALESCE(json_group_array(CAST(n AS INTEGER)), json_array()) FROM r)`,
             
             const rawMonths = Number(map.months ?? 0) + monthsFromYearsFrac;
             const finalMonths = Math.trunc(rawMonths);
-            const daysFromMonthsFrac = (rawMonths - finalMonths) * (365.2425 / 12); // 30.436875 days/month (Gregorian average)
+            const daysFromMonthsFrac = (rawMonths - finalMonths) * (365.2425 / 12); // Neo4j uses Gregorian average
             
             const weeks = Number(map.weeks ?? 0);
             const finalWeeks = Math.trunc(weeks);
             
             const rawDays = Number(map.days ?? 0) + daysFromMonthsFrac;
-            // Use Math.round for days to handle values like 29.5 → 30 (Cypher rounds half up)
-            const finalDays = Math.round(rawDays);
-            const hoursFromDaysFrac = (rawDays - Math.trunc(rawDays)) * 24;
+            // Truncate days, carry fractional part to hours (not round!)
+            const finalDays = Math.trunc(rawDays);
+            const hoursFromDaysFrac = (rawDays - finalDays) * 24;
             
             const rawHours = Number(map.hours ?? 0) + hoursFromDaysFrac;
             let finalHours = Math.trunc(rawHours);

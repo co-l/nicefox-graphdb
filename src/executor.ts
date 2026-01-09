@@ -3707,14 +3707,63 @@ export class Executor {
           if (arg === null) return null;
           if (arg && typeof arg === "object" && !Array.isArray(arg)) {
             const map = arg as Record<string, unknown>;
-            const years = Number(map.years ?? 0);
-            const months = Number(map.months ?? 0);
-            const weeks = Number(map.weeks ?? 0);
-            const days = Number(map.days ?? 0);
-            const hours = Number(map.hours ?? 0);
-            const minutes = Number(map.minutes ?? 0);
-            const seconds = Number(map.seconds ?? 0);
-            const nanoseconds = Number(map.nanoseconds ?? 0);
+            
+            // Handle fractional values by spilling over to smaller units
+            // Neo4j behavior: 0.5 years = 6 months, 0.5 months = ~15.2 days (Gregorian average), etc.
+            let years = Number(map.years ?? 0);
+            let months = Number(map.months ?? 0);
+            let weeks = Number(map.weeks ?? 0);
+            let days = Number(map.days ?? 0);
+            let hours = Number(map.hours ?? 0);
+            let minutes = Number(map.minutes ?? 0);
+            let seconds = Number(map.seconds ?? 0);
+            let nanoseconds = Number(map.nanoseconds ?? 0);
+            
+            // Spill fractional parts to smaller units
+            const yearFrac = years - Math.trunc(years);
+            years = Math.trunc(years);
+            months += yearFrac * 12;
+            
+            const monthFrac = months - Math.trunc(months);
+            months = Math.trunc(months);
+            days += monthFrac * (365.2425 / 12);  // Neo4j uses Gregorian average (30.436875 days/month)
+            
+            const weekFrac = weeks - Math.trunc(weeks);
+            weeks = Math.trunc(weeks);
+            days += weekFrac * 7;
+            
+            const dayFrac = days - Math.trunc(days);
+            days = Math.trunc(days);
+            hours += dayFrac * 24;
+            
+            const hourFrac = hours - Math.trunc(hours);
+            hours = Math.trunc(hours);
+            minutes += hourFrac * 60;
+            
+            const minFrac = minutes - Math.trunc(minutes);
+            minutes = Math.trunc(minutes);
+            seconds += minFrac * 60;
+            
+            const secFrac = seconds - Math.trunc(seconds);
+            seconds = Math.trunc(seconds);
+            nanoseconds += secFrac * 1e9;
+            nanoseconds = Math.round(nanoseconds);
+            
+            // Normalize: carry overflow from smaller to larger units
+            if (nanoseconds >= 1e9) {
+              seconds += Math.floor(nanoseconds / 1e9);
+              nanoseconds = nanoseconds % 1e9;
+            }
+            if (seconds >= 60) {
+              minutes += Math.floor(seconds / 60);
+              seconds = seconds % 60;
+            }
+            if (minutes >= 60) {
+              hours += Math.floor(minutes / 60);
+              minutes = minutes % 60;
+            }
+            // Note: We don't normalize hours to days or months to years
+            // because duration semantics treat these differently in Neo4j
             
             // Build ISO 8601 duration string
             let datePart = "";
@@ -5664,14 +5713,63 @@ export class Executor {
           if (arg === null) return null;
           if (arg && typeof arg === "object" && !Array.isArray(arg)) {
             const map = arg as Record<string, unknown>;
-            const years = Number(map.years ?? 0);
-            const months = Number(map.months ?? 0);
-            const weeks = Number(map.weeks ?? 0);
-            const days = Number(map.days ?? 0);
-            const hours = Number(map.hours ?? 0);
-            const minutes = Number(map.minutes ?? 0);
-            const seconds = Number(map.seconds ?? 0);
-            const nanoseconds = Number(map.nanoseconds ?? 0);
+            
+            // Handle fractional values by spilling over to smaller units
+            // Neo4j behavior: 0.5 years = 6 months, 0.5 months = ~15.2 days (Gregorian average), etc.
+            let years = Number(map.years ?? 0);
+            let months = Number(map.months ?? 0);
+            let weeks = Number(map.weeks ?? 0);
+            let days = Number(map.days ?? 0);
+            let hours = Number(map.hours ?? 0);
+            let minutes = Number(map.minutes ?? 0);
+            let seconds = Number(map.seconds ?? 0);
+            let nanoseconds = Number(map.nanoseconds ?? 0);
+            
+            // Spill fractional parts to smaller units
+            const yearFrac = years - Math.trunc(years);
+            years = Math.trunc(years);
+            months += yearFrac * 12;
+            
+            const monthFrac = months - Math.trunc(months);
+            months = Math.trunc(months);
+            days += monthFrac * (365.2425 / 12);  // Neo4j uses Gregorian average (30.436875 days/month)
+            
+            const weekFrac = weeks - Math.trunc(weeks);
+            weeks = Math.trunc(weeks);
+            days += weekFrac * 7;
+            
+            const dayFrac = days - Math.trunc(days);
+            days = Math.trunc(days);
+            hours += dayFrac * 24;
+            
+            const hourFrac = hours - Math.trunc(hours);
+            hours = Math.trunc(hours);
+            minutes += hourFrac * 60;
+            
+            const minFrac = minutes - Math.trunc(minutes);
+            minutes = Math.trunc(minutes);
+            seconds += minFrac * 60;
+            
+            const secFrac = seconds - Math.trunc(seconds);
+            seconds = Math.trunc(seconds);
+            nanoseconds += secFrac * 1e9;
+            nanoseconds = Math.round(nanoseconds);
+            
+            // Normalize: carry overflow from smaller to larger units
+            if (nanoseconds >= 1e9) {
+              seconds += Math.floor(nanoseconds / 1e9);
+              nanoseconds = nanoseconds % 1e9;
+            }
+            if (seconds >= 60) {
+              minutes += Math.floor(seconds / 60);
+              seconds = seconds % 60;
+            }
+            if (minutes >= 60) {
+              hours += Math.floor(minutes / 60);
+              minutes = minutes % 60;
+            }
+            // Note: We don't normalize hours to days or months to years
+            // because duration semantics treat these differently in Neo4j
             
             // Build ISO 8601 duration string
             let datePart = "";
