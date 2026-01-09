@@ -1,4 +1,4 @@
-// API Key Authentication for NiceFox GraphDB
+// API Key Authentication for LeanGraph
 
 import { Context, Next } from "hono";
 

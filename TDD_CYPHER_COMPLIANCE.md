@@ -1,4 +1,4 @@
-# NiceFox GraphDB - TCK Compliance Guide
+# LeanGraph - TCK Compliance Guide
 
 ### What This Means
 We only run tests that Neo4j 3.5 actually passes. This gives us a realistic, achievable target rather than chasing features that even Neo4j doesn't support.
@@ -71,7 +71,7 @@ After implementing a fix, use `./scripts/comment-fixed-tests.sh` automatically u
 ## Example for debugging
 
 ```bash
-cd /home/conrad/dev/nicefox-graphdb && GRAPHDB_PROJECT=test-debug tsx -e "
+cd /home/conrad/dev/leangraph && GRAPHDB_PROJECT=test-debug tsx -e "
 (async () => {
   const { GraphDB } = require('./src/index.ts');
   const db = await GraphDB({ dataPath: ':memory:' });
@@ -100,7 +100,7 @@ cd /home/conrad/dev/nicefox-graphdb && GRAPHDB_PROJECT=test-debug tsx -e "
 ```
 
 ```bash
-cd /home/conrad/dev/nicefox-graphdb && GRAPHDB_PROJECT=test-debug tsx -e "
+cd /home/conrad/dev/leangraph && GRAPHDB_PROJECT=test-debug tsx -e "
 const Database = require('better-sqlite3');
 const db = new Database(':memory:');
 // Test SQLite directly
@@ -112,7 +112,7 @@ console.log('json_type null:', db.prepare(\"SELECT json_type(json_array(NULL), '
 ```
 
 ```bash
-cd /home/conrad/dev/nicefox-graphdb && GRAPHDB_PROJECT=test-debug tsx -e "
+cd /home/conrad/dev/leangraph && GRAPHDB_PROJECT=test-debug tsx -e "
 const { Translator } = require('./src/translator.ts');
 const { parse } = require('./src/parser.ts');
 const query = \`

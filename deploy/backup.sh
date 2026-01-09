@@ -1,17 +1,17 @@
 #!/bin/bash
 set -euo pipefail
 
-# NiceFox GraphDB Backup Script
+# LeanGraph Backup Script
 # This script performs hot backups of all production databases
 # Called by cron job installed by deploy/setup.sh
 
 # Configuration (override via environment variables)
-DATA_PATH="${DATA_PATH:-/var/data/nicefox-graphdb}"
-BACKUP_PATH="${BACKUP_PATH:-/var/backups/nicefox-graphdb}"
+DATA_PATH="${DATA_PATH:-/var/data/leangraph}"
+BACKUP_PATH="${BACKUP_PATH:-/var/backups/leangraph}"
 KEEP_COUNT="${KEEP_COUNT:-10}"
 KEEP_DAYS="${KEEP_DAYS:-30}"
-LOG_FILE="${LOG_FILE:-/var/log/nicefox-graphdb/backup.log}"
-APP_PATH="${APP_PATH:-/opt/apps/nicefox-graphdb}"
+LOG_FILE="${LOG_FILE:-/var/log/leangraph/backup.log}"
+APP_PATH="${APP_PATH:-/opt/apps/leangraph}"
 
 # Ensure log directory exists
 mkdir -p "$(dirname "$LOG_FILE")"
@@ -34,7 +34,7 @@ fi
 mkdir -p "$BACKUP_PATH"
 
 log "=========================================="
-log "Starting NiceFox GraphDB Backup"
+log "Starting LeanGraph Backup"
 log "Data path: $DATA_PATH"
 log "Backup path: $BACKUP_PATH"
 log "Keep count: $KEEP_COUNT per project"
@@ -81,11 +81,11 @@ log "=========================================="
 # Example with rclone:
 # if command -v rclone &> /dev/null; then
 #     log "Syncing to remote storage..."
-#     rclone sync "$BACKUP_PATH" remote:nicefox-graphdb-backups/ --log-file="$LOG_FILE"
+#     rclone sync "$BACKUP_PATH" remote:leangraph-backups/ --log-file="$LOG_FILE"
 # fi
 
 # Example with aws cli:
 # if command -v aws &> /dev/null; then
 #     log "Syncing to S3..."
-#     aws s3 sync "$BACKUP_PATH" s3://your-bucket/nicefox-graphdb-backups/
+#     aws s3 sync "$BACKUP_PATH" s3://your-bucket/leangraph-backups/
 # fi

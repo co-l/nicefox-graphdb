@@ -1,6 +1,6 @@
 # Quick Start Guide
 
-Get NiceFox GraphDB running in 5 minutes.
+Get LeanGraph running in 5 minutes.
 
 ## Prerequisites
 
@@ -10,7 +10,7 @@ Get NiceFox GraphDB running in 5 minutes.
 ## 1. Install the Package
 
 ```bash
-npm install nicefox-graphdb
+npm install leangraph
 ```
 
 ## 2. Start the Server
@@ -22,14 +22,14 @@ Create a directory for your data and start the server:
 mkdir -p ./graphdb-data
 
 # Start the server
-npx nicefox-graphdb serve --data ./graphdb-data --port 3000
+npx leangraph serve --data ./graphdb-data --port 3000
 ```
 
 You should see:
 
 ```
 ╔═══════════════════════════════════════════════════════════╗
-║              NiceFox GraphDB Server v0.1.0                ║
+║              LeanGraph Server v0.1.0                      ║
 ╠═══════════════════════════════════════════════════════════╣
 ║  Endpoint:  http://localhost:3000                         ║
 ║  Data:      /path/to/graphdb-data                         ║
@@ -42,7 +42,7 @@ You should see:
 In a new terminal:
 
 ```bash
-npx nicefox-graphdb create myapp --data ./graphdb-data
+npx leangraph create myapp --data ./graphdb-data
 ```
 
 This creates:
@@ -55,9 +55,9 @@ Save the API keys - you'll need them to authenticate.
 ## 4. Connect from Your Application
 
 ```typescript
-import { NiceFoxGraphDB } from 'nicefox-graphdb';
+import { GraphDB } from 'leangraph';
 
-const db = new NiceFoxGraphDB({
+const db = await GraphDB({
   url: 'http://localhost:3000',
   project: 'myapp',
   env: 'test',  // Use 'production' for prod
@@ -101,10 +101,10 @@ You can also query directly from the command line:
 
 ```bash
 # List all people
-npx nicefox-graphdb query test myapp "MATCH (p:Person) RETURN p.name, p.age" --data ./graphdb-data
+npx leangraph query test myapp "MATCH (p:Person) RETURN p.name, p.age" --data ./graphdb-data
 
 # Count relationships
-npx nicefox-graphdb query test myapp "MATCH ()-[r:KNOWS]->() RETURN COUNT(r) as count" --data ./graphdb-data
+npx leangraph query test myapp "MATCH ()-[r:KNOWS]->() RETURN COUNT(r) as count" --data ./graphdb-data
 ```
 
 ## Testing Without a Server
@@ -112,7 +112,7 @@ npx nicefox-graphdb query test myapp "MATCH ()-[r:KNOWS]->() RETURN COUNT(r) as 
 For unit tests, use the in-memory test client:
 
 ```typescript
-import { createTestClient } from 'nicefox-graphdb';
+import { createTestClient } from 'leangraph';
 
 describe('my graph tests', () => {
   let client;
@@ -138,8 +138,8 @@ describe('my graph tests', () => {
 ## Next Steps
 
 - **Enable authentication**: API keys are generated when you create a project. Pass them in the `apiKey` option.
-- **Set up backups**: Use `npx nicefox-graphdb backup --data ./graphdb-data --output ./backups`
-- **Clone production to test**: `npx nicefox-graphdb clone myapp --data ./graphdb-data --force`
+- **Set up backups**: Use `npx leangraph backup --data ./graphdb-data --output ./backups`
+- **Clone production to test**: `npx leangraph clone myapp --data ./graphdb-data --force`
 - **Learn Cypher**: See the [Cypher Support](../README.md#cypher-support) section in the main README
 
 ## Common Patterns
@@ -211,7 +211,7 @@ const friendLists = await db.query(`
 Make sure you've created the project first:
 
 ```bash
-npx nicefox-graphdb create myapp --data ./graphdb-data
+npx leangraph create myapp --data ./graphdb-data
 ```
 
 ### "Unauthorized"
@@ -219,7 +219,7 @@ npx nicefox-graphdb create myapp --data ./graphdb-data
 If authentication is enabled, provide your API key:
 
 ```typescript
-const db = new NiceFoxGraphDB({
+const db = await GraphDB({
   url: 'http://localhost:3000',
   project: 'myapp',
   env: 'test',

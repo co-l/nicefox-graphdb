@@ -1,4 +1,4 @@
-// Backup System for NiceFox GraphDB
+// Backup System for LeanGraph
 // Uses SQLite's backup API for hot (online) backups
 
 import Database from "better-sqlite3";

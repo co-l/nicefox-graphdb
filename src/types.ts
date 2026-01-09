@@ -1,4 +1,4 @@
-// NiceFox GraphDB - Shared Types
+// LeanGraph - Shared Types
 
 // ============================================================================
 // Configuration Options
@@ -12,7 +12,7 @@ export interface GraphDBOptions {
   /**
    * Base URL of the GraphDB server.
    * Used in production mode. Ignored in development mode.
-   * @default GRAPHDB_URL env var or 'https://graphdb.nicefox.net'
+   * @default GRAPHDB_URL env var or 'https://leangraph.io'
    * @example 'https://my-graphdb.example.com'
    */
   url?: string;

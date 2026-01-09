@@ -1,7 +1,7 @@
 /**
  * openCypher TCK Test Runner
  * 
- * Runs the openCypher Technology Compatibility Kit tests against NiceFox GraphDB.
+ * Runs the openCypher Technology Compatibility Kit tests against LeanGraph.
  * This provides a comprehensive compliance test suite for Cypher support.
  */
 

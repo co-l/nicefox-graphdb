@@ -1,14 +1,17 @@
-# NiceFox GraphDB
+# LeanGraph
 
-[![npm version](https://img.shields.io/npm/v/nicefox-graphdb.svg)](https://www.npmjs.com/package/nicefox-graphdb)
+[![npm version](https://img.shields.io/npm/v/leangraph.svg)](https://www.npmjs.com/package/leangraph)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+[![TCK](https://img.shields.io/badge/openCypher_TCK-100%25-brightgreen.svg)](https://opencypher.org/)
 
-A lightweight graph database with Cypher query support, powered by SQLite.
+A lightweight, embeddable graph database with **full Cypher query support**, powered by SQLite.
+
+> **100% openCypher TCK Compliance** — LeanGraph passes all 2,684 test scenarios from the openCypher Technology Compatibility Kit (Neo4j 3.5 baseline). Every Cypher feature that Neo4j 3.5 supports, LeanGraph supports.
 
 ## Installation
 
 ```bash
-npm install nicefox-graphdb
+npm install leangraph
 ```
 
 ### Native Dependencies
@@ -21,23 +24,23 @@ The `better-sqlite3` native module is an **optional dependency**:
 If you only connect to a remote GraphDB server, you can skip native compilation entirely:
 
 ```bash
-npm install nicefox-graphdb --ignore-optional
+npm install leangraph --ignore-optional
 ```
 
 For local/embedded mode, ensure `better-sqlite3` is installed:
 
 ```bash
-npm install nicefox-graphdb better-sqlite3
+npm install leangraph better-sqlite3
 ```
 
 ## Quick Start
 
 ```typescript
-import { GraphDB } from 'nicefox-graphdb';
+import { GraphDB } from 'leangraph';
 
 const db = await GraphDB({
   project: 'myapp',       // or process.env.GRAPHDB_PROJECT
-  apiKey: 'nfx_xxx',      // or process.env.GRAPHDB_API_KEY
+  apiKey: 'lg_xxx',      // or process.env.GRAPHDB_API_KEY
 });
 
 // Create nodes and relationships
@@ -54,7 +57,7 @@ db.close();
 
 ## Development vs Production Mode
 
-NiceFox GraphDB automatically adapts based on the `NODE_ENV` environment variable:
+LeanGraph automatically adapts based on the `NODE_ENV` environment variable:
 
 | Mode | `NODE_ENV` | Behavior |
 |------|-----------|----------|
@@ -96,7 +99,7 @@ NODE_ENV=production GRAPHDB_API_KEY=xxx node app.js
 
 | Option | Type | Required | Default | Description |
 |--------|------|----------|---------|-------------|
-| `url` | `string` | No | `GRAPHDB_URL` or `https://graphdb.nicefox.net` | Base URL of the GraphDB server (production only) |
+| `url` | `string` | No | `GRAPHDB_URL` or `https://leangraph.io` | Base URL of the GraphDB server (production only) |
 | `project` | `string` | Yes | `GRAPHDB_PROJECT` | Project name |
 | `apiKey` | `string` | No | `GRAPHDB_API_KEY` | API key for authentication (production only) |
 | `env` | `string` | No | `NODE_ENV` or `production` | Environment (determines database isolation) |
@@ -108,8 +111,8 @@ NODE_ENV=production GRAPHDB_API_KEY=xxx node app.js
 ```typescript
 const db = await GraphDB({
   project: 'myapp',           // or process.env.GRAPHDB_PROJECT
-  apiKey: 'nfx_xxx',          // or process.env.GRAPHDB_API_KEY
-  url: 'https://my-server',   // or process.env.GRAPHDB_URL (default: graphdb.nicefox.net)
+  apiKey: 'lg_xxx',          // or process.env.GRAPHDB_API_KEY
+  url: 'https://my-server',   // or process.env.GRAPHDB_URL (default: leangraph.io)
 });
 ```
 
@@ -309,69 +312,69 @@ For production deployments, run a dedicated server:
 
 ```bash
 # Start the server
-npx nicefox-graphdb serve --port 3000 --data ./data
+npx leangraph serve --port 3000 --data ./data
 
 # Or with custom host binding
-npx nicefox-graphdb serve --port 3000 --host 0.0.0.0 --data ./data
+npx leangraph serve --port 3000 --host 0.0.0.0 --data ./data
 ```
 
 ### Creating Projects
 
 ```bash
 # Create a new project (generates API key)
-npx nicefox-graphdb create myapp --data ./data
+npx leangraph create myapp --data ./data
 
 # Output:
 #   [created] production/myapp.db
-#   API Key: nfx_abc123...
+#   API Key: lg_abc123...
 ```
 
 ### CLI Reference
 
 ```bash
 # Server
-nicefox-graphdb serve [options]
+leangraph serve [options]
   -p, --port <port>     Port to listen on (default: 3000)
-  -d, --data <path>     Data directory (default: /var/data/nicefox-graphdb)
+  -d, --data <path>     Data directory (default: /var/data/leangraph)
   -H, --host <host>     Host to bind to (default: localhost)
   -b, --backup <path>   Backup directory (enables backup endpoints)
 
 # Project management
-nicefox-graphdb create <project>   Create new project with API keys
-nicefox-graphdb delete <project>   Delete project (use --force)
-nicefox-graphdb list               List all projects
+leangraph create <project>   Create new project with API keys
+leangraph delete <project>   Delete project (use --force)
+leangraph list               List all projects
 
 # Environment management
-nicefox-graphdb clone <project> --from <env> --to <env>   Copy between environments
-nicefox-graphdb wipe <project> --env <env>                Clear environment database
+leangraph clone <project> --from <env> --to <env>   Copy between environments
+leangraph wipe <project> --env <env>                Clear environment database
 
 # Direct queries
-nicefox-graphdb query <env> <project> "CYPHER"
+leangraph query <env> <project> "CYPHER"
 
 # Backup
-nicefox-graphdb backup [options]
+leangraph backup [options]
   -o, --output <path>   Backup directory
   -p, --project <name>  Backup specific project
   --status              Show backup status
 
 # API keys
-nicefox-graphdb apikey add <project>
-nicefox-graphdb apikey list
-nicefox-graphdb apikey remove <prefix>
+leangraph apikey add <project>
+leangraph apikey list
+leangraph apikey remove <prefix>
 ```
 
-## Why NiceFox?
+## Why LeanGraph?
 
-| Feature | NiceFox GraphDB | Neo4j |
+| Feature | LeanGraph | Neo4j |
 |---------|-----------------|-------|
 | **Deployment** | Single package, zero config | Complex setup, JVM required |
 | **Development** | Local SQLite, no server needed | Server required |
 | **Backup** | Just copy the SQLite file | Enterprise license required |
 | **Resource usage** | ~50MB RAM | 1GB+ RAM minimum |
-| **Cypher support** | Core subset | Full |
+| **Cypher support** | Full (Neo4j 3.5 parity) | Full |
 | **Cost** | Free, MIT license | Free tier limited |
 
-NiceFox is ideal for:
+LeanGraph is ideal for:
 - Applications needing graph queries without ops burden
 - Projects that outgrow JSON but don't need a full graph database
 - Self-hosted deployments where simplicity matters
@@ -384,7 +387,7 @@ NiceFox is ideal for:
 For advanced use cases, you can access the underlying components:
 
 ```typescript
-import { GraphDatabase, Executor, parse, translate } from 'nicefox-graphdb';
+import { GraphDatabase, Executor, parse, translate } from 'leangraph';
 
 // Direct database access
 const db = new GraphDatabase('./my-database.db');
@@ -409,7 +412,7 @@ console.log(translation.statements);
 ### Running a Custom Server
 
 ```typescript
-import { createServer } from 'nicefox-graphdb';
+import { createServer } from 'leangraph';
 import { serve } from '@hono/node-server';
 
 const { app, dbManager } = createServer({
@@ -450,4 +453,4 @@ This limitation affects all JavaScript-based systems, including Neo4j's JavaScri
 
 ## License
 
-[MIT](https://github.com/co-l/nicefox-graphdb/blob/main/LICENSE) - Conrad Lelubre
+[MIT](https://github.com/co-l/leangraph/blob/main/LICENSE) - Conrad Lelubre

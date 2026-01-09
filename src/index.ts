@@ -1,4 +1,4 @@
-// NiceFox GraphDB - Unified Package
+// LeanGraph - Unified Package
 // A lightweight graph database with Cypher query support, powered by SQLite.
 
 import { createRequire } from "module";
@@ -90,7 +90,7 @@ export const VERSION: string = pkg.version;
  * Create a GraphDB client.
  *
  * All options support environment variable defaults:
- * - `url`: GRAPHDB_URL (default: 'https://graphdb.nicefox.net')
+ * - `url`: GRAPHDB_URL (default: 'https://leangraph.io')
  * - `project`: GRAPHDB_PROJECT (required)
  * - `env`: NODE_ENV (default: 'production')
  * - `apiKey`: GRAPHDB_API_KEY
@@ -106,7 +106,7 @@ export const VERSION: string = pkg.version;
  *
  * @example
  * ```typescript
- * import { GraphDB } from 'nicefox-graphdb';
+ * import { GraphDB } from 'leangraph';
  *
  * // Using environment variables (set GRAPHDB_PROJECT, GRAPHDB_API_KEY)
  * const db = await GraphDB();

@@ -1,6 +1,6 @@
-# Contributing to NiceFox GraphDB
+# Contributing to LeanGraph
 
-Thank you for your interest in contributing to NiceFox GraphDB! This document provides guidelines and instructions for contributing.
+Thank you for your interest in contributing to LeanGraph! This document provides guidelines and instructions for contributing.
 
 ## Prerequisites
 
@@ -12,8 +12,8 @@ Thank you for your interest in contributing to NiceFox GraphDB! This document pr
 1. Fork the repository on GitHub
 2. Clone your fork:
    ```bash
-   git clone https://github.com/YOUR_USERNAME/nicefox-graphdb.git
-   cd nicefox-graphdb
+   git clone https://github.com/YOUR_USERNAME/leangraph.git
+   cd leangraph
    ```
 3. Install dependencies:
    ```bash
@@ -27,9 +27,9 @@ Thank you for your interest in contributing to NiceFox GraphDB! This document pr
 ## Project Structure
 
 ```
-nicefox-graphdb/
+leangraph/
 ├── packages/
-│   ├── nicefox-graphdb/  # Unified npm package (re-exports client + server)
+│   ├── leangraph/  # Unified npm package (re-exports client + server)
 │   ├── server/           # Core server: parser, translator, executor, HTTP API
 │   ├── client/           # TypeScript client library
 │   └── cli/              # Command-line interface

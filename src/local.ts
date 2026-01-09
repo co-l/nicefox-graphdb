@@ -1,4 +1,4 @@
-// NiceFox GraphDB - Local Embedded Client
+// LeanGraph - Local Embedded Client
 // Uses SQLite directly without HTTP
 
 import * as fs from "fs";

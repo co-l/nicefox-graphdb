@@ -30,8 +30,8 @@ import {
 const program = new Command();
 
 program
-  .name("nicefox-graphdb")
-  .description("NiceFox GraphDB - SQLite-based graph database with Cypher queries")
+  .name("leangraph")
+  .description("LeanGraph - SQLite-based graph database with Cypher queries")
   .version(VERSION);
 
 // ============================================================================
@@ -40,9 +40,9 @@ program
 
 program
   .command("serve")
-  .description("Start the NiceFox GraphDB HTTP server")
+  .description("Start the LeanGraph HTTP server")
   .option("-p, --port <port>", "Port to listen on", "3000")
-  .option("-d, --data <path>", "Data directory for databases", "/var/data/nicefox-graphdb")
+  .option("-d, --data <path>", "Data directory for databases", "/var/data/leangraph")
   .option("-H, --host <host>", "Host to bind to", "localhost")
   .option("-b, --backup <path>", "Backup directory (enables backup endpoints)")
   .action(async (options: { port: string; data: string; host: string; backup?: string }) => {
@@ -80,7 +80,7 @@ program
 
     console.log(`
 ╔═══════════════════════════════════════════════════════════╗
-║              NiceFox GraphDB Server v${VERSION}                ║
+║              LeanGraph Server v${VERSION}                      ║
 ╠═══════════════════════════════════════════════════════════╣
 ║  Endpoint:  http://${host}:${port.toString().padEnd(5)}                         ║
 ║  Data:      ${dataPath.slice(0, 43).padEnd(43)} ║
@@ -123,7 +123,7 @@ program
 program
   .command("create <project>")
   .description("Create a new project with databases and API key")
-  .option("-d, --data <path>", "Data directory for databases", "/var/data/nicefox-graphdb")
+  .option("-d, --data <path>", "Data directory for databases", "/var/data/leangraph")
   .option("--no-key", "Skip API key generation")
   .action((project: string, options: { data: string; key: boolean }) => {
     const dataPath = path.resolve(options.data);
@@ -178,7 +178,7 @@ program
 program
   .command("delete <project>")
   .description("Delete a project (removes databases and API keys)")
-  .option("-d, --data <path>", "Data directory for databases", "/var/data/nicefox-graphdb")
+  .option("-d, --data <path>", "Data directory for databases", "/var/data/leangraph")
   .option("-f, --force", "Skip confirmation prompt", false)
   .action((project: string, options: { data: string; force: boolean }) => {
     const dataPath = path.resolve(options.data);
@@ -242,12 +242,12 @@ program
 program
   .command("list")
   .description("List all projects and their environments")
-  .option("-d, --data <path>", "Data directory for databases", "/var/data/nicefox-graphdb")
+  .option("-d, --data <path>", "Data directory for databases", "/var/data/leangraph")
   .action((options: { data: string }) => {
     const dataPath = path.resolve(options.data);
 
     if (!fs.existsSync(dataPath)) {
-      console.log("No data directory found. Run 'nicefox-graphdb create <project>' first.");
+      console.log("No data directory found. Run 'leangraph create <project>' first.");
       return;
     }
 
@@ -278,7 +278,7 @@ program
 program
   .command("query <env> <project> <cypher>")
   .description("Execute a Cypher query against a project database")
-  .option("-d, --data <path>", "Data directory for databases", "/var/data/nicefox-graphdb")
+  .option("-d, --data <path>", "Data directory for databases", "/var/data/leangraph")
   .option("-p, --params <json>", "Query parameters as JSON", "{}")
   .option("--json", "Output raw JSON", false)
   .action((env: string, project: string, cypher: string, options: { data: string; params: string; json: boolean }) => {
@@ -293,7 +293,7 @@ program
 
     if (!fs.existsSync(dbPath)) {
       console.error(`Database not found: ${dbPath}`);
-      console.error(`Run 'nicefox-graphdb create ${project}' first.`);
+      console.error(`Run 'leangraph create ${project}' first.`);
       process.exit(1);
     }
 
@@ -344,7 +344,7 @@ program
 program
   .command("wipe <project>")
   .description("Wipe test database for a project (production is protected)")
-  .option("-d, --data <path>", "Data directory for databases", "/var/data/nicefox-graphdb")
+  .option("-d, --data <path>", "Data directory for databases", "/var/data/leangraph")
   .option("-f, --force", "Skip confirmation prompt", false)
   .action((project: string, options: { data: string; force: boolean }) => {
     const dataPath = path.resolve(options.data);
@@ -377,7 +377,7 @@ program
 program
   .command("clone <project>")
   .description("Clone production database to test (overwrites test)")
-  .option("-d, --data <path>", "Data directory for databases", "/var/data/nicefox-graphdb")
+  .option("-d, --data <path>", "Data directory for databases", "/var/data/leangraph")
   .option("-f, --force", "Skip confirmation prompt", false)
   .action((project: string, options: { data: string; force: boolean }) => {
     const dataPath = path.resolve(options.data);
@@ -414,7 +414,7 @@ program
 program
   .command("migrate")
   .description("Migrate databases from old label format (TEXT) to new format (JSON array)")
-  .option("-d, --data <path>", "Data directory for databases", "/var/data/nicefox-graphdb")
+  .option("-d, --data <path>", "Data directory for databases", "/var/data/leangraph")
   .option("-p, --project <name>", "Migrate specific project only")
   .option("--dry-run", "Preview changes without modifying data", false)
   .option("-f, --force", "Skip confirmation prompt", false)
@@ -551,7 +551,7 @@ program
 program
   .command("backup")
   .description("Backup production databases")
-  .option("-d, --data <path>", "Data directory for databases", "/var/data/nicefox-graphdb")
+  .option("-d, --data <path>", "Data directory for databases", "/var/data/leangraph")
   .option("-o, --output <path>", "Backup output directory", "./backups")
   .option("-p, --project <name>", "Backup specific project only")
   .option("--include-test", "Also backup test databases", false)
@@ -659,7 +659,7 @@ const apikey = program
 apikey
   .command("add <project>")
   .description("Generate and add a new API key for a project")
-  .option("-d, --data <path>", "Data directory", "/var/data/nicefox-graphdb")
+  .option("-d, --data <path>", "Data directory", "/var/data/leangraph")
   .option("-e, --env <env>", "Restrict to specific environment (production/test)")
   .option("--admin", "Create an admin key (ignores project/env)", false)
   .action((project: string, options: { data: string; env?: string; admin: boolean }) => {
@@ -699,7 +699,7 @@ apikey
 apikey
   .command("list")
   .description("List all API keys (shows prefixes only)")
-  .option("-d, --data <path>", "Data directory", "/var/data/nicefox-graphdb")
+  .option("-d, --data <path>", "Data directory", "/var/data/leangraph")
   .action((options: { data: string }) => {
     const dataPath = path.resolve(options.data);
     const keys = loadApiKeys(dataPath);
@@ -731,7 +731,7 @@ apikey
 apikey
   .command("remove <prefix>")
   .description("Remove an API key by its prefix (first 8+ characters)")
-  .option("-d, --data <path>", "Data directory", "/var/data/nicefox-graphdb")
+  .option("-d, --data <path>", "Data directory", "/var/data/leangraph")
   .action((prefix: string, options: { data: string }) => {
     const dataPath = path.resolve(options.data);
     const keys = loadApiKeys(dataPath);

@@ -1,12 +1,12 @@
 {
-  "name": "nicefox-graphdb",
+  "name": "leangraph",
   "version": "1.0.10",
   "description": "SQLite-based graph database with Cypher query support",
   "type": "module",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "bin": {
-    "nicefox-graphdb": "./dist/cli.js"
+    "leangraph": "./dist/cli.js"
   },
   "exports": {
     ".": {
@@ -60,11 +60,11 @@
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/co-l/nicefox-graphdb.git"
+    "url": "git+https://github.com/co-l/leangraph.git"
   },
-  "homepage": "https://github.com/co-l/nicefox-graphdb#readme",
+  "homepage": "https://leangraph.io",
   "bugs": {
-    "url": "https://github.com/co-l/nicefox-graphdb/issues"
+    "url": "https://github.com/co-l/leangraph/issues"
   },
   "engines": {
     "node": ">=18.0.0"

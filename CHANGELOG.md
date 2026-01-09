@@ -62,18 +62,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Hot backup capability
 
 #### Packages
-- `nicefox-graphdb` - Unified npm package (client + server + CLI)
-- TypeScript client library with `NiceFoxGraphDB` class
+- `leangraph` - Unified npm package (client + server + CLI)
+- TypeScript client library with `GraphDB` factory function
 - `createTestClient()` for in-memory testing
 - CLI for server and project administration
 
 #### CLI Commands
-- `nicefox-graphdb serve` - Start HTTP server
-- `nicefox-graphdb create <project>` - Create new project
-- `nicefox-graphdb delete <project>` - Delete project
-- `nicefox-graphdb list` - List all projects
-- `nicefox-graphdb query <env> <project> <cypher>` - Execute query
-- `nicefox-graphdb clone <project>` - Clone production to test
-- `nicefox-graphdb wipe <project>` - Wipe test database
-- `nicefox-graphdb backup` - Backup databases
-- `nicefox-graphdb apikey add/list/remove` - Manage API keys
+- `leangraph serve` - Start HTTP server
+- `leangraph create <project>` - Create new project
+- `leangraph delete <project>` - Delete project
+- `leangraph list` - List all projects
+- `leangraph query <env> <project> <cypher>` - Execute query
+- `leangraph clone <project>` - Clone production to test
+- `leangraph wipe <project>` - Wipe test database
+- `leangraph backup` - Backup databases
+- `leangraph apikey add/list/remove` - Manage API keys

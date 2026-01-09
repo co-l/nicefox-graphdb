@@ -1,4 +1,4 @@
-// NiceFox GraphDB Server - Entry Point
+// LeanGraph Server - Entry Point
 
 export { parse } from "./parser.js";
 export type {
@@ -51,7 +51,7 @@ if (import.meta.url === `file://${process.argv[1]}`) {
 
   const { app, dbManager } = createServer({ port, dataPath });
 
-  console.log(`NiceFox GraphDB Server v${VERSION}`);
+  console.log(`LeanGraph Server v${VERSION}`);
   console.log(`Starting on http://localhost:${port}`);
   console.log(`Data path: ${dataPath}`);
 

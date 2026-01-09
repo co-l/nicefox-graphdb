@@ -2,7 +2,7 @@
  * openCypher TCK Gherkin Parser
  * 
  * Parses .feature files from the openCypher Technology Compatibility Kit
- * and extracts test scenarios that can be run against NiceFox GraphDB.
+ * and extracts test scenarios that can be run against LeanGraph.
  */
 
 import * as fs from "fs";

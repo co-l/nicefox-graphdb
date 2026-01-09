@@ -1,4 +1,4 @@
-# NiceFox GraphDB: SQLite-Based Graph Database Service
+# LeanGraph: SQLite-Based Graph Database Service
 
 ## Project Overview
 
@@ -26,7 +26,7 @@ Build a lightweight, self-hosted graph database service that provides Cypher-lik
 ## Architecture
 
 ```
-/var/data/nicefox-graphdb/
+/var/data/leangraph/
 ├── production/
 │   ├── project-a.db
 │   └── project-b.db
@@ -141,37 +141,37 @@ GET    /health                          # Health check
 
 ```bash
 # Project management
-nicefox-graphdb create <project>              # Creates both prod and test DBs
-nicefox-graphdb delete <project>              # Deletes both (requires confirmation)
-nicefox-graphdb list                          # List all projects
+leangraph create <project>              # Creates both prod and test DBs
+leangraph delete <project>              # Deletes both (requires confirmation)
+leangraph list                          # List all projects
 
 # Environment management  
-nicefox-graphdb clone <project>               # Copy production → test
-nicefox-graphdb wipe <project>                # Wipe test DB only
+leangraph clone <project>               # Copy production → test
+leangraph wipe <project>                # Wipe test DB only
 
 # Backup
-nicefox-graphdb backup                        # Trigger backup now
-nicefox-graphdb backup --schedule "0 * * * *" # Show/set backup schedule
+leangraph backup                        # Trigger backup now
+leangraph backup --schedule "0 * * * *" # Show/set backup schedule
 
 # Query (for debugging)
-nicefox-graphdb query <env> <project> "CYPHER QUERY HERE"
+leangraph query <env> <project> "CYPHER QUERY HERE"
 
 # Server
-nicefox-graphdb serve                         # Start the HTTP server
-nicefox-graphdb serve --port 3000 --data /var/data/nicefox-graphdb
+leangraph serve                         # Start the HTTP server
+leangraph serve --port 3000 --data /var/data/leangraph
 ```
 
 ## TypeScript Client Library
 
 ```typescript
-import { NiceFoxGraphDB } from 'nicefox-graphdb/packages/client/src/index.ts';
+import { GraphDB } from 'leangraph';
 
 // Initialize
-const graph = new NiceFoxGraphDB({
+const graph = await GraphDB({
   url: 'https://graph.yourdomain.com',
   project: 'myproject',
   env: process.env.NODE_ENV === 'production' ? 'production' : 'test',
-  apiKey: process.env.NICEFOX_GRAPHDB_API_KEY
+  apiKey: process.env.GRAPHDB_API_KEY
 });
 
 // Query with Cypher
@@ -223,7 +223,7 @@ const alice = await graph.getNode('User', { id: 'abc123' });
 ## File Structure
 
 ```
-nicefox-graphdb/
+leangraph/
 ├── packages/
 │   ├── server/           # HTTP service
 │   │   ├── src/

@@ -1,4 +1,4 @@
-# NiceFox GraphDB
+# LeanGraph
 
 SQLite-based graph database with Cypher query support.
 
