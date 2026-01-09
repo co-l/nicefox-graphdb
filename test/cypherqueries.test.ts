@@ -2993,33 +2993,28 @@ describe("CypherQueries.json Patterns", () => {
     describe("toString()", () => {
       // Note: Due to the executor's deepParseJson behavior, numeric and boolean
       // strings get parsed back to their original types. This is a known limitation
-      // that affects toString() results for primitives. The SQL generation is correct,
-      // but the result parsing converts strings like "42" back to numbers.
-      
-      it("converts integer to string (note: gets parsed back to number)", () => {
+      it("converts integer to string", () => {
         const result = exec("RETURN toString(42) AS str");
         expect(result.data).toHaveLength(1);
-        // The SQL correctly generates CAST(42 AS TEXT) = '42'
-        // But deepParseJson converts '42' back to 42
-        expect(result.data[0].str).toBe(42);
+        expect(result.data[0].str).toBe("42");
       });
 
-      it("converts float to string (note: gets parsed back to number)", () => {
+      it("converts float to string", () => {
         const result = exec("RETURN toString(3.14) AS str");
         expect(result.data).toHaveLength(1);
-        expect(result.data[0].str).toBe(3.14);
+        expect(result.data[0].str).toBe("3.14");
       });
 
-      it("converts boolean true to string (note: gets parsed back to boolean)", () => {
+      it("converts boolean true to string", () => {
         const result = exec("RETURN toString(true) AS str");
         expect(result.data).toHaveLength(1);
-        expect(result.data[0].str).toBe(true);
+        expect(result.data[0].str).toBe("true");
       });
 
-      it("converts boolean false to string (note: gets parsed back to boolean)", () => {
+      it("converts boolean false to string", () => {
         const result = exec("RETURN toString(false) AS str");
         expect(result.data).toHaveLength(1);
-        expect(result.data[0].str).toBe(false);
+        expect(result.data[0].str).toBe("false");
       });
 
       it("keeps string as string", () => {
