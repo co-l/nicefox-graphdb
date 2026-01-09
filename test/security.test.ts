@@ -1,81 +1,77 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
-import { GraphDatabase } from "../src/db";
-import { Executor } from "../src/executor";
 import { parse } from "../src/parser";
 import { createApp } from "../src/routes";
 import { DatabaseManager } from "../src/db";
+import { createTestClient, TestClient, requireDatabase } from "./utils";
 
 /**
  * Security tests - SQL injection, Cypher injection, and other attack vectors
  */
 describe("Security Tests", () => {
-  let db: GraphDatabase;
-  let executor: Executor;
+  let client: TestClient;
 
-  beforeEach(() => {
-    db = new GraphDatabase(":memory:");
-    db.initialize();
-    executor = new Executor(db);
+  beforeEach(async () => {
+    client = await createTestClient();
 
     // Seed some data
-    executor.execute("CREATE (u:User {name: 'Alice', role: 'admin', password: 'secret123'})");
-    executor.execute("CREATE (u:User {name: 'Bob', role: 'user', password: 'password456'})");
-    executor.execute("CREATE (s:Secret {data: 'TOP_SECRET_DATA', classification: 'high'})");
+    await client.execute("CREATE (u:User {name: 'Alice', role: 'admin', password: 'secret123'})");
+    await client.execute("CREATE (u:User {name: 'Bob', role: 'user', password: 'password456'})");
+    await client.execute("CREATE (s:Secret {data: 'TOP_SECRET_DATA', classification: 'high'})");
   });
 
   afterEach(() => {
-    db.close();
+    client.close();
   });
 
   describe("SQL Injection via Property Values", () => {
-    it("escapes single quotes in string values", () => {
-      const result = executor.execute(
+    it("escapes single quotes in string values", async () => {
+      const result = await client.execute(
         "CREATE (n:Test {value: $val})",
         { val: "'; DROP TABLE nodes; --" }
       );
       expect(result.success).toBe(true);
 
       // Verify table still exists and query works
-      const check = executor.execute("MATCH (n:Test) RETURN n.value");
+      const check = await client.execute("MATCH (n:Test) RETURN n.value");
       expect(check.success).toBe(true);
       if (check.success) {
         expect(check.data[0]["n.value"]).toBe("'; DROP TABLE nodes; --");
       }
 
       // Verify nodes table still has data
-      expect(db.countNodes()).toBeGreaterThan(0);
+      expect(requireDatabase(client).countNodes()).toBeGreaterThan(0);
     });
 
-    it("escapes double quotes in string values", () => {
-      const result = executor.execute(
+    it("escapes double quotes in string values", async () => {
+      const result = await client.execute(
         "CREATE (n:Test {value: $val})",
         { val: '"; DROP TABLE nodes; --' }
       );
       expect(result.success).toBe(true);
 
-      const check = executor.execute("MATCH (n:Test) RETURN n.value");
+      const check = await client.execute("MATCH (n:Test) RETURN n.value");
       expect(check.success).toBe(true);
     });
 
-    it("handles nested SQL injection attempts in JSON", () => {
+    it("handles nested SQL injection attempts in JSON", async () => {
       const maliciousJson = {
         name: "test",
         nested: { attack: "'); DELETE FROM nodes; --" },
       };
 
       // This would be passed as a parameter
-      const result = executor.execute(
+      const result = await client.execute(
         "CREATE (n:Test {data: $data})",
         { data: JSON.stringify(maliciousJson) }
       );
       expect(result.success).toBe(true);
 
       // Verify data integrity
-      const nodeCount = db.countNodes();
+      const nodeCount = requireDatabase(client).countNodes();
       expect(nodeCount).toBeGreaterThanOrEqual(3); // Original 3 + new one
     });
 
-    it("escapes backslashes and special characters", () => {
+    it("escapes backslashes and special characters", async () => {
       const attacks = [
         "\\'; DROP TABLE nodes; --",
         "\0'; DROP TABLE nodes; --",
@@ -85,7 +81,7 @@ describe("Security Tests", () => {
       ];
 
       for (const attack of attacks) {
-        const result = executor.execute(
+        const result = await client.execute(
           "CREATE (n:Attack {payload: $p})",
           { p: attack }
         );
@@ -93,12 +89,12 @@ describe("Security Tests", () => {
       }
 
       // Verify database integrity
-      expect(db.countNodes()).toBeGreaterThan(0);
+      expect(requireDatabase(client).countNodes()).toBeGreaterThan(0);
     });
 
-    it("prevents SQL injection via numeric parameters", () => {
+    it("prevents SQL injection via numeric parameters", async () => {
       // Attempt to inject via what should be a number
-      const result = executor.execute(
+      const result = await client.execute(
         "MATCH (u:User) WHERE u.role = $role RETURN u",
         { role: "1 OR 1=1; --" }
       );
@@ -111,9 +107,9 @@ describe("Security Tests", () => {
   });
 
   describe("SQL Injection via Cypher Syntax", () => {
-    it("does not allow breaking out of string literals in Cypher", () => {
+    it("does not allow breaking out of string literals in Cypher", async () => {
       // Try to inject via the Cypher parser itself
-      const result = executor.execute(
+      const result = await client.execute(
         "MATCH (u:User {name: 'Alice' OR '1'='1'}) RETURN u"
       );
 
@@ -124,8 +120,8 @@ describe("Security Tests", () => {
       }
     });
 
-    it("rejects attempts to add additional clauses via string", () => {
-      const result = executor.execute(
+    it("rejects attempts to add additional clauses via string", async () => {
+      const result = await client.execute(
         "MATCH (u:User {name: 'Alice'}) RETURN u; DROP TABLE nodes; --"
       );
 
@@ -133,8 +129,8 @@ describe("Security Tests", () => {
       expect(result.success).toBe(false);
     });
 
-    it("prevents UNION-style attacks", () => {
-      const result = executor.execute(
+    it("prevents UNION-style attacks", async () => {
+      const result = await client.execute(
         "MATCH (u:User {name: 'x' }) RETURN u UNION SELECT * FROM secrets --'})"
       );
 
@@ -142,9 +138,9 @@ describe("Security Tests", () => {
       expect(result.success).toBe(false);
     });
 
-    it("handles label injection attempts", () => {
+    it("handles label injection attempts", async () => {
       // Try to inject via label
-      const result = executor.execute(
+      const result = await client.execute(
         "MATCH (n:User}) RETURN n; DELETE FROM nodes WHERE (1=1"
       );
 
@@ -153,20 +149,20 @@ describe("Security Tests", () => {
   });
 
   describe("SQL Injection via Property Names", () => {
-    it("does not allow injection via property access", () => {
+    it("does not allow injection via property access", async () => {
       // The property name should be safely handled
       const maliciousProperty = "name]; DROP TABLE nodes; --";
 
       // This should be caught at parse time or safely escaped
-      const result = executor.execute(`MATCH (u:User) RETURN u.${maliciousProperty}`);
+      const result = await client.execute(`MATCH (u:User) RETURN u.${maliciousProperty}`);
 
       // Should fail to parse
       expect(result.success).toBe(false);
     });
 
-    it("safely handles special characters in property names via parameters", () => {
+    it("safely handles special characters in property names via parameters", async () => {
       // Even if someone tries to use weird property names
-      const result = executor.execute(
+      const result = await client.execute(
         "CREATE (n:Test {normalProp: $val})",
         { val: "safe_value" }
       );
@@ -175,9 +171,9 @@ describe("Security Tests", () => {
   });
 
   describe("Cypher Injection", () => {
-    it("prevents breaking out of parameter context", () => {
+    it("prevents breaking out of parameter context", async () => {
       // Try to inject additional Cypher via parameter
-      const result = executor.execute(
+      const result = await client.execute(
         "MATCH (u:User {name: $name}) RETURN u",
         { name: "Alice'}) RETURN u UNION MATCH (s:Secret) RETURN s; //" }
       );
@@ -192,17 +188,17 @@ describe("Security Tests", () => {
       }
     });
 
-    it("correctly handles multiple relationship types in traversals", () => {
+    it("correctly handles multiple relationship types in traversals", async () => {
       // Setup: create edges
-      const users = db.getNodesByLabel("User");
-      const secrets = db.getNodesByLabel("Secret");
+      const users = requireDatabase(client).getNodesByLabel("User");
+      const secrets = requireDatabase(client).getNodesByLabel("Secret");
       if (users.length > 0 && secrets.length > 0) {
-        db.insertEdge("access1", "CAN_ACCESS", users[0].id, secrets[0].id);
+        requireDatabase(client).insertEdge("access1", "CAN_ACCESS", users[0].id, secrets[0].id);
       }
 
       // Multiple relationship types are valid syntax
       // Security should be handled at the authorization layer, not by syntax limitations
-      const result = executor.execute(
+      const result = await client.execute(
         "MATCH (u:User {name: 'Bob'})-[:KNOWS|CAN_ACCESS]->(s) RETURN s"
       );
 
@@ -211,8 +207,8 @@ describe("Security Tests", () => {
       // Result depends on data setup - the query is valid
     });
 
-    it("handles nested object injection in properties", () => {
-      const result = executor.execute(
+    it("handles nested object injection in properties", async () => {
+      const result = await client.execute(
         "CREATE (n:Test {data: $d})",
         {
           d: {
@@ -226,7 +222,7 @@ describe("Security Tests", () => {
       expect(result.success).toBe(true);
 
       // Verify the data was stored safely
-      const check = executor.execute("MATCH (n:Test) RETURN n");
+      const check = await client.execute("MATCH (n:Test) RETURN n");
       if (check.success && check.data.length > 0) {
         const node = check.data[0].n as any;
         // Prototype pollution should not have occurred
@@ -357,8 +353,8 @@ describe("Security Tests", () => {
   });
 
   describe("Information Disclosure Prevention", () => {
-    it("does not leak database schema in errors", () => {
-      const result = executor.execute("INVALID SYNTAX HERE");
+    it("does not leak database schema in errors", async () => {
+      const result = await client.execute("INVALID SYNTAX HERE");
 
       expect(result.success).toBe(false);
       if (!result.success) {
@@ -372,8 +368,8 @@ describe("Security Tests", () => {
       }
     });
 
-    it("does not leak file paths in errors", () => {
-      const result = executor.execute("INVALID SYNTAX");
+    it("does not leak file paths in errors", async () => {
+      const result = await client.execute("INVALID SYNTAX");
 
       expect(result.success).toBe(false);
       if (!result.success) {
@@ -386,8 +382,8 @@ describe("Security Tests", () => {
       }
     });
 
-    it("provides useful but safe error messages", () => {
-      const result = executor.execute("MTCH (n) RETURN n"); // Typo in MATCH
+    it("provides useful but safe error messages", async () => {
+      const result = await client.execute("MTCH (n) RETURN n"); // Typo in MATCH
 
       expect(result.success).toBe(false);
       if (!result.success) {
@@ -399,14 +395,14 @@ describe("Security Tests", () => {
   });
 
   describe("Resource Exhaustion Prevention", () => {
-    it("handles queries that would return large result sets", () => {
+    it("handles queries that would return large result sets", async () => {
       // Create many nodes
       for (let i = 0; i < 100; i++) {
-        executor.execute(`CREATE (n:Bulk {index: ${i}})`);
+        await client.execute(`CREATE (n:Bulk {index: ${i}})`);
       }
 
       // Query without limit
-      const result = executor.execute("MATCH (n:Bulk) RETURN n");
+      const result = await client.execute("MATCH (n:Bulk) RETURN n");
 
       expect(result.success).toBe(true);
       if (result.success) {
@@ -415,12 +411,12 @@ describe("Security Tests", () => {
       }
     });
 
-    it("respects LIMIT to prevent large result sets", () => {
+    it("respects LIMIT to prevent large result sets", async () => {
       for (let i = 0; i < 100; i++) {
-        executor.execute(`CREATE (n:Limited {index: ${i}})`);
+        await client.execute(`CREATE (n:Limited {index: ${i}})`);
       }
 
-      const result = executor.execute("MATCH (n:Limited) RETURN n LIMIT 10");
+      const result = await client.execute("MATCH (n:Limited) RETURN n LIMIT 10");
 
       expect(result.success).toBe(true);
       if (result.success) {
@@ -428,11 +424,11 @@ describe("Security Tests", () => {
       }
     });
 
-    it("handles regex-like patterns safely in CONTAINS", () => {
-      executor.execute("CREATE (n:Test {data: 'aaaaaaaaaaaaaaaaaaaaaaaaaaaa'})");
+    it("handles regex-like patterns safely in CONTAINS", async () => {
+      await client.execute("CREATE (n:Test {data: 'aaaaaaaaaaaaaaaaaaaaaaaaaaaa'})");
 
       // Potential ReDoS pattern (though SQLite LIKE is not vulnerable to this)
-      const result = executor.execute(
+      const result = await client.execute(
         "MATCH (n:Test) WHERE n.data CONTAINS 'a' RETURN n"
       );
 
@@ -493,18 +489,16 @@ describe("Security Tests", () => {
       "MATCH\u0000(n)\u0000RETURN\u0000n",
     ];
 
-    it("handles fuzz inputs without crashing", () => {
+    it("handles fuzz inputs without crashing", async () => {
       for (const input of fuzzInputs) {
         // Should not throw - may fail gracefully
-        expect(() => {
-          const result = executor.execute(input);
-          // Just verify we get a response
-          expect(result).toHaveProperty("success");
-        }).not.toThrow();
+        const result = await client.execute(input);
+        // Just verify we get a response
+        expect(result).toHaveProperty("success");
       }
     });
 
-    it("parser handles fuzz inputs without crashing", () => {
+    it("parser handles fuzz inputs without crashing", async () => {
       for (const input of fuzzInputs) {
         expect(() => {
           const result = parse(input);
@@ -515,7 +509,7 @@ describe("Security Tests", () => {
   });
 
   describe("Type Confusion Attacks", () => {
-    it("handles type confusion in parameters", () => {
+    it("handles type confusion in parameters", async () => {
       const confusingParams = [
         { val: null },
         { val: undefined },
@@ -535,17 +529,15 @@ describe("Security Tests", () => {
 
       for (const params of confusingParams) {
         // Should handle without crashing
-        expect(() => {
-          const result = executor.execute(
-            "CREATE (n:Test {value: $val})",
-            params as any
-          );
-          expect(result).toHaveProperty("success");
-        }).not.toThrow();
+        const result = await client.execute(
+          "CREATE (n:Test {value: $val})",
+          params as any
+        );
+        expect(result).toHaveProperty("success");
       }
     });
 
-    it("handles unexpected types in Cypher values", () => {
+    it("handles unexpected types in Cypher values", async () => {
       // These should all parse correctly or fail gracefully
       const queries = [
         "CREATE (n:Test {value: true})",
@@ -561,10 +553,8 @@ describe("Security Tests", () => {
       ];
 
       for (const query of queries) {
-        expect(() => {
-          const result = executor.execute(query);
-          expect(result).toHaveProperty("success");
-        }).not.toThrow();
+        const result = await client.execute(query);
+        expect(result).toHaveProperty("success");
       }
     });
   });

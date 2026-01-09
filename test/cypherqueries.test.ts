@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
-import { GraphDatabase } from "../src/db";
-import { Executor, ExecutionResult } from "../src/executor";
+import { ExecutionResult } from "../src/executor";
+import { createTestClient, TestClient, requireDatabase } from "./utils";
 
 /**
  * Tests for Cypher query patterns from /tmp/cypherqueries.json
@@ -8,21 +8,18 @@ import { Executor, ExecutionResult } from "../src/executor";
  * from the CC (invoice/accounting) application.
  */
 describe("CypherQueries.json Patterns", () => {
-  let db: GraphDatabase;
-  let executor: Executor;
+  let client: TestClient;
 
-  beforeEach(() => {
-    db = new GraphDatabase(":memory:");
-    db.initialize();
-    executor = new Executor(db);
+  beforeEach(async () => {
+    client = await createTestClient();
   });
 
   afterEach(() => {
-    db.close();
+    client.close();
   });
 
-  function exec(cypher: string, params: Record<string, unknown> = {}): ExecutionResult {
-    const result = executor.execute(cypher, params);
+  async function exec(cypher: string, params: Record<string, unknown> = {}): Promise<ExecutionResult> {
+    const result = await client.execute(cypher, params);
     if (!result.success) {
       throw new Error(`Query failed: ${result.error.message}`);
     }
@@ -30,9 +27,9 @@ describe("CypherQueries.json Patterns", () => {
   }
 
   describe("User Operations", () => {
-    it("creates a user and returns it", () => {
+    it("creates a user and returns it", async () => {
       // CREATE (u:CC_User {...}) RETURN u
-      const result = exec(
+      const result = await exec(
         `CREATE (u:CC_User {
           id: $id,
           email: $email,
@@ -53,15 +50,15 @@ describe("CypherQueries.json Patterns", () => {
       expect(user.email).toBe("test@example.com");
     });
 
-    it("finds a user by email", () => {
+    it("finds a user by email", async () => {
       // First create a user
-      exec(
+      await exec(
         `CREATE (u:CC_User {id: $id, email: $email, passwordHash: $passwordHash, createdAt: $createdAt})`,
         { id: "user-1", email: "alice@example.com", passwordHash: "hash", createdAt: "2024-01-01" }
       );
 
       // MATCH (u:CC_User {email: $email}) RETURN u
-      const result = exec(`MATCH (u:CC_User {email: $email}) RETURN u`, {
+      const result = await exec(`MATCH (u:CC_User {email: $email}) RETURN u`, {
         email: "alice@example.com",
       });
 
@@ -70,14 +67,14 @@ describe("CypherQueries.json Patterns", () => {
       expect(user.email).toBe("alice@example.com");
     });
 
-    it("finds a user by id", () => {
-      exec(
+    it("finds a user by id", async () => {
+      await exec(
         `CREATE (u:CC_User {id: $id, email: $email, passwordHash: $passwordHash, createdAt: $createdAt})`,
         { id: "user-123", email: "bob@example.com", passwordHash: "hash", createdAt: "2024-01-01" }
       );
 
       // MATCH (u:CC_User {id: $id}) RETURN u
-      const result = exec(`MATCH (u:CC_User {id: $id}) RETURN u`, { id: "user-123" });
+      const result = await exec(`MATCH (u:CC_User {id: $id}) RETURN u`, { id: "user-123" });
 
       expect(result.data).toHaveLength(1);
       const user = result.data[0].u as Record<string, unknown>;
@@ -86,15 +83,15 @@ describe("CypherQueries.json Patterns", () => {
   });
 
   describe("Business Operations", () => {
-    it("gets business by user id through OWNS relationship", () => {
+    it("gets business by user id through OWNS relationship", async () => {
       // Create user
-      exec(`CREATE (u:CC_User {id: $id, email: $email})`, {
+      await exec(`CREATE (u:CC_User {id: $id, email: $email})`, {
         id: "user-1",
         email: "owner@example.com",
       });
 
       // Create business linked to user
-      exec(
+      await exec(
         `MATCH (u:CC_User {id: $userId})
          CREATE (u)-[:OWNS]->(b:CC_Business {
            id: $businessId,
@@ -105,7 +102,7 @@ describe("CypherQueries.json Patterns", () => {
       );
 
       // MATCH (u:CC_User {id: $userId})-[:OWNS]->(b:CC_Business) RETURN b
-      const result = exec(
+      const result = await exec(
         `MATCH (u:CC_User {id: $userId})-[:OWNS]->(b:CC_Business) RETURN b`,
         { userId: "user-1" }
       );
@@ -115,13 +112,13 @@ describe("CypherQueries.json Patterns", () => {
       expect(biz.name).toBe("Acme Inc");
     });
 
-    it("updates business properties and returns updated business", () => {
+    it("updates business properties and returns updated business", async () => {
       // Setup
-      exec(`CREATE (u:CC_User {id: $id, email: $email})`, {
+      await exec(`CREATE (u:CC_User {id: $id, email: $email})`, {
         id: "user-1",
         email: "owner@example.com",
       });
-      exec(
+      await exec(
         `MATCH (u:CC_User {id: $userId})
          CREATE (u)-[:OWNS]->(b:CC_Business {id: $businessId, name: $name, address: $address})`,
         { userId: "user-1", businessId: "biz-1", name: "Old Name", address: "Old Address" }
@@ -130,13 +127,13 @@ describe("CypherQueries.json Patterns", () => {
       // MATCH (u:CC_User {id: $userId})-[:OWNS]->(b:CC_Business)
       // SET b.name = $name, b.address = $address
       // RETURN b
-      exec(
+      await exec(
         `MATCH (u:CC_User {id: $userId})-[:OWNS]->(b:CC_Business)
          SET b.name = $name, b.address = $address`,
         { userId: "user-1", name: "New Name", address: "New Address" }
       );
 
-      const result = exec(
+      const result = await exec(
         `MATCH (u:CC_User {id: $userId})-[:OWNS]->(b:CC_Business) RETURN b`,
         { userId: "user-1" }
       );
@@ -148,14 +145,14 @@ describe("CypherQueries.json Patterns", () => {
   });
 
   describe("Customer Operations", () => {
-    it("creates customer linked to user via HAS_CUSTOMER relationship", () => {
-      exec(`CREATE (u:CC_User {id: $id, email: $email})`, {
+    it("creates customer linked to user via HAS_CUSTOMER relationship", async () => {
+      await exec(`CREATE (u:CC_User {id: $id, email: $email})`, {
         id: "user-1",
         email: "owner@example.com",
       });
 
       // Create customer
-      exec(
+      await exec(
         `MATCH (u:CC_User {id: $userId})
          CREATE (u)-[:HAS_CUSTOMER]->(c:CC_Customer {
            id: $customerId,
@@ -172,7 +169,7 @@ describe("CypherQueries.json Patterns", () => {
         }
       );
 
-      const result = exec(
+      const result = await exec(
         `MATCH (u:CC_User {id: $userId})-[:HAS_CUSTOMER]->(c:CC_Customer) RETURN c`,
         { userId: "user-1" }
       );
@@ -182,22 +179,22 @@ describe("CypherQueries.json Patterns", () => {
       expect(customer.name).toBe("Customer Inc");
     });
 
-    it("gets customer with sequence through USES_SEQUENCE relationship", () => {
+    it("gets customer with sequence through USES_SEQUENCE relationship", async () => {
       // Setup user, customer, and sequence
-      exec(`CREATE (u:CC_User {id: $id})`, { id: "user-1" });
-      exec(
+      await exec(`CREATE (u:CC_User {id: $id})`, { id: "user-1" });
+      await exec(
         `MATCH (u:CC_User {id: $userId})
          CREATE (u)-[:HAS_CUSTOMER]->(c:CC_Customer {id: $customerId, name: $name})`,
         { userId: "user-1", customerId: "cust-1", name: "Customer" }
       );
-      exec(
+      await exec(
         `MATCH (u:CC_User {id: $userId})
          CREATE (u)-[:HAS_SEQUENCE]->(s:CC_InvoiceSequence {id: $sequenceId, prefix: $prefix, lastNumber: $lastNumber})`,
         { userId: "user-1", sequenceId: "seq-1", prefix: "INV", lastNumber: 0 }
       );
 
       // Link customer to sequence
-      exec(
+      await exec(
         `MATCH (c:CC_Customer {id: $customerId})
          MATCH (s:CC_InvoiceSequence {id: $sequenceId})
          CREATE (c)-[:USES_SEQUENCE]->(s)`,
@@ -206,7 +203,7 @@ describe("CypherQueries.json Patterns", () => {
 
       // MATCH (c:CC_Customer {id: $customerId})-[:USES_SEQUENCE]->(s:CC_InvoiceSequence)
       // RETURN s.id as sequenceId
-      const result = exec(
+      const result = await exec(
         `MATCH (c:CC_Customer {id: $customerId})-[:USES_SEQUENCE]->(s:CC_InvoiceSequence)
          RETURN s.id as sequenceId`,
         { customerId: "cust-1" }
@@ -216,20 +213,20 @@ describe("CypherQueries.json Patterns", () => {
       expect(result.data[0].sequenceId).toBe("seq-1");
     });
 
-    it("deletes USES_SEQUENCE relationship", () => {
+    it("deletes USES_SEQUENCE relationship", async () => {
       // Setup
-      exec(`CREATE (u:CC_User {id: $id})`, { id: "user-1" });
-      exec(
+      await exec(`CREATE (u:CC_User {id: $id})`, { id: "user-1" });
+      await exec(
         `MATCH (u:CC_User {id: $userId})
          CREATE (u)-[:HAS_CUSTOMER]->(c:CC_Customer {id: $customerId, name: $name})`,
         { userId: "user-1", customerId: "cust-1", name: "Customer" }
       );
-      exec(
+      await exec(
         `MATCH (u:CC_User {id: $userId})
          CREATE (u)-[:HAS_SEQUENCE]->(s:CC_InvoiceSequence {id: $sequenceId, prefix: $prefix})`,
         { userId: "user-1", sequenceId: "seq-1", prefix: "INV" }
       );
-      exec(
+      await exec(
         `MATCH (c:CC_Customer {id: $customerId})
          MATCH (s:CC_InvoiceSequence {id: $sequenceId})
          CREATE (c)-[:USES_SEQUENCE]->(s)`,
@@ -237,14 +234,14 @@ describe("CypherQueries.json Patterns", () => {
       );
 
       // MATCH (c:CC_Customer {id: $customerId})-[r:USES_SEQUENCE]->() DELETE r
-      exec(
+      await exec(
         `MATCH (c:CC_Customer {id: $customerId})-[r:USES_SEQUENCE]->()
          DELETE r`,
         { customerId: "cust-1" }
       );
 
       // Verify relationship is gone
-      const result = exec(
+      const result = await exec(
         `MATCH (c:CC_Customer {id: $customerId})-[:USES_SEQUENCE]->(s)
          RETURN s`,
         { customerId: "cust-1" }
@@ -252,9 +249,9 @@ describe("CypherQueries.json Patterns", () => {
       expect(result.data).toHaveLength(0);
     });
 
-    it("archives and unarchives customer", () => {
-      exec(`CREATE (u:CC_User {id: $id})`, { id: "user-1" });
-      exec(
+    it("archives and unarchives customer", async () => {
+      await exec(`CREATE (u:CC_User {id: $id})`, { id: "user-1" });
+      await exec(
         `MATCH (u:CC_User {id: $userId})
          CREATE (u)-[:HAS_CUSTOMER]->(c:CC_Customer {id: $customerId, name: $name, archived: false})`,
         { userId: "user-1", customerId: "cust-1", name: "Customer" }
@@ -263,13 +260,13 @@ describe("CypherQueries.json Patterns", () => {
       // Archive customer
       // MATCH (u:CC_User {id: $userId})-[:HAS_CUSTOMER]->(c:CC_Customer {id: $customerId})
       // SET c.archived = true
-      exec(
+      await exec(
         `MATCH (u:CC_User {id: $userId})-[:HAS_CUSTOMER]->(c:CC_Customer {id: $customerId})
          SET c.archived = true`,
         { userId: "user-1", customerId: "cust-1" }
       );
 
-      let result = exec(
+      let result = await exec(
         `MATCH (u:CC_User {id: $userId})-[:HAS_CUSTOMER]->(c:CC_Customer {id: $customerId})
          RETURN c`,
         { userId: "user-1", customerId: "cust-1" }
@@ -278,13 +275,13 @@ describe("CypherQueries.json Patterns", () => {
       expect(customer.archived).toBe(true);
 
       // Unarchive customer
-      exec(
+      await exec(
         `MATCH (u:CC_User {id: $userId})-[:HAS_CUSTOMER]->(c:CC_Customer {id: $customerId})
          SET c.archived = false`,
         { userId: "user-1", customerId: "cust-1" }
       );
 
-      result = exec(
+      result = await exec(
         `MATCH (u:CC_User {id: $userId})-[:HAS_CUSTOMER]->(c:CC_Customer {id: $customerId})
          RETURN c`,
         { userId: "user-1", customerId: "cust-1" }
@@ -293,9 +290,9 @@ describe("CypherQueries.json Patterns", () => {
       expect(customer.archived).toBe(false);
     });
 
-    it("detach deletes customer", () => {
-      exec(`CREATE (u:CC_User {id: $id})`, { id: "user-1" });
-      exec(
+    it("detach deletes customer", async () => {
+      await exec(`CREATE (u:CC_User {id: $id})`, { id: "user-1" });
+      await exec(
         `MATCH (u:CC_User {id: $userId})
          CREATE (u)-[:HAS_CUSTOMER]->(c:CC_Customer {id: $customerId, name: $name})`,
         { userId: "user-1", customerId: "cust-1", name: "Customer" }
@@ -303,23 +300,23 @@ describe("CypherQueries.json Patterns", () => {
 
       // MATCH (u:CC_User {id: $userId})-[:HAS_CUSTOMER]->(c:CC_Customer {id: $customerId})
       // DETACH DELETE c
-      exec(
+      await exec(
         `MATCH (u:CC_User {id: $userId})-[:HAS_CUSTOMER]->(c:CC_Customer {id: $customerId})
          DETACH DELETE c`,
         { userId: "user-1", customerId: "cust-1" }
       );
 
-      const result = exec(
+      const result = await exec(
         `MATCH (c:CC_Customer {id: $customerId}) RETURN c`,
         { customerId: "cust-1" }
       );
       expect(result.data).toHaveLength(0);
     });
 
-    it("counts invoices for customer", () => {
+    it("counts invoices for customer", async () => {
       // Setup
-      exec(`CREATE (u:CC_User {id: $id})`, { id: "user-1" });
-      exec(
+      await exec(`CREATE (u:CC_User {id: $id})`, { id: "user-1" });
+      await exec(
         `MATCH (u:CC_User {id: $userId})
          CREATE (u)-[:HAS_CUSTOMER]->(c:CC_Customer {id: $customerId, name: $name})`,
         { userId: "user-1", customerId: "cust-1", name: "Customer" }
@@ -327,7 +324,7 @@ describe("CypherQueries.json Patterns", () => {
 
       // Create invoices linked to user and customer
       for (let i = 1; i <= 3; i++) {
-        exec(
+        await exec(
           `MATCH (u:CC_User {id: $userId})
            MATCH (c:CC_Customer {id: $customerId})
            CREATE (u)-[:HAS_INVOICE]->(i:CC_Invoice {id: $invoiceId, invoiceNumber: $invoiceNumber})-[:BILLED_TO]->(c)`,
@@ -337,7 +334,7 @@ describe("CypherQueries.json Patterns", () => {
 
       // MATCH (u:CC_User {id: $userId})-[:HAS_INVOICE]->(i:CC_Invoice)-[:BILLED_TO]->(c:CC_Customer {id: $customerId})
       // RETURN COUNT(i) as invoiceCount
-      const result = exec(
+      const result = await exec(
         `MATCH (u:CC_User {id: $userId})-[:HAS_INVOICE]->(i:CC_Invoice)-[:BILLED_TO]->(c:CC_Customer {id: $customerId})
          RETURN COUNT(i) as invoiceCount`,
         { userId: "user-1", customerId: "cust-1" }
@@ -349,11 +346,11 @@ describe("CypherQueries.json Patterns", () => {
   });
 
   describe("Report Operations", () => {
-    it("gets reports by user id", () => {
-      exec(`CREATE (u:CC_User {id: $id})`, { id: "user-1" });
+    it("gets reports by user id", async () => {
+      await exec(`CREATE (u:CC_User {id: $id})`, { id: "user-1" });
 
       for (let month = 1; month <= 3; month++) {
-        exec(
+        await exec(
           `MATCH (u:CC_User {id: $userId})
            CREATE (u)-[:HAS_REPORT]->(r:CC_MonthlyReport {id: $reportId, year: $year, month: $month, status: $status})`,
           { userId: "user-1", reportId: `report-${month}`, year: 2024, month, status: "pending" }
@@ -361,7 +358,7 @@ describe("CypherQueries.json Patterns", () => {
       }
 
       // MATCH (u:CC_User {id: $userId})-[:HAS_REPORT]->(r:CC_MonthlyReport) RETURN r
-      const result = exec(
+      const result = await exec(
         `MATCH (u:CC_User {id: $userId})-[:HAS_REPORT]->(r:CC_MonthlyReport) RETURN r`,
         { userId: "user-1" }
       );
@@ -369,14 +366,14 @@ describe("CypherQueries.json Patterns", () => {
       expect(result.data).toHaveLength(3);
     });
 
-    it("finds report by year and month in WHERE clause", () => {
-      exec(`CREATE (u:CC_User {id: $id})`, { id: "user-1" });
-      exec(
+    it("finds report by year and month in WHERE clause", async () => {
+      await exec(`CREATE (u:CC_User {id: $id})`, { id: "user-1" });
+      await exec(
         `MATCH (u:CC_User {id: $userId})
          CREATE (u)-[:HAS_REPORT]->(r:CC_MonthlyReport {id: $reportId, year: $year, month: $month, status: $status})`,
         { userId: "user-1", reportId: "report-jan", year: 2024, month: 1, status: "pending" }
       );
-      exec(
+      await exec(
         `MATCH (u:CC_User {id: $userId})
          CREATE (u)-[:HAS_REPORT]->(r:CC_MonthlyReport {id: $reportId, year: $year, month: $month, status: $status})`,
         { userId: "user-1", reportId: "report-feb", year: 2024, month: 2, status: "complete" }
@@ -385,7 +382,7 @@ describe("CypherQueries.json Patterns", () => {
       // MATCH (u:CC_User {id: $userId})-[:HAS_REPORT]->(r:CC_MonthlyReport)
       // WHERE r.year = $year AND r.month = $month
       // RETURN r
-      const result = exec(
+      const result = await exec(
         `MATCH (u:CC_User {id: $userId})-[:HAS_REPORT]->(r:CC_MonthlyReport)
          WHERE r.year = $year AND r.month = $month
          RETURN r`,
@@ -397,19 +394,19 @@ describe("CypherQueries.json Patterns", () => {
       expect(report.id).toBe("report-jan");
     });
 
-    it("updates report status", () => {
-      exec(`CREATE (r:CC_MonthlyReport {id: $reportId, status: $status})`, {
+    it("updates report status", async () => {
+      await exec(`CREATE (r:CC_MonthlyReport {id: $reportId, status: $status})`, {
         reportId: "report-1",
         status: "pending",
       });
 
       // MATCH (r:CC_MonthlyReport {id: $reportId}) SET r.status = $status
-      exec(`MATCH (r:CC_MonthlyReport {id: $reportId}) SET r.status = $status`, {
+      await exec(`MATCH (r:CC_MonthlyReport {id: $reportId}) SET r.status = $status`, {
         reportId: "report-1",
         status: "complete",
       });
 
-      const result = exec(`MATCH (r:CC_MonthlyReport {id: $reportId}) RETURN r`, {
+      const result = await exec(`MATCH (r:CC_MonthlyReport {id: $reportId}) RETURN r`, {
         reportId: "report-1",
       });
       const report = result.data[0].r as Record<string, unknown>;
@@ -418,15 +415,15 @@ describe("CypherQueries.json Patterns", () => {
   });
 
   describe("Bank Statement Operations", () => {
-    it("creates bank statement linked to report", () => {
-      exec(`CREATE (r:CC_MonthlyReport {id: $reportId, status: $status})`, {
+    it("creates bank statement linked to report", async () => {
+      await exec(`CREATE (r:CC_MonthlyReport {id: $reportId, status: $status})`, {
         reportId: "report-1",
         status: "pending",
       });
 
       // MATCH (r:CC_MonthlyReport {id: $reportId})
       // CREATE (r)-[:HAS_BANK_STATEMENT]->(bs:CC_BankStatement {...})
-      exec(
+      await exec(
         `MATCH (r:CC_MonthlyReport {id: $reportId})
          CREATE (r)-[:HAS_BANK_STATEMENT]->(bs:CC_BankStatement {
            id: $statementId,
@@ -444,7 +441,7 @@ describe("CypherQueries.json Patterns", () => {
       );
 
       // MATCH (r:CC_MonthlyReport {id: $reportId})-[:HAS_BANK_STATEMENT]->(bs:CC_BankStatement) RETURN bs
-      const result = exec(
+      const result = await exec(
         `MATCH (r:CC_MonthlyReport {id: $reportId})-[:HAS_BANK_STATEMENT]->(bs:CC_BankStatement)
          RETURN bs`,
         { reportId: "report-1" }
@@ -455,14 +452,14 @@ describe("CypherQueries.json Patterns", () => {
       expect(stmt.bank).toBe("ING");
     });
 
-    it("counts transactions in bank statement", () => {
-      exec(`CREATE (bs:CC_BankStatement {id: $id, bank: $bank})`, {
+    it("counts transactions in bank statement", async () => {
+      await exec(`CREATE (bs:CC_BankStatement {id: $id, bank: $bank})`, {
         id: "stmt-1",
         bank: "ING",
       });
 
       for (let i = 1; i <= 5; i++) {
-        exec(
+        await exec(
           `MATCH (bs:CC_BankStatement {id: $statementId})
            CREATE (t:CC_Transaction {id: $txId, amount: $amount, status: $status})-[:PART_OF]->(bs)`,
           { statementId: "stmt-1", txId: `tx-${i}`, amount: 100 * i, status: "pending" }
@@ -471,7 +468,7 @@ describe("CypherQueries.json Patterns", () => {
 
       // MATCH (t:CC_Transaction)-[:PART_OF]->(bs:CC_BankStatement {id: $statementId})
       // RETURN COUNT(t) as txCount
-      const result = exec(
+      const result = await exec(
         `MATCH (t:CC_Transaction)-[:PART_OF]->(bs:CC_BankStatement {id: $statementId})
          RETURN COUNT(t) as txCount`,
         { statementId: "stmt-1" }
@@ -481,15 +478,15 @@ describe("CypherQueries.json Patterns", () => {
       expect(result.data[0].txCount).toBe(5);
     });
 
-    it("deletes bank statement with transactions and spending invoices", () => {
+    it("deletes bank statement with transactions and spending invoices", async () => {
       // Setup
-      exec(`CREATE (bs:CC_BankStatement {id: $id, bank: $bank})`, { id: "stmt-1", bank: "ING" });
-      exec(
+      await exec(`CREATE (bs:CC_BankStatement {id: $id, bank: $bank})`, { id: "stmt-1", bank: "ING" });
+      await exec(
         `MATCH (bs:CC_BankStatement {id: $statementId})
          CREATE (t:CC_Transaction {id: $txId, amount: $amount})-[:PART_OF]->(bs)`,
         { statementId: "stmt-1", txId: "tx-1", amount: 100 }
       );
-      exec(
+      await exec(
         `MATCH (t:CC_Transaction {id: $transactionId})
          CREATE (t)-[:HAS_SPENDING_INVOICE]->(si:CC_SpendingInvoice {id: $siId, filename: $filename})`,
         { transactionId: "tx-1", siId: "si-1", filename: "invoice.pdf" }
@@ -499,7 +496,7 @@ describe("CypherQueries.json Patterns", () => {
       // MATCH (t:CC_Transaction)-[:PART_OF]->(bs:CC_BankStatement {id: $statementId})
       // MATCH (t)-[:HAS_SPENDING_INVOICE]->(si:CC_SpendingInvoice)
       // DETACH DELETE si
-      exec(
+      await exec(
         `MATCH (t:CC_Transaction)-[:PART_OF]->(bs:CC_BankStatement {id: $statementId})
          MATCH (t)-[:HAS_SPENDING_INVOICE]->(si:CC_SpendingInvoice)
          DETACH DELETE si`,
@@ -507,37 +504,37 @@ describe("CypherQueries.json Patterns", () => {
       );
 
       // Step 2: Delete transactions
-      exec(
+      await exec(
         `MATCH (t:CC_Transaction)-[:PART_OF]->(bs:CC_BankStatement {id: $statementId})
          DETACH DELETE t`,
         { statementId: "stmt-1" }
       );
 
       // Step 3: Delete statement
-      exec(`MATCH (bs:CC_BankStatement {id: $statementId}) DETACH DELETE bs`, {
+      await exec(`MATCH (bs:CC_BankStatement {id: $statementId}) DETACH DELETE bs`, {
         statementId: "stmt-1",
       });
 
       // Verify all deleted
       expect(
-        exec(`MATCH (bs:CC_BankStatement {id: $id}) RETURN bs`, { id: "stmt-1" }).data
+        (await exec(`MATCH (bs:CC_BankStatement {id: $id}) RETURN bs`, { id: "stmt-1" })).data
       ).toHaveLength(0);
       expect(
-        exec(`MATCH (t:CC_Transaction {id: $id}) RETURN t`, { id: "tx-1" }).data
+        (await exec(`MATCH (t:CC_Transaction {id: $id}) RETURN t`, { id: "tx-1" })).data
       ).toHaveLength(0);
       expect(
-        exec(`MATCH (si:CC_SpendingInvoice {id: $id}) RETURN si`, { id: "si-1" }).data
+        (await exec(`MATCH (si:CC_SpendingInvoice {id: $id}) RETURN si`, { id: "si-1" })).data
       ).toHaveLength(0);
     });
   });
 
   describe("Transaction Operations", () => {
-    it("creates transaction linked to bank statement", () => {
-      exec(`CREATE (bs:CC_BankStatement {id: $id})`, { id: "stmt-1" });
+    it("creates transaction linked to bank statement", async () => {
+      await exec(`CREATE (bs:CC_BankStatement {id: $id})`, { id: "stmt-1" });
 
       // MATCH (bs:CC_BankStatement {id: $bankStatementId})
       // CREATE (t:CC_Transaction {...})-[:PART_OF]->(bs)
-      exec(
+      await exec(
         `MATCH (bs:CC_BankStatement {id: $bankStatementId})
          CREATE (t:CC_Transaction {
            id: $id,
@@ -564,44 +561,44 @@ describe("CypherQueries.json Patterns", () => {
         }
       );
 
-      const result = exec(`MATCH (t:CC_Transaction {id: $id}) RETURN t`, { id: "tx-1" });
+      const result = await exec(`MATCH (t:CC_Transaction {id: $id}) RETURN t`, { id: "tx-1" });
       const tx = result.data[0].t as Record<string, unknown>;
       expect(tx.amount).toBe(1500.0);
     });
 
-    it("updates transaction status", () => {
-      exec(`CREATE (t:CC_Transaction {id: $id, status: $status})`, {
+    it("updates transaction status", async () => {
+      await exec(`CREATE (t:CC_Transaction {id: $id, status: $status})`, {
         id: "tx-1",
         status: "pending",
       });
 
       // MATCH (t:CC_Transaction {id: $transactionId}) SET t.status = $status
-      exec(`MATCH (t:CC_Transaction {id: $transactionId}) SET t.status = $status`, {
+      await exec(`MATCH (t:CC_Transaction {id: $transactionId}) SET t.status = $status`, {
         transactionId: "tx-1",
         status: "matched",
       });
 
-      const result = exec(`MATCH (t:CC_Transaction {id: $id}) RETURN t`, { id: "tx-1" });
+      const result = await exec(`MATCH (t:CC_Transaction {id: $id}) RETURN t`, { id: "tx-1" });
       const tx = result.data[0].t as Record<string, unknown>;
       expect(tx.status).toBe("matched");
     });
 
-    it("links transaction to invoice", () => {
-      exec(`CREATE (t:CC_Transaction {id: $id, amount: $amount})`, { id: "tx-1", amount: 1000 });
-      exec(`CREATE (i:CC_Invoice {id: $id, invoiceNumber: $invoiceNumber})`, {
+    it("links transaction to invoice", async () => {
+      await exec(`CREATE (t:CC_Transaction {id: $id, amount: $amount})`, { id: "tx-1", amount: 1000 });
+      await exec(`CREATE (i:CC_Invoice {id: $id, invoiceNumber: $invoiceNumber})`, {
         id: "inv-1",
         invoiceNumber: "INV-001",
       });
 
       // Remove any existing match
-      exec(
+      await exec(
         `MATCH (t:CC_Transaction {id: $transactionId})-[r:MATCHED_WITH]->()
          DELETE r`,
         { transactionId: "tx-1" }
       );
 
       // Create new link
-      exec(
+      await exec(
         `MATCH (t:CC_Transaction {id: $transactionId})
          MATCH (i:CC_Invoice {id: $invoiceId})
          CREATE (t)-[:MATCHED_WITH]->(i)`,
@@ -610,7 +607,7 @@ describe("CypherQueries.json Patterns", () => {
 
       // MATCH (t:CC_Transaction {id: $transactionId})-[:MATCHED_WITH]->(i:CC_Invoice)
       // RETURN i.id as matchedInvoiceId, i.invoiceNumber as matchedInvoiceNumber
-      const result = exec(
+      const result = await exec(
         `MATCH (t:CC_Transaction {id: $transactionId})-[:MATCHED_WITH]->(i:CC_Invoice)
          RETURN i.id as matchedInvoiceId, i.invoiceNumber as matchedInvoiceNumber`,
         { transactionId: "tx-1" }
@@ -621,18 +618,18 @@ describe("CypherQueries.json Patterns", () => {
       expect(result.data[0].matchedInvoiceNumber).toBe("INV-001");
     });
 
-    it("creates spending invoice for transaction", () => {
-      exec(`CREATE (t:CC_Transaction {id: $id})`, { id: "tx-1" });
+    it("creates spending invoice for transaction", async () => {
+      await exec(`CREATE (t:CC_Transaction {id: $id})`, { id: "tx-1" });
 
       // Remove existing spending invoice if any
-      exec(
+      await exec(
         `MATCH (t:CC_Transaction {id: $transactionId})-[:HAS_SPENDING_INVOICE]->(si:CC_SpendingInvoice)
          DETACH DELETE si`,
         { transactionId: "tx-1" }
       );
 
       // Create spending invoice
-      exec(
+      await exec(
         `MATCH (t:CC_Transaction {id: $transactionId})
          CREATE (t)-[:HAS_SPENDING_INVOICE]->(si:CC_SpendingInvoice {
            id: $id,
@@ -651,7 +648,7 @@ describe("CypherQueries.json Patterns", () => {
 
       // MATCH (t:CC_Transaction {id: $transactionId})-[:HAS_SPENDING_INVOICE]->(si:CC_SpendingInvoice)
       // RETURN si.pdfPath as pdfPath
-      const result = exec(
+      const result = await exec(
         `MATCH (t:CC_Transaction {id: $transactionId})-[:HAS_SPENDING_INVOICE]->(si:CC_SpendingInvoice)
          RETURN si.pdfPath as pdfPath`,
         { transactionId: "tx-1" }
@@ -663,14 +660,14 @@ describe("CypherQueries.json Patterns", () => {
   });
 
   describe("Invoice Operations", () => {
-    it("gets invoices by user with customer info", () => {
-      exec(`CREATE (u:CC_User {id: $id})`, { id: "user-1" });
-      exec(
+    it("gets invoices by user with customer info", async () => {
+      await exec(`CREATE (u:CC_User {id: $id})`, { id: "user-1" });
+      await exec(
         `MATCH (u:CC_User {id: $userId})
          CREATE (u)-[:HAS_CUSTOMER]->(c:CC_Customer {id: $customerId, name: $name})`,
         { userId: "user-1", customerId: "cust-1", name: "Customer Inc" }
       );
-      exec(
+      await exec(
         `MATCH (u:CC_User {id: $userId})
          MATCH (c:CC_Customer {id: $customerId})
          CREATE (u)-[:HAS_INVOICE]->(i:CC_Invoice {id: $invoiceId, invoiceNumber: $invoiceNumber})-[:BILLED_TO]->(c)`,
@@ -679,7 +676,7 @@ describe("CypherQueries.json Patterns", () => {
 
       // MATCH (u:CC_User {id: $userId})-[:HAS_INVOICE]->(i:CC_Invoice)-[:BILLED_TO]->(c:CC_Customer)
       // RETURN i, c.id as customerId, c.name as customerName
-      const result = exec(
+      const result = await exec(
         `MATCH (u:CC_User {id: $userId})-[:HAS_INVOICE]->(i:CC_Invoice)-[:BILLED_TO]->(c:CC_Customer)
          RETURN i, c.id as customerId, c.name as customerName`,
         { userId: "user-1" }
@@ -690,11 +687,11 @@ describe("CypherQueries.json Patterns", () => {
       expect(result.data[0].customerName).toBe("Customer Inc");
     });
 
-    it("gets invoice items", () => {
-      exec(`CREATE (i:CC_Invoice {id: $invoiceId})`, { invoiceId: "inv-1" });
+    it("gets invoice items", async () => {
+      await exec(`CREATE (i:CC_Invoice {id: $invoiceId})`, { invoiceId: "inv-1" });
 
       for (let i = 1; i <= 3; i++) {
-        exec(
+        await exec(
           `MATCH (i:CC_Invoice {id: $invoiceId})
            CREATE (i)-[:CONTAINS]->(item:CC_InvoiceItem {
              id: $itemId,
@@ -715,7 +712,7 @@ describe("CypherQueries.json Patterns", () => {
       }
 
       // MATCH (i:CC_Invoice {id: $invoiceId})-[:CONTAINS]->(item:CC_InvoiceItem) RETURN item
-      const result = exec(
+      const result = await exec(
         `MATCH (i:CC_Invoice {id: $invoiceId})-[:CONTAINS]->(item:CC_InvoiceItem)
          RETURN item`,
         { invoiceId: "inv-1" }
@@ -724,28 +721,28 @@ describe("CypherQueries.json Patterns", () => {
       expect(result.data).toHaveLength(3);
     });
 
-    it("updates invoice pdf path", () => {
-      exec(`CREATE (i:CC_Invoice {id: $invoiceId, invoiceNumber: $invoiceNumber})`, {
+    it("updates invoice pdf path", async () => {
+      await exec(`CREATE (i:CC_Invoice {id: $invoiceId, invoiceNumber: $invoiceNumber})`, {
         invoiceId: "inv-1",
         invoiceNumber: "INV-001",
       });
 
       // MATCH (i:CC_Invoice {id: $invoiceId}) SET i.pdfPath = $pdfPath
-      exec(`MATCH (i:CC_Invoice {id: $invoiceId}) SET i.pdfPath = $pdfPath`, {
+      await exec(`MATCH (i:CC_Invoice {id: $invoiceId}) SET i.pdfPath = $pdfPath`, {
         invoiceId: "inv-1",
         pdfPath: "/invoices/INV-001.pdf",
       });
 
-      const result = exec(`MATCH (i:CC_Invoice {id: $invoiceId}) RETURN i`, {
+      const result = await exec(`MATCH (i:CC_Invoice {id: $invoiceId}) RETURN i`, {
         invoiceId: "inv-1",
       });
       const invoice = result.data[0].i as Record<string, unknown>;
       expect(invoice.pdfPath).toBe("/invoices/INV-001.pdf");
     });
 
-    it("updates invoice status through user relationship", () => {
-      exec(`CREATE (u:CC_User {id: $id})`, { id: "user-1" });
-      exec(
+    it("updates invoice status through user relationship", async () => {
+      await exec(`CREATE (u:CC_User {id: $id})`, { id: "user-1" });
+      await exec(
         `MATCH (u:CC_User {id: $userId})
          CREATE (u)-[:HAS_INVOICE]->(i:CC_Invoice {id: $invoiceId, status: $status})`,
         { userId: "user-1", invoiceId: "inv-1", status: "draft" }
@@ -753,13 +750,13 @@ describe("CypherQueries.json Patterns", () => {
 
       // MATCH (u:CC_User {id: $userId})-[:HAS_INVOICE]->(i:CC_Invoice {id: $invoiceId})
       // SET i.status = $status
-      exec(
+      await exec(
         `MATCH (u:CC_User {id: $userId})-[:HAS_INVOICE]->(i:CC_Invoice {id: $invoiceId})
          SET i.status = $status`,
         { userId: "user-1", invoiceId: "inv-1", status: "sent" }
       );
 
-      const result = exec(
+      const result = await exec(
         `MATCH (u:CC_User {id: $userId})-[:HAS_INVOICE]->(i:CC_Invoice {id: $invoiceId})
          RETURN i`,
         { userId: "user-1", invoiceId: "inv-1" }
@@ -768,48 +765,48 @@ describe("CypherQueries.json Patterns", () => {
       expect(invoice.status).toBe("sent");
     });
 
-    it("deletes invoice with items", () => {
-      exec(`CREATE (u:CC_User {id: $id})`, { id: "user-1" });
-      exec(
+    it("deletes invoice with items", async () => {
+      await exec(`CREATE (u:CC_User {id: $id})`, { id: "user-1" });
+      await exec(
         `MATCH (u:CC_User {id: $userId})
          CREATE (u)-[:HAS_INVOICE]->(i:CC_Invoice {id: $invoiceId})`,
         { userId: "user-1", invoiceId: "inv-1" }
       );
-      exec(
+      await exec(
         `MATCH (i:CC_Invoice {id: $invoiceId})
          CREATE (i)-[:CONTAINS]->(item:CC_InvoiceItem {id: $itemId})`,
         { invoiceId: "inv-1", itemId: "item-1" }
       );
 
       // Delete items first
-      exec(
+      await exec(
         `MATCH (i:CC_Invoice {id: $invoiceId})-[:CONTAINS]->(item:CC_InvoiceItem)
          DETACH DELETE item`,
         { invoiceId: "inv-1" }
       );
 
       // Delete invoice
-      exec(
+      await exec(
         `MATCH (u:CC_User {id: $userId})-[:HAS_INVOICE]->(i:CC_Invoice {id: $invoiceId})
          DETACH DELETE i`,
         { userId: "user-1", invoiceId: "inv-1" }
       );
 
       expect(
-        exec(`MATCH (i:CC_Invoice {id: $id}) RETURN i`, { id: "inv-1" }).data
+        (await exec(`MATCH (i:CC_Invoice {id: $id}) RETURN i`, { id: "inv-1" })).data
       ).toHaveLength(0);
       expect(
-        exec(`MATCH (item:CC_InvoiceItem {id: $id}) RETURN item`, { id: "item-1" }).data
+        (await exec(`MATCH (item:CC_InvoiceItem {id: $id}) RETURN item`, { id: "item-1" })).data
       ).toHaveLength(0);
     });
   });
 
   describe("Invoice Sequence Operations", () => {
-    it("gets sequences by user id", () => {
-      exec(`CREATE (u:CC_User {id: $id})`, { id: "user-1" });
+    it("gets sequences by user id", async () => {
+      await exec(`CREATE (u:CC_User {id: $id})`, { id: "user-1" });
 
       for (let i = 1; i <= 2; i++) {
-        exec(
+        await exec(
           `MATCH (u:CC_User {id: $userId})
            CREATE (u)-[:HAS_SEQUENCE]->(s:CC_InvoiceSequence {
              id: $sequenceId,
@@ -826,7 +823,7 @@ describe("CypherQueries.json Patterns", () => {
       }
 
       // MATCH (u:CC_User {id: $userId})-[:HAS_SEQUENCE]->(s:CC_InvoiceSequence) RETURN s
-      const result = exec(
+      const result = await exec(
         `MATCH (u:CC_User {id: $userId})-[:HAS_SEQUENCE]->(s:CC_InvoiceSequence)
          RETURN s`,
         { userId: "user-1" }
@@ -835,16 +832,16 @@ describe("CypherQueries.json Patterns", () => {
       expect(result.data).toHaveLength(2);
     });
 
-    it("gets sequence by id", () => {
-      exec(`CREATE (u:CC_User {id: $id})`, { id: "user-1" });
-      exec(
+    it("gets sequence by id", async () => {
+      await exec(`CREATE (u:CC_User {id: $id})`, { id: "user-1" });
+      await exec(
         `MATCH (u:CC_User {id: $userId})
          CREATE (u)-[:HAS_SEQUENCE]->(s:CC_InvoiceSequence {id: $sequenceId, prefix: $prefix, lastNumber: $lastNumber})`,
         { userId: "user-1", sequenceId: "seq-1", prefix: "INV", lastNumber: 42 }
       );
 
       // MATCH (u:CC_User {id: $userId})-[:HAS_SEQUENCE]->(s:CC_InvoiceSequence {id: $sequenceId}) RETURN s
-      const result = exec(
+      const result = await exec(
         `MATCH (u:CC_User {id: $userId})-[:HAS_SEQUENCE]->(s:CC_InvoiceSequence {id: $sequenceId})
          RETURN s`,
         { userId: "user-1", sequenceId: "seq-1" }
@@ -855,9 +852,9 @@ describe("CypherQueries.json Patterns", () => {
       expect(seq.prefix).toBe("INV");
     });
 
-    it("updates sequence", () => {
-      exec(`CREATE (u:CC_User {id: $id})`, { id: "user-1" });
-      exec(
+    it("updates sequence", async () => {
+      await exec(`CREATE (u:CC_User {id: $id})`, { id: "user-1" });
+      await exec(
         `MATCH (u:CC_User {id: $userId})
          CREATE (u)-[:HAS_SEQUENCE]->(s:CC_InvoiceSequence {id: $sequenceId, prefix: $prefix, lastNumber: $lastNumber})`,
         { userId: "user-1", sequenceId: "seq-1", prefix: "OLD", lastNumber: 0 }
@@ -865,13 +862,13 @@ describe("CypherQueries.json Patterns", () => {
 
       // MATCH (u:CC_User {id: $userId})-[:HAS_SEQUENCE]->(s:CC_InvoiceSequence {id: $sequenceId})
       // SET s.prefix = $prefix, s.lastNumber = $lastNumber
-      exec(
+      await exec(
         `MATCH (u:CC_User {id: $userId})-[:HAS_SEQUENCE]->(s:CC_InvoiceSequence {id: $sequenceId})
          SET s.prefix = $prefix, s.lastNumber = $lastNumber`,
         { userId: "user-1", sequenceId: "seq-1", prefix: "NEW", lastNumber: 10 }
       );
 
-      const result = exec(
+      const result = await exec(
         `MATCH (s:CC_InvoiceSequence {id: $sequenceId}) RETURN s`,
         { sequenceId: "seq-1" }
       );
@@ -880,8 +877,8 @@ describe("CypherQueries.json Patterns", () => {
       expect(seq.lastNumber).toBe(10);
     });
 
-    it("increments sequence", () => {
-      exec(`CREATE (s:CC_InvoiceSequence {id: $sequenceId, prefix: $prefix, lastNumber: $lastNumber})`, {
+    it("increments sequence", async () => {
+      await exec(`CREATE (s:CC_InvoiceSequence {id: $sequenceId, prefix: $prefix, lastNumber: $lastNumber})`, {
         sequenceId: "seq-1",
         prefix: "INV",
         lastNumber: 5,
@@ -889,7 +886,7 @@ describe("CypherQueries.json Patterns", () => {
 
       // Get current value
       // MATCH (s:CC_InvoiceSequence {id: $sequenceId}) RETURN s.lastNumber as lastNumber
-      const current = exec(
+      const current = await exec(
         `MATCH (s:CC_InvoiceSequence {id: $sequenceId})
          RETURN s.lastNumber as lastNumber`,
         { sequenceId: "seq-1" }
@@ -898,13 +895,13 @@ describe("CypherQueries.json Patterns", () => {
 
       // Increment
       // MATCH (s:CC_InvoiceSequence {id: $sequenceId}) SET s.lastNumber = $newNumber
-      exec(
+      await exec(
         `MATCH (s:CC_InvoiceSequence {id: $sequenceId})
          SET s.lastNumber = $newNumber`,
         { sequenceId: "seq-1", newNumber: 6 }
       );
 
-      const updated = exec(
+      const updated = await exec(
         `MATCH (s:CC_InvoiceSequence {id: $sequenceId})
          RETURN s.lastNumber as lastNumber`,
         { sequenceId: "seq-1" }
@@ -912,9 +909,9 @@ describe("CypherQueries.json Patterns", () => {
       expect(updated.data[0].lastNumber).toBe(6);
     });
 
-    it("deletes sequence", () => {
-      exec(`CREATE (u:CC_User {id: $id})`, { id: "user-1" });
-      exec(
+    it("deletes sequence", async () => {
+      await exec(`CREATE (u:CC_User {id: $id})`, { id: "user-1" });
+      await exec(
         `MATCH (u:CC_User {id: $userId})
          CREATE (u)-[:HAS_SEQUENCE]->(s:CC_InvoiceSequence {id: $sequenceId, prefix: $prefix})`,
         { userId: "user-1", sequenceId: "seq-1", prefix: "INV" }
@@ -922,13 +919,13 @@ describe("CypherQueries.json Patterns", () => {
 
       // MATCH (u:CC_User {id: $userId})-[:HAS_SEQUENCE]->(s:CC_InvoiceSequence {id: $sequenceId})
       // DETACH DELETE s
-      exec(
+      await exec(
         `MATCH (u:CC_User {id: $userId})-[:HAS_SEQUENCE]->(s:CC_InvoiceSequence {id: $sequenceId})
          DETACH DELETE s`,
         { userId: "user-1", sequenceId: "seq-1" }
       );
 
-      const result = exec(`MATCH (s:CC_InvoiceSequence {id: $id}) RETURN s`, {
+      const result = await exec(`MATCH (s:CC_InvoiceSequence {id: $id}) RETURN s`, {
         id: "seq-1",
       });
       expect(result.data).toHaveLength(0);
@@ -936,15 +933,15 @@ describe("CypherQueries.json Patterns", () => {
   });
 
   describe("Multi-hop Queries", () => {
-    it("handles MATCH...MATCH with shared variable (transactions by report)", () => {
+    it("handles MATCH...MATCH with shared variable (transactions by report)", async () => {
       // Setup: Report -> BankStatement <- Transaction
-      exec(`CREATE (r:CC_MonthlyReport {id: $id})`, { id: "report-1" });
-      exec(
+      await exec(`CREATE (r:CC_MonthlyReport {id: $id})`, { id: "report-1" });
+      await exec(
         `MATCH (r:CC_MonthlyReport {id: $reportId})
          CREATE (r)-[:HAS_BANK_STATEMENT]->(bs:CC_BankStatement {id: $bsId})`,
         { reportId: "report-1", bsId: "bs-1" }
       );
-      exec(
+      await exec(
         `MATCH (bs:CC_BankStatement {id: $bsId})
          CREATE (t:CC_Transaction {id: $txId, amount: $amount})-[:PART_OF]->(bs)`,
         { bsId: "bs-1", txId: "tx-1", amount: 500 }
@@ -953,7 +950,7 @@ describe("CypherQueries.json Patterns", () => {
       // MATCH (r:CC_MonthlyReport {id: $reportId})-[:HAS_BANK_STATEMENT]->(bs:CC_BankStatement)
       // MATCH (t:CC_Transaction)-[:PART_OF]->(bs)
       // RETURN t, bs.id as bankStatementId
-      const result = exec(
+      const result = await exec(
         `MATCH (r:CC_MonthlyReport {id: $reportId})-[:HAS_BANK_STATEMENT]->(bs:CC_BankStatement)
          MATCH (t:CC_Transaction)-[:PART_OF]->(bs)
          RETURN t, bs.id as bankStatementId`,
@@ -966,14 +963,14 @@ describe("CypherQueries.json Patterns", () => {
       expect(tx.amount).toBe(500);
     });
 
-    it("handles three-hop pattern (User -> Invoice -> Customer)", () => {
-      exec(`CREATE (u:CC_User {id: $id})`, { id: "user-1" });
-      exec(
+    it("handles three-hop pattern (User -> Invoice -> Customer)", async () => {
+      await exec(`CREATE (u:CC_User {id: $id})`, { id: "user-1" });
+      await exec(
         `MATCH (u:CC_User {id: $userId})
          CREATE (u)-[:HAS_CUSTOMER]->(c:CC_Customer {id: $customerId, name: $name})`,
         { userId: "user-1", customerId: "cust-1", name: "Customer Inc" }
       );
-      exec(
+      await exec(
         `MATCH (u:CC_User {id: $userId})
          MATCH (c:CC_Customer {id: $customerId})
          CREATE (u)-[:HAS_INVOICE]->(i:CC_Invoice {id: $invoiceId, invoiceNumber: $invoiceNumber})-[:BILLED_TO]->(c)`,
@@ -981,7 +978,7 @@ describe("CypherQueries.json Patterns", () => {
       );
 
       // Three-hop query to get invoices for specific customer
-      const result = exec(
+      const result = await exec(
         `MATCH (u:CC_User {id: $userId})-[:HAS_INVOICE]->(i:CC_Invoice)-[:BILLED_TO]->(c:CC_Customer {id: $customerId})
          RETURN i, c.id as customerId, c.name as customerName`,
         { userId: "user-1", customerId: "cust-1" }
@@ -994,9 +991,9 @@ describe("CypherQueries.json Patterns", () => {
   });
 
   describe("Connection Verification", () => {
-    it("handles RETURN 1 for connection verification", () => {
+    it("handles RETURN 1 for connection verification", async () => {
       // RETURN 1
-      const result = exec("RETURN 1");
+      const result = await exec("RETURN 1");
 
       expect(result.data).toHaveLength(1);
       // Neo4j uses the literal value as the column name
@@ -1010,15 +1007,15 @@ describe("CypherQueries.json Patterns", () => {
    */
   describe("Sellersuite Query Patterns", () => {
     describe("Node comparison in WHERE clause", () => {
-      it("finds duplicate nodes by comparing i <> i2", () => {
+      it("finds duplicate nodes by comparing i <> i2", async () => {
         // Pattern: MATCH (i:Image), (i2:Image) WHERE i <> i2 AND i.image_id = i2.image_id
         // This pattern finds nodes with duplicate property values
-        exec("CREATE (i1:Image {image_id: 'img-001', name: 'First'})");
-        exec("CREATE (i2:Image {image_id: 'img-001', name: 'Second'})");
-        exec("CREATE (i3:Image {image_id: 'img-002', name: 'Third'})");
+        await exec("CREATE (i1:Image {image_id: 'img-001', name: 'First'})");
+        await exec("CREATE (i2:Image {image_id: 'img-001', name: 'Second'})");
+        await exec("CREATE (i3:Image {image_id: 'img-002', name: 'Third'})");
 
         // Find images that share the same image_id but are different nodes
-        const result = exec(`
+        const result = await exec(`
           MATCH (i:Image), (i2:Image)
           WHERE i <> i2 AND i.image_id = i2.image_id
           RETURN DISTINCT i.image_id as image_id
@@ -1030,23 +1027,23 @@ describe("CypherQueries.json Patterns", () => {
     });
 
     describe("COLLECT with object construction", () => {
-      it("collects properties into objects", () => {
+      it("collects properties into objects", async () => {
         // Pattern: collect({ intellinaut_id: u.user_id, first_name: u.first_name, ... })
-        exec("CREATE (u:User {user_id: 'u1', first_name: 'Alice', last_name: 'Smith', email: 'alice@example.com'})");
-        exec("CREATE (u:User {user_id: 'u2', first_name: 'Bob', last_name: 'Jones', email: 'bob@example.com'})");
-        exec("CREATE (c:Company {company_id: 'c1', name: 'Acme'})");
+        await exec("CREATE (u:User {user_id: 'u1', first_name: 'Alice', last_name: 'Smith', email: 'alice@example.com'})");
+        await exec("CREATE (u:User {user_id: 'u2', first_name: 'Bob', last_name: 'Jones', email: 'bob@example.com'})");
+        await exec("CREATE (c:Company {company_id: 'c1', name: 'Acme'})");
         
         // Link users to company
-        const users = exec("MATCH (u:User) RETURN u.user_id, id(u) as uid").data;
-        const company = exec("MATCH (c:Company) RETURN id(c) as cid").data[0];
+        const users = (await exec("MATCH (u:User) RETURN u.user_id, id(u) as uid")).data;
+        const company = (await exec("MATCH (c:Company) RETURN id(c) as cid")).data[0];
         
         for (const user of users) {
           // Column name uses dot notation: u.user_id
-          db.insertEdge(`admin-${user["u.user_id"]}`, "IS_ADMIN", user.uid as string, company.cid as string);
+          requireDatabase(client).insertEdge(`admin-${user["u.user_id"]}`, "IS_ADMIN", user.uid as string, company.cid as string);
         }
 
         // Collect users into objects
-        const result = exec(`
+        const result = await exec(`
           MATCH (u:User)-[:IS_ADMIN]->(c:Company)
           RETURN c.company_id as company_id,
                  collect({
@@ -1067,11 +1064,11 @@ describe("CypherQueries.json Patterns", () => {
     });
 
     describe("ID() function with alias in RETURN", () => {
-      it("returns node ID with custom alias", () => {
+      it("returns node ID with custom alias", async () => {
         // Pattern: MATCH (n) RETURN n, ID(n) as nid
-        exec("CREATE (n:Node {name: 'Test'})");
+        await exec("CREATE (n:Node {name: 'Test'})");
 
-        const result = exec("MATCH (n:Node) RETURN n, ID(n) as nid");
+        const result = await exec("MATCH (n:Node) RETURN n, ID(n) as nid");
 
         expect(result.data).toHaveLength(1);
         expect(result.data[0].nid).toBeDefined();
@@ -1082,11 +1079,11 @@ describe("CypherQueries.json Patterns", () => {
         );
       });
 
-      it("returns edge ID with custom alias", () => {
+      it("returns edge ID with custom alias", async () => {
         // Pattern: MATCH ()-[r]->() RETURN r, ID(r) as rid
-        exec("CREATE (a:Person {name: 'Alice'})-[:KNOWS]->(b:Person {name: 'Bob'})");
+        await exec("CREATE (a:Person {name: 'Alice'})-[:KNOWS]->(b:Person {name: 'Bob'})");
 
-        const result = exec("MATCH ()-[r:KNOWS]->() RETURN ID(r) as rid");
+        const result = await exec("MATCH ()-[r:KNOWS]->() RETURN ID(r) as rid");
 
         expect(result.data).toHaveLength(1);
         expect(result.data[0].rid).toBeDefined();
@@ -1094,27 +1091,27 @@ describe("CypherQueries.json Patterns", () => {
     });
 
     describe("Relationship property filters in pattern", () => {
-      it("filters by relationship property in MATCH pattern", () => {
+      it("filters by relationship property in MATCH pattern", async () => {
         // Pattern: (p:Product)-[:PRODUCT_INFO{market_place:$market_place}]->(pi:ProductInfo)
-        exec("CREATE (p:Product {product_id: 'p1', sku: 'SKU001'})");
+        await exec("CREATE (p:Product {product_id: 'p1', sku: 'SKU001'})");
         
         // Create product infos with different market_places
-        const product = exec("MATCH (p:Product {product_id: 'p1'}) RETURN id(p) as pid").data[0];
+        const product = (await exec("MATCH (p:Product {product_id: 'p1'}) RETURN id(p) as pid")).data[0];
         
-        exec("CREATE (pi:ProductInfo {title: 'US Product', price: 99.99})");
-        exec("CREATE (pi:ProductInfo {title: 'EU Product', price: 89.99})");
+        await exec("CREATE (pi:ProductInfo {title: 'US Product', price: 99.99})");
+        await exec("CREATE (pi:ProductInfo {title: 'EU Product', price: 89.99})");
         
-        const productInfos = exec("MATCH (pi:ProductInfo) RETURN pi.title, id(pi) as piid").data;
+        const productInfos = (await exec("MATCH (pi:ProductInfo) RETURN pi.title, id(pi) as piid")).data;
         
         // Column name uses dot notation: pi.title
         const usInfo = productInfos.find(pi => pi["pi.title"] === "US Product");
         const euInfo = productInfos.find(pi => pi["pi.title"] === "EU Product");
         
-        db.insertEdge("pi-us", "PRODUCT_INFO", product.pid as string, usInfo?.piid as string, { market_place: "us" });
-        db.insertEdge("pi-eu", "PRODUCT_INFO", product.pid as string, euInfo?.piid as string, { market_place: "eu" });
+        requireDatabase(client).insertEdge("pi-us", "PRODUCT_INFO", product.pid as string, usInfo?.piid as string, { market_place: "us" });
+        requireDatabase(client).insertEdge("pi-eu", "PRODUCT_INFO", product.pid as string, euInfo?.piid as string, { market_place: "eu" });
 
         // Query with relationship property filter
-        const result = exec(`
+        const result = await exec(`
           MATCH (p:Product {product_id: $product_id})-[r:PRODUCT_INFO {market_place: $market_place}]->(pi:ProductInfo)
           RETURN pi.title as title, pi.price as price
         `, { product_id: "p1", market_place: "us" });
@@ -1126,41 +1123,41 @@ describe("CypherQueries.json Patterns", () => {
     });
 
     describe("DELETE relationship variable", () => {
-      it("deletes relationship by variable without DETACH", () => {
+      it("deletes relationship by variable without DETACH", async () => {
         // Pattern: MATCH (pi:ProductInfo)-[s:SOLD_BY]->(a) DELETE s
-        exec("CREATE (pi:ProductInfo {title: 'Product'})");
-        exec("CREATE (a:AmazonAccount {merchant_id: 'M001'})");
+        await exec("CREATE (pi:ProductInfo {title: 'Product'})");
+        await exec("CREATE (a:AmazonAccount {merchant_id: 'M001'})");
         
-        const pi = exec("MATCH (pi:ProductInfo) RETURN id(pi) as piid").data[0];
-        const acc = exec("MATCH (a:AmazonAccount) RETURN id(a) as aid").data[0];
+        const pi = (await exec("MATCH (pi:ProductInfo) RETURN id(pi) as piid")).data[0];
+        const acc = (await exec("MATCH (a:AmazonAccount) RETURN id(a) as aid")).data[0];
         
-        db.insertEdge("sold-by-1", "SOLD_BY", pi.piid as string, acc.aid as string);
+        requireDatabase(client).insertEdge("sold-by-1", "SOLD_BY", pi.piid as string, acc.aid as string);
 
         // Verify relationship exists
-        let check = exec("MATCH (pi:ProductInfo)-[:SOLD_BY]->(a:AmazonAccount) RETURN pi.title");
+        let check = await exec("MATCH (pi:ProductInfo)-[:SOLD_BY]->(a:AmazonAccount) RETURN pi.title");
         expect(check.data).toHaveLength(1);
 
         // Delete relationship only
-        exec("MATCH (pi:ProductInfo)-[s:SOLD_BY]->(a) DELETE s");
+        await exec("MATCH (pi:ProductInfo)-[s:SOLD_BY]->(a) DELETE s");
 
         // Verify relationship is gone but nodes remain
-        check = exec("MATCH (pi:ProductInfo)-[:SOLD_BY]->(a:AmazonAccount) RETURN pi.title");
+        check = await exec("MATCH (pi:ProductInfo)-[:SOLD_BY]->(a:AmazonAccount) RETURN pi.title");
         expect(check.data).toHaveLength(0);
         
         // Nodes should still exist
-        expect(exec("MATCH (pi:ProductInfo) RETURN pi").data).toHaveLength(1);
-        expect(exec("MATCH (a:AmazonAccount) RETURN a").data).toHaveLength(1);
+        expect((await exec("MATCH (pi:ProductInfo) RETURN pi")).data).toHaveLength(1);
+        expect((await exec("MATCH (a:AmazonAccount) RETURN a")).data).toHaveLength(1);
       });
     });
 
     describe("Match all nodes without label", () => {
-      it("matches all nodes with (o) pattern", () => {
+      it("matches all nodes with (o) pattern", async () => {
         // Pattern: MATCH (o) RETURN count(o) as count
-        exec("CREATE (p:Person {name: 'Alice'})");
-        exec("CREATE (c:Company {name: 'Acme'})");
-        exec("CREATE (i:Invoice {id: 'inv-1'})");
+        await exec("CREATE (p:Person {name: 'Alice'})");
+        await exec("CREATE (c:Company {name: 'Acme'})");
+        await exec("CREATE (i:Invoice {id: 'inv-1'})");
 
-        const result = exec("MATCH (o) RETURN count(o) as count");
+        const result = await exec("MATCH (o) RETURN count(o) as count");
 
         expect(result.data).toHaveLength(1);
         expect(result.data[0].count).toBe(3);
@@ -1168,21 +1165,21 @@ describe("CypherQueries.json Patterns", () => {
     });
 
     describe("Match all relationships without type", () => {
-      it("matches all relationships with (m)-[r]->(o) pattern", () => {
+      it("matches all relationships with (m)-[r]->(o) pattern", async () => {
         // Pattern: MATCH (m)-[r]->(o) RETURN count(r) as count
-        exec("CREATE (a:Person {name: 'Alice'})");
-        exec("CREATE (b:Person {name: 'Bob'})");
-        exec("CREATE (c:Company {name: 'Acme'})");
+        await exec("CREATE (a:Person {name: 'Alice'})");
+        await exec("CREATE (b:Person {name: 'Bob'})");
+        await exec("CREATE (c:Company {name: 'Acme'})");
         
-        const alice = exec("MATCH (p:Person {name: 'Alice'}) RETURN id(p) as pid").data[0];
-        const bob = exec("MATCH (p:Person {name: 'Bob'}) RETURN id(p) as pid").data[0];
-        const acme = exec("MATCH (c:Company) RETURN id(c) as cid").data[0];
+        const alice = (await exec("MATCH (p:Person {name: 'Alice'}) RETURN id(p) as pid")).data[0];
+        const bob = (await exec("MATCH (p:Person {name: 'Bob'}) RETURN id(p) as pid")).data[0];
+        const acme = (await exec("MATCH (c:Company) RETURN id(c) as cid")).data[0];
         
-        db.insertEdge("r1", "KNOWS", alice.pid as string, bob.pid as string);
-        db.insertEdge("r2", "WORKS_AT", alice.pid as string, acme.cid as string);
-        db.insertEdge("r3", "WORKS_AT", bob.pid as string, acme.cid as string);
+        requireDatabase(client).insertEdge("r1", "KNOWS", alice.pid as string, bob.pid as string);
+        requireDatabase(client).insertEdge("r2", "WORKS_AT", alice.pid as string, acme.cid as string);
+        requireDatabase(client).insertEdge("r3", "WORKS_AT", bob.pid as string, acme.cid as string);
 
-        const result = exec("MATCH (m)-[r]->(o) RETURN count(r) as count");
+        const result = await exec("MATCH (m)-[r]->(o) RETURN count(r) as count");
 
         expect(result.data).toHaveLength(1);
         expect(result.data[0].count).toBe(3);
@@ -1190,52 +1187,52 @@ describe("CypherQueries.json Patterns", () => {
     });
 
     describe("DETACH DELETE with matched relationship", () => {
-      it("detach deletes matched nodes through relationship pattern", () => {
+      it("detach deletes matched nodes through relationship pattern", async () => {
         // Pattern: MATCH (u:User{email:$email})-[prev_admin:IS_ADMIN]->(c:Company) DETACH DELETE prev_admin, c
-        exec("CREATE (u:User {email: 'test@example.com', name: 'Test User'})");
-        exec("CREATE (c:Company {company_id: 'c1', name: 'Old Company'})");
+        await exec("CREATE (u:User {email: 'test@example.com', name: 'Test User'})");
+        await exec("CREATE (c:Company {company_id: 'c1', name: 'Old Company'})");
         
-        const user = exec("MATCH (u:User) RETURN id(u) as uid").data[0];
-        const company = exec("MATCH (c:Company) RETURN id(c) as cid").data[0];
+        const user = (await exec("MATCH (u:User) RETURN id(u) as uid")).data[0];
+        const company = (await exec("MATCH (c:Company) RETURN id(c) as cid")).data[0];
         
-        db.insertEdge("admin-rel", "IS_ADMIN", user.uid as string, company.cid as string);
+        requireDatabase(client).insertEdge("admin-rel", "IS_ADMIN", user.uid as string, company.cid as string);
 
         // Verify setup
-        let check = exec("MATCH (u:User)-[:IS_ADMIN]->(c:Company) RETURN u.email, c.name");
+        let check = await exec("MATCH (u:User)-[:IS_ADMIN]->(c:Company) RETURN u.email, c.name");
         expect(check.data).toHaveLength(1);
 
         // Detach delete the relationship and company
-        exec(`
+        await exec(`
           MATCH (u:User {email: $email})-[prev_admin:IS_ADMIN]->(c:Company)
           DETACH DELETE prev_admin, c
         `, { email: "test@example.com" });
 
         // User should remain
-        expect(exec("MATCH (u:User) RETURN u").data).toHaveLength(1);
+        expect((await exec("MATCH (u:User) RETURN u")).data).toHaveLength(1);
         // Company should be gone
-        expect(exec("MATCH (c:Company) RETURN c").data).toHaveLength(0);
+        expect((await exec("MATCH (c:Company) RETURN c")).data).toHaveLength(0);
         // Relationship should be gone
-        check = exec("MATCH (u:User)-[:IS_ADMIN]->(c:Company) RETURN u");
+        check = await exec("MATCH (u:User)-[:IS_ADMIN]->(c:Company) RETURN u");
         expect(check.data).toHaveLength(0);
       });
     });
 
     describe("Variable-length paths with edge type", () => {
-      it("matches variable-length path with specific edge type", () => {
+      it("matches variable-length path with specific edge type", async () => {
         // Pattern: (c)-[*1..3]->(p:Product)
-        exec("CREATE (c:Company {company_id: 'c1'})");
-        exec("CREATE (cat:Category {name: 'Electronics'})");
-        exec("CREATE (p:Product {name: 'Laptop'})");
+        await exec("CREATE (c:Company {company_id: 'c1'})");
+        await exec("CREATE (cat:Category {name: 'Electronics'})");
+        await exec("CREATE (p:Product {name: 'Laptop'})");
         
-        const company = exec("MATCH (c:Company) RETURN id(c) as cid").data[0];
-        const category = exec("MATCH (cat:Category) RETURN id(cat) as catid").data[0];
-        const product = exec("MATCH (p:Product) RETURN id(p) as pid").data[0];
+        const company = (await exec("MATCH (c:Company) RETURN id(c) as cid")).data[0];
+        const category = (await exec("MATCH (cat:Category) RETURN id(cat) as catid")).data[0];
+        const product = (await exec("MATCH (p:Product) RETURN id(p) as pid")).data[0];
         
-        db.insertEdge("r1", "HAS_CATEGORY", company.cid as string, category.catid as string);
-        db.insertEdge("r2", "CONTAINS", category.catid as string, product.pid as string);
+        requireDatabase(client).insertEdge("r1", "HAS_CATEGORY", company.cid as string, category.catid as string);
+        requireDatabase(client).insertEdge("r2", "CONTAINS", category.catid as string, product.pid as string);
 
         // Find products reachable within 1-3 hops from company
-        const result = exec(`
+        const result = await exec(`
           MATCH (c:Company {company_id: $company_id})-[*1..3]->(p:Product)
           RETURN count(p) as total
         `, { company_id: "c1" });
@@ -1246,37 +1243,37 @@ describe("CypherQueries.json Patterns", () => {
     });
 
     describe("ORDER BY with count aggregation", () => {
-      it("orders by count aggregation", () => {
+      it("orders by count aggregation", async () => {
         // Pattern: RETURN count(u) as total, user.email as email ORDER BY total
-        exec("CREATE (c:Company {company_id: 'c1'})");
-        exec("CREATE (c:Company {company_id: 'c2'})");
-        exec("CREATE (f:Feature {feature: 'export'})");
+        await exec("CREATE (c:Company {company_id: 'c1'})");
+        await exec("CREATE (c:Company {company_id: 'c2'})");
+        await exec("CREATE (f:Feature {feature: 'export'})");
         
-        const companies = exec("MATCH (c:Company) RETURN c.company_id, id(c) as cid").data;
-        const feature = exec("MATCH (f:Feature) RETURN id(f) as fid").data[0];
+        const companies = (await exec("MATCH (c:Company) RETURN c.company_id, id(c) as cid")).data;
+        const feature = (await exec("MATCH (f:Feature) RETURN id(f) as fid")).data[0];
         
         // Company 1 uses feature 3 times
         for (let i = 0; i < 3; i++) {
-          db.insertEdge(`used-c1-${i}`, "USED", companies[0].cid as string, feature.fid as string);
+          requireDatabase(client).insertEdge(`used-c1-${i}`, "USED", companies[0].cid as string, feature.fid as string);
         }
         // Company 2 uses feature 1 time
-        db.insertEdge("used-c2-0", "USED", companies[1].cid as string, feature.fid as string);
+        requireDatabase(client).insertEdge("used-c2-0", "USED", companies[1].cid as string, feature.fid as string);
 
         // Create users for each company
-        exec("CREATE (u:User {email: 'user1@c1.com', company_id: 'c1'})");
-        exec("CREATE (u:User {email: 'user2@c2.com', company_id: 'c2'})");
+        await exec("CREATE (u:User {email: 'user1@c1.com', company_id: 'c1'})");
+        await exec("CREATE (u:User {email: 'user2@c2.com', company_id: 'c2'})");
         
-        const users = exec("MATCH (u:User) RETURN u.email, u.company_id, id(u) as uid").data;
+        const users = (await exec("MATCH (u:User) RETURN u.email, u.company_id, id(u) as uid")).data;
         for (const user of users) {
           // Column names use dot notation
           const company = companies.find(c => c["c.company_id"] === user["u.company_id"]);
           if (company) {
-            db.insertEdge(`admin-${user["u.email"]}`, "IS_ADMIN", user.uid as string, company.cid as string);
+            requireDatabase(client).insertEdge(`admin-${user["u.email"]}`, "IS_ADMIN", user.uid as string, company.cid as string);
           }
         }
 
         // Query feature usage with ORDER BY count
-        const result = exec(`
+        const result = await exec(`
           MATCH (c:Company)-[u:USED]->(f:Feature {feature: $feature}),
                 (user:User)-[:IS_ADMIN]->(c)
           RETURN count(u) as total, user.email as email
@@ -1292,13 +1289,13 @@ describe("CypherQueries.json Patterns", () => {
     });
 
     describe("NOT NULL check with IS NOT NULL", () => {
-      it("filters by IS NOT NULL in WHERE clause", () => {
+      it("filters by IS NOT NULL in WHERE clause", async () => {
         // Pattern: WHERE NOT o.comment_request_date IS NULL
-        exec("CREATE (o:Order {order_id: 'o1', comment_request_date: '2024-01-15'})");
-        exec("CREATE (o:Order {order_id: 'o2'})"); // No comment_request_date
-        exec("CREATE (o:Order {order_id: 'o3', comment_request_date: '2024-01-20'})");
+        await exec("CREATE (o:Order {order_id: 'o1', comment_request_date: '2024-01-15'})");
+        await exec("CREATE (o:Order {order_id: 'o2'})"); // No comment_request_date
+        await exec("CREATE (o:Order {order_id: 'o3', comment_request_date: '2024-01-20'})");
 
-        const result = exec(`
+        const result = await exec(`
           MATCH (o:Order)
           WHERE NOT o.comment_request_date IS NULL
           RETURN o.order_id as order_id
@@ -1313,9 +1310,9 @@ describe("CypherQueries.json Patterns", () => {
     });
 
     describe("Multiple relationship patterns in CREATE", () => {
-      it("creates multiple relationships in single CREATE", () => {
+      it("creates multiple relationships in single CREATE", async () => {
         // Pattern: CREATE (k:Keyword)-[r1:RELATED_KEYWORDS]->(rk1:RelatedKeyword), (k)-[r2:RELATED_KEYWORDS]->(rk2:RelatedKeyword)
-        const result = exec(`
+        const result = await exec(`
           CREATE (k:Keyword {lang: $lang, keyword: $keyword})-[r1:RELATED_KEYWORDS]->(rk1:RelatedKeyword {keyword: $duplicate_keyword}),
                  (k)-[r2:RELATED_KEYWORDS]->(rk2:RelatedKeyword {keyword: $duplicate_keyword})
           RETURN k
@@ -1324,27 +1321,27 @@ describe("CypherQueries.json Patterns", () => {
         expect(result.success).toBe(true);
 
         // Verify keyword was created
-        const keywords = exec("MATCH (k:Keyword) RETURN k");
+        const keywords = await exec("MATCH (k:Keyword) RETURN k");
         expect(keywords.data).toHaveLength(1);
 
         // Verify related keywords were created
-        const relatedKeywords = exec("MATCH (rk:RelatedKeyword) RETURN rk");
+        const relatedKeywords = await exec("MATCH (rk:RelatedKeyword) RETURN rk");
         expect(relatedKeywords.data).toHaveLength(2);
 
         // Verify relationships exist
-        const rels = exec("MATCH (k:Keyword)-[:RELATED_KEYWORDS]->(rk:RelatedKeyword) RETURN rk");
+        const rels = await exec("MATCH (k:Keyword)-[:RELATED_KEYWORDS]->(rk:RelatedKeyword) RETURN rk");
         expect(rels.data).toHaveLength(2);
       });
     });
 
     describe("WITH clause with UNWIND roundtrip", () => {
-      it("handles COLLECT followed by UNWIND", () => {
+      it("handles COLLECT followed by UNWIND", async () => {
         // Pattern: WITH COLLECT(n.name) AS names UNWIND names AS name RETURN name
-        exec("CREATE (p:Person {name: 'Alice'})");
-        exec("CREATE (p:Person {name: 'Bob'})");
-        exec("CREATE (p:Person {name: 'Charlie'})");
+        await exec("CREATE (p:Person {name: 'Alice'})");
+        await exec("CREATE (p:Person {name: 'Bob'})");
+        await exec("CREATE (p:Person {name: 'Charlie'})");
 
-        const result = exec(`
+        const result = await exec(`
           MATCH (n:Person)
           WITH COLLECT(n.name) AS names
           UNWIND names AS name
@@ -1360,11 +1357,11 @@ describe("CypherQueries.json Patterns", () => {
     });
 
     describe("Multi-hop with ORDER BY and LIMIT", () => {
-      it("handles multi-hop traversal returning node and relationship with ORDER BY", () => {
+      it("handles multi-hop traversal returning node and relationship with ORDER BY", async () => {
         // Pattern: MATCH (u:BF_User {id: $userId})-[:BF_LEARNS]->(l:BF_Language)-[rel:BF_HAS_FLASHCARD]->(f:BF_Flashcard)
         //          RETURN f, rel ORDER BY f.created_at DESC
-        exec("CREATE (u:BF_User {id: 'user-1'})");
-        exec(`
+        await exec("CREATE (u:BF_User {id: 'user-1'})");
+        await exec(`
           MATCH (u:BF_User {id: $userId})
           CREATE (u)-[:BF_LEARNS]->(l:BF_Language {language: 'Spanish'})
         `, { userId: "user-1" });
@@ -1377,7 +1374,7 @@ describe("CypherQueries.json Patterns", () => {
         ];
 
         for (let i = 0; i < timestamps.length; i++) {
-          exec(`
+          await exec(`
             MATCH (u:BF_User {id: $userId})-[:BF_LEARNS]->(l:BF_Language)
             CREATE (l)-[:BF_HAS_FLASHCARD {difficulty: $difficulty}]->(f:BF_Flashcard {
               id: $flashcardId,
@@ -1396,7 +1393,7 @@ describe("CypherQueries.json Patterns", () => {
         }
 
         // Query: return both node and relationship, ordered by node property
-        const result = exec(`
+        const result = await exec(`
           MATCH (u:BF_User {id: $userId})-[:BF_LEARNS]->(l:BF_Language)-[rel:BF_HAS_FLASHCARD]->(f:BF_Flashcard)
           RETURN f, rel
           ORDER BY f.created_at DESC
@@ -1420,11 +1417,11 @@ describe("CypherQueries.json Patterns", () => {
         expect(result.data[0].rel).toBeDefined();
       });
 
-      it("handles multi-hop traversal with ORDER BY DESC and LIMIT", () => {
+      it("handles multi-hop traversal with ORDER BY DESC and LIMIT", async () => {
         // Pattern: MATCH (u:BF_User {id: $userId})-[:BF_LEARNS]->(l:BF_Language)-[:BF_HAS_CHAT]->(c:BF_Chat)
         //          RETURN c ORDER BY c.updated_at DESC LIMIT 20
-        exec("CREATE (u:BF_User {id: 'user-1'})");
-        exec(`
+        await exec("CREATE (u:BF_User {id: 'user-1'})");
+        await exec(`
           MATCH (u:BF_User {id: $userId})
           CREATE (u)-[:BF_LEARNS]->(l:BF_Language {language: 'Spanish', proficiency: 'beginner'})
         `, { userId: "user-1" });
@@ -1439,7 +1436,7 @@ describe("CypherQueries.json Patterns", () => {
         ];
 
         for (let i = 0; i < timestamps.length; i++) {
-          exec(`
+          await exec(`
             MATCH (u:BF_User {id: $userId})-[:BF_LEARNS]->(l:BF_Language)
             CREATE (l)-[:BF_HAS_CHAT]->(c:BF_Chat {
               id: $chatId,
@@ -1455,7 +1452,7 @@ describe("CypherQueries.json Patterns", () => {
         }
 
         // Query: get chats ordered by updated_at DESC with LIMIT
-        const result = exec(`
+        const result = await exec(`
           MATCH (u:BF_User {id: $userId})-[:BF_LEARNS]->(l:BF_Language)-[:BF_HAS_CHAT]->(c:BF_Chat)
           RETURN c
           ORDER BY c.updated_at DESC
@@ -1481,13 +1478,13 @@ describe("CypherQueries.json Patterns", () => {
     });
 
     describe("DISTINCT in aggregations", () => {
-      it("handles count(DISTINCT n.property)", () => {
+      it("handles count(DISTINCT n.property)", async () => {
         // Pattern: RETURN count(DISTINCT n.name)
-        exec("CREATE (p:Person {name: 'Alice', city: 'NYC'})");
-        exec("CREATE (p:Person {name: 'Bob', city: 'NYC'})");
-        exec("CREATE (p:Person {name: 'Alice', city: 'LA'})"); // Duplicate name
+        await exec("CREATE (p:Person {name: 'Alice', city: 'NYC'})");
+        await exec("CREATE (p:Person {name: 'Bob', city: 'NYC'})");
+        await exec("CREATE (p:Person {name: 'Alice', city: 'LA'})"); // Duplicate name
 
-        const result = exec(`
+        const result = await exec(`
           MATCH (p:Person)
           RETURN count(DISTINCT p.name) as uniqueNames
         `);
@@ -1496,14 +1493,14 @@ describe("CypherQueries.json Patterns", () => {
         expect(result.data[0].uniqueNames).toBe(2); // Alice and Bob
       });
 
-      it("handles collect(DISTINCT n.property)", () => {
+      it("handles collect(DISTINCT n.property)", async () => {
         // Pattern: RETURN collect(DISTINCT n.category)
-        exec("CREATE (p:Product {name: 'Laptop', category: 'Electronics'})");
-        exec("CREATE (p:Product {name: 'Phone', category: 'Electronics'})");
-        exec("CREATE (p:Product {name: 'Shirt', category: 'Clothing'})");
-        exec("CREATE (p:Product {name: 'Pants', category: 'Clothing'})");
+        await exec("CREATE (p:Product {name: 'Laptop', category: 'Electronics'})");
+        await exec("CREATE (p:Product {name: 'Phone', category: 'Electronics'})");
+        await exec("CREATE (p:Product {name: 'Shirt', category: 'Clothing'})");
+        await exec("CREATE (p:Product {name: 'Pants', category: 'Clothing'})");
 
-        const result = exec(`
+        const result = await exec(`
           MATCH (p:Product)
           RETURN collect(DISTINCT p.category) as categories
         `);
@@ -1515,13 +1512,13 @@ describe("CypherQueries.json Patterns", () => {
         expect(categories).toContain("Clothing");
       });
 
-      it("handles sum(DISTINCT n.property)", () => {
+      it("handles sum(DISTINCT n.property)", async () => {
         // Pattern: RETURN sum(DISTINCT n.value)
-        exec("CREATE (o:Order {id: '1', amount: 100})");
-        exec("CREATE (o:Order {id: '2', amount: 200})");
-        exec("CREATE (o:Order {id: '3', amount: 100})"); // Duplicate amount
+        await exec("CREATE (o:Order {id: '1', amount: 100})");
+        await exec("CREATE (o:Order {id: '2', amount: 200})");
+        await exec("CREATE (o:Order {id: '3', amount: 100})"); // Duplicate amount
 
-        const result = exec(`
+        const result = await exec(`
           MATCH (o:Order)
           RETURN sum(DISTINCT o.amount) as totalUniqueAmounts
         `);
@@ -1530,29 +1527,29 @@ describe("CypherQueries.json Patterns", () => {
         expect(result.data[0].totalUniqueAmounts).toBe(300); // 100 + 200 (not 400)
       });
 
-      it("handles count(DISTINCT) with relationship grouping", () => {
+      it("handles count(DISTINCT) with relationship grouping", async () => {
         // Pattern: RETURN count(DISTINCT property) with implicit grouping via relationships
         // Note: Implicit GROUP BY from non-aggregated columns is not yet implemented.
         // This test verifies DISTINCT works in a simpler case using relationship patterns.
-        exec("CREATE (d:Department {name: 'Engineering'})");
-        exec("CREATE (d:Department {name: 'Marketing'})");
+        await exec("CREATE (d:Department {name: 'Engineering'})");
+        await exec("CREATE (d:Department {name: 'Marketing'})");
         
         // Engineering department employees
-        exec(`MATCH (d:Department {name: 'Engineering'}) 
+        await exec(`MATCH (d:Department {name: 'Engineering'}) 
               CREATE (d)-[:HAS_EMPLOYEE]->(e:Employee {name: 'Alice', skill: 'Python'})`);
-        exec(`MATCH (d:Department {name: 'Engineering'}) 
+        await exec(`MATCH (d:Department {name: 'Engineering'}) 
               CREATE (d)-[:HAS_EMPLOYEE]->(e:Employee {name: 'Bob', skill: 'Python'})`);
-        exec(`MATCH (d:Department {name: 'Engineering'}) 
+        await exec(`MATCH (d:Department {name: 'Engineering'}) 
               CREATE (d)-[:HAS_EMPLOYEE]->(e:Employee {name: 'Charlie', skill: 'Java'})`);
         
         // Marketing department employees
-        exec(`MATCH (d:Department {name: 'Marketing'}) 
+        await exec(`MATCH (d:Department {name: 'Marketing'}) 
               CREATE (d)-[:HAS_EMPLOYEE]->(e:Employee {name: 'Diana', skill: 'SEO'})`);
-        exec(`MATCH (d:Department {name: 'Marketing'}) 
+        await exec(`MATCH (d:Department {name: 'Marketing'}) 
               CREATE (d)-[:HAS_EMPLOYEE]->(e:Employee {name: 'Eve', skill: 'SEO'})`);
 
         // Query for Engineering department's unique skills
-        const result = exec(`
+        const result = await exec(`
           MATCH (d:Department {name: 'Engineering'})-[:HAS_EMPLOYEE]->(e:Employee)
           RETURN count(DISTINCT e.skill) as uniqueSkills
         `);
@@ -1561,7 +1558,7 @@ describe("CypherQueries.json Patterns", () => {
         expect(result.data[0].uniqueSkills).toBe(2); // Python, Java
 
         // Query for Marketing department's unique skills
-        const result2 = exec(`
+        const result2 = await exec(`
           MATCH (d:Department {name: 'Marketing'})-[:HAS_EMPLOYEE]->(e:Employee)
           RETURN count(DISTINCT e.skill) as uniqueSkills
         `);
@@ -1572,12 +1569,12 @@ describe("CypherQueries.json Patterns", () => {
     });
 
     describe("Anonymous nodes in patterns", () => {
-      it("matches relationship with anonymous source and target", () => {
+      it("matches relationship with anonymous source and target", async () => {
         // Pattern: MATCH ()-[r:KNOWS]->() RETURN r
-        exec("CREATE (a:Person {name: 'Alice'})-[:KNOWS]->(b:Person {name: 'Bob'})");
-        exec("CREATE (c:Person {name: 'Charlie'})-[:KNOWS]->(d:Person {name: 'Diana'})");
+        await exec("CREATE (a:Person {name: 'Alice'})-[:KNOWS]->(b:Person {name: 'Bob'})");
+        await exec("CREATE (c:Person {name: 'Charlie'})-[:KNOWS]->(d:Person {name: 'Diana'})");
 
-        const result = exec(`
+        const result = await exec(`
           MATCH ()-[r:KNOWS]->()
           RETURN r
         `);
@@ -1585,12 +1582,12 @@ describe("CypherQueries.json Patterns", () => {
         expect(result.data).toHaveLength(2);
       });
 
-      it("matches relationship with anonymous target only", () => {
+      it("matches relationship with anonymous target only", async () => {
         // Pattern: MATCH (a:Person)-[r:KNOWS]->() RETURN a, r
-        exec("CREATE (a:Person {name: 'Alice'})-[:KNOWS]->(b:Person {name: 'Bob'})");
-        exec("CREATE (a:Person {name: 'Alice'})-[:WORKS_AT]->(c:Company {name: 'Acme'})");
+        await exec("CREATE (a:Person {name: 'Alice'})-[:KNOWS]->(b:Person {name: 'Bob'})");
+        await exec("CREATE (a:Person {name: 'Alice'})-[:WORKS_AT]->(c:Company {name: 'Acme'})");
 
-        const result = exec(`
+        const result = await exec(`
           MATCH (p:Person {name: 'Alice'})-[r:KNOWS]->()
           RETURN p.name as name, r
         `);
@@ -1599,12 +1596,12 @@ describe("CypherQueries.json Patterns", () => {
         expect(result.data[0].name).toBe("Alice");
       });
 
-      it("matches relationship with anonymous source only", () => {
+      it("matches relationship with anonymous source only", async () => {
         // Pattern: MATCH ()-[r:WORKS_AT]->(c:Company) RETURN c, r
-        exec("CREATE (a:Person {name: 'Alice'})-[:WORKS_AT]->(c:Company {name: 'Acme'})");
-        exec("CREATE (b:Person {name: 'Bob'})-[:WORKS_AT]->(c:Company {name: 'Acme'})");
+        await exec("CREATE (a:Person {name: 'Alice'})-[:WORKS_AT]->(c:Company {name: 'Acme'})");
+        await exec("CREATE (b:Person {name: 'Bob'})-[:WORKS_AT]->(c:Company {name: 'Acme'})");
 
-        const result = exec(`
+        const result = await exec(`
           MATCH ()-[r:WORKS_AT]->(c:Company {name: 'Acme'})
           RETURN c.name as company, count(r) as employeeCount
         `);
@@ -1614,17 +1611,17 @@ describe("CypherQueries.json Patterns", () => {
         expect(result.data[0].employeeCount).toBe(2);
       });
 
-      it("matches all relationships with anonymous nodes", () => {
+      it("matches all relationships with anonymous nodes", async () => {
         // Pattern: MATCH ()-[r]->() RETURN count(r)
-        exec("CREATE (a:Person {name: 'Alice'})-[:KNOWS]->(b:Person {name: 'Bob'})");
-        exec("CREATE (a:Person {name: 'Alice'})-[:WORKS_AT]->(c:Company {name: 'Acme'})");
+        await exec("CREATE (a:Person {name: 'Alice'})-[:KNOWS]->(b:Person {name: 'Bob'})");
+        await exec("CREATE (a:Person {name: 'Alice'})-[:WORKS_AT]->(c:Company {name: 'Acme'})");
 
         // Use id(a) to link properly
-        const alice = exec("MATCH (p:Person {name: 'Alice'}) RETURN id(p) as aid").data[0];
-        const bob = exec("MATCH (p:Person {name: 'Bob'}) RETURN id(p) as bid").data[0];
+        const alice = (await exec("MATCH (p:Person {name: 'Alice'}) RETURN id(p) as aid")).data[0];
+        const bob = (await exec("MATCH (p:Person {name: 'Bob'}) RETURN id(p) as bid")).data[0];
         
         // Query all relationships
-        const result = exec(`
+        const result = await exec(`
           MATCH ()-[r]->()
           RETURN count(r) as totalRels
         `);
@@ -1635,13 +1632,13 @@ describe("CypherQueries.json Patterns", () => {
     });
 
     describe("Label predicates on anonymous nodes", () => {
-      it("matches pattern with labeled anonymous nodes", () => {
+      it("matches pattern with labeled anonymous nodes", async () => {
         // Pattern: MATCH (:Person)-[r:WORKS_AT]->(:Company) RETURN r
-        exec("CREATE (a:Person {name: 'Alice'})-[:WORKS_AT]->(c:Company {name: 'Acme'})");
-        exec("CREATE (b:Person {name: 'Bob'})-[:WORKS_AT]->(d:Company {name: 'BigCorp'})");
-        exec("CREATE (x:Robot {name: 'R2D2'})-[:WORKS_AT]->(c:Company {name: 'Acme'})");
+        await exec("CREATE (a:Person {name: 'Alice'})-[:WORKS_AT]->(c:Company {name: 'Acme'})");
+        await exec("CREATE (b:Person {name: 'Bob'})-[:WORKS_AT]->(d:Company {name: 'BigCorp'})");
+        await exec("CREATE (x:Robot {name: 'R2D2'})-[:WORKS_AT]->(c:Company {name: 'Acme'})");
 
-        const result = exec(`
+        const result = await exec(`
           MATCH (:Person)-[r:WORKS_AT]->(:Company)
           RETURN count(r) as count
         `);
@@ -1650,12 +1647,12 @@ describe("CypherQueries.json Patterns", () => {
         expect(result.data[0].count).toBe(2); // Only Person->Company, not Robot->Company
       });
 
-      it("matches mixed named and anonymous nodes with labels", () => {
+      it("matches mixed named and anonymous nodes with labels", async () => {
         // Pattern: MATCH (p:Person)-[:WORKS_AT]->(:Company) RETURN p.name
-        exec("CREATE (a:Person {name: 'Alice'})-[:WORKS_AT]->(c:Company {name: 'Acme'})");
-        exec("CREATE (b:Person {name: 'Bob'})-[:KNOWS]->(c:Person {name: 'Charlie'})");
+        await exec("CREATE (a:Person {name: 'Alice'})-[:WORKS_AT]->(c:Company {name: 'Acme'})");
+        await exec("CREATE (b:Person {name: 'Bob'})-[:KNOWS]->(c:Person {name: 'Charlie'})");
 
-        const result = exec(`
+        const result = await exec(`
           MATCH (p:Person)-[:WORKS_AT]->(:Company)
           RETURN p.name as name
         `);
@@ -1664,13 +1661,13 @@ describe("CypherQueries.json Patterns", () => {
         expect(result.data[0].name).toBe("Alice");
       });
 
-      it("matches anonymous source with label predicate", () => {
+      it("matches anonymous source with label predicate", async () => {
         // Pattern: MATCH (:Department)-[:CONTAINS]->(e:Employee) RETURN e
-        exec("CREATE (d:Department {name: 'Engineering'})-[:CONTAINS]->(e:Employee {name: 'Alice'})");
-        exec("CREATE (d:Department {name: 'Marketing'})-[:CONTAINS]->(e:Employee {name: 'Bob'})");
-        exec("CREATE (p:Project {name: 'Secret'})-[:CONTAINS]->(e:Employee {name: 'Charlie'})");
+        await exec("CREATE (d:Department {name: 'Engineering'})-[:CONTAINS]->(e:Employee {name: 'Alice'})");
+        await exec("CREATE (d:Department {name: 'Marketing'})-[:CONTAINS]->(e:Employee {name: 'Bob'})");
+        await exec("CREATE (p:Project {name: 'Secret'})-[:CONTAINS]->(e:Employee {name: 'Charlie'})");
 
-        const result = exec(`
+        const result = await exec(`
           MATCH (:Department)-[:CONTAINS]->(e:Employee)
           RETURN e.name as name
           ORDER BY name
@@ -1683,18 +1680,18 @@ describe("CypherQueries.json Patterns", () => {
     });
 
     describe("MERGE with ON CREATE SET and RETURN comparison", () => {
-      it("handles MERGE with ON CREATE SET followed by RETURN with equality comparison", () => {
+      it("handles MERGE with ON CREATE SET followed by RETURN with equality comparison", async () => {
         // This pattern is used to check if a node was created or matched
         // Pattern from user: MATCH (u:BF_User {id: $userId})
         //                    MERGE (u)-[:BF_LEARNS]->(l:BF_Language {language: $language})
         //                    ON CREATE SET l.proficiency = $proficiency, l.created_at = $createdAt
         //                    RETURN l.created_at = $createdAt as created
-        exec("CREATE (u:BF_User {id: 'user-1'})");
+        await exec("CREATE (u:BF_User {id: 'user-1'})");
 
         const createdAt = "2024-01-15T10:00:00Z";
         
         // First call should create the language node
-        const result1 = exec(`
+        const result1 = await exec(`
           MATCH (u:BF_User {id: $userId})
           MERGE (u)-[:BF_LEARNS]->(l:BF_Language {language: $language})
           ON CREATE SET l.proficiency = $proficiency,
@@ -1711,7 +1708,7 @@ describe("CypherQueries.json Patterns", () => {
         expect(result1.data[0].created).toBe(true); // Was created, timestamps match
 
         // Second call should match existing node (ON CREATE SET won't run)
-        const result2 = exec(`
+        const result2 = await exec(`
           MATCH (u:BF_User {id: $userId})
           MERGE (u)-[:BF_LEARNS]->(l:BF_Language {language: $language})
           ON CREATE SET l.proficiency = $proficiency,
@@ -1733,43 +1730,43 @@ describe("CypherQueries.json Patterns", () => {
   });
 
   describe("List Concatenation", () => {
-    it("concatenates two literal lists with + operator", () => {
+    it("concatenates two literal lists with + operator", async () => {
       // Pattern: RETURN [1, 2] + [3, 4] AS combined
-      const result = exec("RETURN [1, 2] + [3, 4] AS combined");
+      const result = await exec("RETURN [1, 2] + [3, 4] AS combined");
 
       expect(result.data).toHaveLength(1);
       expect(result.data[0].combined).toEqual([1, 2, 3, 4]);
     });
 
-    it("concatenates list with single element", () => {
+    it("concatenates list with single element", async () => {
       // Pattern: RETURN [1, 2, 3] + [4] AS extended
-      const result = exec("RETURN [1, 2, 3] + [4] AS extended");
+      const result = await exec("RETURN [1, 2, 3] + [4] AS extended");
 
       expect(result.data).toHaveLength(1);
       expect(result.data[0].extended).toEqual([1, 2, 3, 4]);
     });
 
-    it("concatenates empty lists", () => {
+    it("concatenates empty lists", async () => {
       // Pattern: RETURN [] + [] AS empty
-      const result = exec("RETURN [] + [] AS empty");
+      const result = await exec("RETURN [] + [] AS empty");
 
       expect(result.data).toHaveLength(1);
       expect(result.data[0].empty).toEqual([]);
     });
 
-    it("concatenates list with empty list", () => {
+    it("concatenates list with empty list", async () => {
       // Pattern: RETURN [1, 2] + [] AS unchanged
-      const result = exec("RETURN [1, 2] + [] AS unchanged");
+      const result = await exec("RETURN [1, 2] + [] AS unchanged");
 
       expect(result.data).toHaveLength(1);
       expect(result.data[0].unchanged).toEqual([1, 2]);
     });
 
-    it("concatenates property list with literal list", () => {
+    it("concatenates property list with literal list", async () => {
       // Pattern: RETURN n.tags + ['new'] AS allTags
-      exec("CREATE (n:Item {name: 'Test', tags: ['a', 'b']})");
+      await exec("CREATE (n:Item {name: 'Test', tags: ['a', 'b']})");
 
-      const result = exec(`
+      const result = await exec(`
         MATCH (n:Item {name: 'Test'})
         RETURN n.tags + ['new'] AS allTags
       `);
@@ -1778,10 +1775,10 @@ describe("CypherQueries.json Patterns", () => {
       expect(result.data[0].allTags).toEqual(["a", "b", "new"]);
     });
 
-    it("concatenates two property lists", () => {
-      exec("CREATE (n:Item {list1: [1, 2], list2: [3, 4]})");
+    it("concatenates two property lists", async () => {
+      await exec("CREATE (n:Item {list1: [1, 2], list2: [3, 4]})");
 
-      const result = exec(`
+      const result = await exec(`
         MATCH (n:Item)
         RETURN n.list1 + n.list2 AS combined
       `);
@@ -1790,32 +1787,32 @@ describe("CypherQueries.json Patterns", () => {
       expect(result.data[0].combined).toEqual([1, 2, 3, 4]);
     });
 
-    it("concatenates string lists", () => {
-      const result = exec("RETURN ['a', 'b'] + ['c', 'd'] AS letters");
+    it("concatenates string lists", async () => {
+      const result = await exec("RETURN ['a', 'b'] + ['c', 'd'] AS letters");
 
       expect(result.data).toHaveLength(1);
       expect(result.data[0].letters).toEqual(["a", "b", "c", "d"]);
     });
 
-    it("concatenates mixed type lists", () => {
-      const result = exec("RETURN [1, 'two'] + [3, 'four'] AS mixed");
+    it("concatenates mixed type lists", async () => {
+      const result = await exec("RETURN [1, 'two'] + [3, 'four'] AS mixed");
 
       expect(result.data).toHaveLength(1);
       expect(result.data[0].mixed).toEqual([1, "two", 3, "four"]);
     });
 
-    it("chains multiple list concatenations", () => {
+    it("chains multiple list concatenations", async () => {
       // Pattern: RETURN [1] + [2] + [3] AS chain
-      const result = exec("RETURN [1] + [2] + [3] AS chain");
+      const result = await exec("RETURN [1] + [2] + [3] AS chain");
 
       expect(result.data).toHaveLength(1);
       expect(result.data[0].chain).toEqual([1, 2, 3]);
     });
 
-    it("concatenates list in CREATE+SET via MATCH", () => {
+    it("concatenates list in CREATE+SET via MATCH", async () => {
       // MATCH + SET should work
-      exec("CREATE (b {numbers: [1, 2, 3]})");
-      const matchResult = exec(`
+      await exec("CREATE (b {numbers: [1, 2, 3]})");
+      const matchResult = await exec(`
         MATCH (b)
         SET b.numbers = b.numbers + [4, 5]
         RETURN b.numbers AS nums
@@ -1824,9 +1821,9 @@ describe("CypherQueries.json Patterns", () => {
       expect(matchResult.data[0].nums).toEqual([1, 2, 3, 4, 5]);
     });
 
-    it("concatenates list in CREATE+SET single query", () => {
+    it("concatenates list in CREATE+SET single query", async () => {
       // CREATE + SET in single query
-      const result = exec(`
+      const result = await exec(`
         CREATE (a {numbers: [1, 2, 3]})
         SET a.numbers = a.numbers + [4, 5]
         RETURN a.numbers AS nums
@@ -1838,11 +1835,11 @@ describe("CypherQueries.json Patterns", () => {
   });
 
   describe("Multiple Labels", () => {
-    it("creates node with multiple labels", () => {
+    it("creates node with multiple labels", async () => {
       // Pattern: CREATE (n:A:B:C {name: 'test'})
       // Neo4j 3.5 format: RETURN n returns just properties
       // Use labels(n) function to get labels
-      const result = exec(`
+      const result = await exec(`
         CREATE (n:Person:Employee:Manager {name: 'Alice', level: 5})
         RETURN n, labels(n) as nodeLabels
       `);
@@ -1856,61 +1853,61 @@ describe("CypherQueries.json Patterns", () => {
       expect(row.nodeLabels).toEqual(["Person", "Employee", "Manager"]);
     });
 
-    it("matches node by single label when node has multiple labels", () => {
+    it("matches node by single label when node has multiple labels", async () => {
       // Create a node with multiple labels
-      exec("CREATE (n:A:B:C {id: 'test-1'})");
+      await exec("CREATE (n:A:B:C {id: 'test-1'})");
 
       // Should match by any single label
-      const resultA = exec("MATCH (n:A) RETURN n");
+      const resultA = await exec("MATCH (n:A) RETURN n");
       expect(resultA.data).toHaveLength(1);
 
-      const resultB = exec("MATCH (n:B) RETURN n");
+      const resultB = await exec("MATCH (n:B) RETURN n");
       expect(resultB.data).toHaveLength(1);
 
-      const resultC = exec("MATCH (n:C) RETURN n");
+      const resultC = await exec("MATCH (n:C) RETURN n");
       expect(resultC.data).toHaveLength(1);
     });
 
-    it("matches node by multiple labels", () => {
+    it("matches node by multiple labels", async () => {
       // Create nodes with different label combinations
-      exec("CREATE (n:A:B {id: 'ab'})");
-      exec("CREATE (n:A:B:C {id: 'abc'})");
-      exec("CREATE (n:A {id: 'a'})");
-      exec("CREATE (n:B:C {id: 'bc'})");
+      await exec("CREATE (n:A:B {id: 'ab'})");
+      await exec("CREATE (n:A:B:C {id: 'abc'})");
+      await exec("CREATE (n:A {id: 'a'})");
+      await exec("CREATE (n:B:C {id: 'bc'})");
 
       // Match by two labels - should get nodes that have both
-      const result = exec("MATCH (n:A:B) RETURN n.id as id ORDER BY id");
+      const result = await exec("MATCH (n:A:B) RETURN n.id as id ORDER BY id");
       
       expect(result.data).toHaveLength(2);
       expect(result.data[0].id).toBe("ab");
       expect(result.data[1].id).toBe("abc");
     });
 
-    it("matches node by all three labels", () => {
-      exec("CREATE (n:A:B:C {id: 'abc'})");
-      exec("CREATE (n:A:B {id: 'ab'})");
-      exec("CREATE (n:B:C {id: 'bc'})");
+    it("matches node by all three labels", async () => {
+      await exec("CREATE (n:A:B:C {id: 'abc'})");
+      await exec("CREATE (n:A:B {id: 'ab'})");
+      await exec("CREATE (n:B:C {id: 'bc'})");
 
       // Match by all three labels - should only get the one with all three
-      const result = exec("MATCH (n:A:B:C) RETURN n.id as id");
+      const result = await exec("MATCH (n:A:B:C) RETURN n.id as id");
       
       expect(result.data).toHaveLength(1);
       expect(result.data[0].id).toBe("abc");
     });
 
-    it("creates relationship pattern with multiple labels on nodes", () => {
-      exec("CREATE (a:Person:Employee {name: 'Alice'})");
-      exec("CREATE (b:Person:Manager {name: 'Bob'})");
+    it("creates relationship pattern with multiple labels on nodes", async () => {
+      await exec("CREATE (a:Person:Employee {name: 'Alice'})");
+      await exec("CREATE (b:Person:Manager {name: 'Bob'})");
       
       // Link them
-      exec(`
+      await exec(`
         MATCH (a:Person:Employee {name: 'Alice'})
         MATCH (b:Person:Manager {name: 'Bob'})
         CREATE (a)-[:REPORTS_TO]->(b)
       `);
 
       // Query the relationship
-      const result = exec(`
+      const result = await exec(`
         MATCH (a:Employee)-[:REPORTS_TO]->(b:Manager)
         RETURN a.name as employee, b.name as manager
       `);
@@ -1920,66 +1917,66 @@ describe("CypherQueries.json Patterns", () => {
       expect(result.data[0].manager).toBe("Bob");
     });
 
-    it("updates properties on node with multiple labels", () => {
-      exec("CREATE (n:A:B:C {id: 'test-1', value: 10})");
+    it("updates properties on node with multiple labels", async () => {
+      await exec("CREATE (n:A:B:C {id: 'test-1', value: 10})");
 
-      exec("MATCH (n:A:B:C {id: 'test-1'}) SET n.value = 20");
+      await exec("MATCH (n:A:B:C {id: 'test-1'}) SET n.value = 20");
 
-      const result = exec("MATCH (n:A:B:C {id: 'test-1'}) RETURN n.value as value");
+      const result = await exec("MATCH (n:A:B:C {id: 'test-1'}) RETURN n.value as value");
       expect(result.data).toHaveLength(1);
       expect(result.data[0].value).toBe(20);
     });
 
-    it("deletes node with multiple labels", () => {
-      exec("CREATE (n:A:B:C {id: 'test-1'})");
+    it("deletes node with multiple labels", async () => {
+      await exec("CREATE (n:A:B:C {id: 'test-1'})");
 
-      exec("MATCH (n:A:B:C {id: 'test-1'}) DELETE n");
+      await exec("MATCH (n:A:B:C {id: 'test-1'}) DELETE n");
 
       // Should not match by any label
-      expect(exec("MATCH (n:A) RETURN n").data).toHaveLength(0);
-      expect(exec("MATCH (n:B) RETURN n").data).toHaveLength(0);
-      expect(exec("MATCH (n:C) RETURN n").data).toHaveLength(0);
+      expect((await exec("MATCH (n:A) RETURN n")).data).toHaveLength(0);
+      expect((await exec("MATCH (n:B) RETURN n")).data).toHaveLength(0);
+      expect((await exec("MATCH (n:C) RETURN n")).data).toHaveLength(0);
     });
 
-    it("counts nodes by label combinations", () => {
-      exec("CREATE (n:A:B:C {id: '1'})");
-      exec("CREATE (n:A:B {id: '2'})");
-      exec("CREATE (n:A:B {id: '3'})");
-      exec("CREATE (n:A {id: '4'})");
+    it("counts nodes by label combinations", async () => {
+      await exec("CREATE (n:A:B:C {id: '1'})");
+      await exec("CREATE (n:A:B {id: '2'})");
+      await exec("CREATE (n:A:B {id: '3'})");
+      await exec("CREATE (n:A {id: '4'})");
 
       // Count all A nodes
-      const resultA = exec("MATCH (n:A) RETURN count(n) as total");
+      const resultA = await exec("MATCH (n:A) RETURN count(n) as total");
       expect(resultA.data[0].total).toBe(4);
 
       // Count all A:B nodes
-      const resultAB = exec("MATCH (n:A:B) RETURN count(n) as total");
+      const resultAB = await exec("MATCH (n:A:B) RETURN count(n) as total");
       expect(resultAB.data[0].total).toBe(3);
 
       // Count all A:B:C nodes
-      const resultABC = exec("MATCH (n:A:B:C) RETURN count(n) as total");
+      const resultABC = await exec("MATCH (n:A:B:C) RETURN count(n) as total");
       expect(resultABC.data[0].total).toBe(1);
     });
   });
 
   describe("Variable-Length Paths", () => {
-    it("matches unbounded variable-length path with [*]", () => {
+    it("matches unbounded variable-length path with [*]", async () => {
       // Pattern: (a)-[*]->(b) finds all nodes reachable from a
-      exec("CREATE (a:Person {name: 'Alice'})");
-      exec("CREATE (b:Person {name: 'Bob'})");
-      exec("CREATE (c:Person {name: 'Charlie'})");
+      await exec("CREATE (a:Person {name: 'Alice'})");
+      await exec("CREATE (b:Person {name: 'Bob'})");
+      await exec("CREATE (c:Person {name: 'Charlie'})");
       
       // Create chain: Alice -> Bob -> Charlie
-      exec(`
+      await exec(`
         MATCH (a:Person {name: 'Alice'}), (b:Person {name: 'Bob'})
         CREATE (a)-[:KNOWS]->(b)
       `);
-      exec(`
+      await exec(`
         MATCH (b:Person {name: 'Bob'}), (c:Person {name: 'Charlie'})
         CREATE (b)-[:KNOWS]->(c)
       `);
 
       // Find all reachable from Alice
-      const result = exec(`
+      const result = await exec(`
         MATCH (a:Person {name: 'Alice'})-[*]->(other:Person)
         RETURN other.name as name
         ORDER BY name
@@ -1990,29 +1987,29 @@ describe("CypherQueries.json Patterns", () => {
       expect(result.data[1].name).toBe("Charlie");
     });
 
-    it("matches fixed-length variable path with [*n]", () => {
+    it("matches fixed-length variable path with [*n]", async () => {
       // Pattern: (a)-[*2]->(b) finds nodes exactly 2 hops away
-      exec("CREATE (a:Person {name: 'Alice'})");
-      exec("CREATE (b:Person {name: 'Bob'})");
-      exec("CREATE (c:Person {name: 'Charlie'})");
-      exec("CREATE (d:Person {name: 'Diana'})");
+      await exec("CREATE (a:Person {name: 'Alice'})");
+      await exec("CREATE (b:Person {name: 'Bob'})");
+      await exec("CREATE (c:Person {name: 'Charlie'})");
+      await exec("CREATE (d:Person {name: 'Diana'})");
       
       // Create chain: Alice -> Bob -> Charlie -> Diana
-      exec(`
+      await exec(`
         MATCH (a:Person {name: 'Alice'}), (b:Person {name: 'Bob'})
         CREATE (a)-[:KNOWS]->(b)
       `);
-      exec(`
+      await exec(`
         MATCH (b:Person {name: 'Bob'}), (c:Person {name: 'Charlie'})
         CREATE (b)-[:KNOWS]->(c)
       `);
-      exec(`
+      await exec(`
         MATCH (c:Person {name: 'Charlie'}), (d:Person {name: 'Diana'})
         CREATE (c)-[:KNOWS]->(d)
       `);
 
       // Find nodes exactly 2 hops from Alice
-      const result = exec(`
+      const result = await exec(`
         MATCH (a:Person {name: 'Alice'})-[*2]->(other:Person)
         RETURN other.name as name
       `);
@@ -2021,29 +2018,29 @@ describe("CypherQueries.json Patterns", () => {
       expect(result.data[0].name).toBe("Charlie");
     });
 
-    it("matches bounded variable-length path with [*n..m]", () => {
+    it("matches bounded variable-length path with [*n..m]", async () => {
       // Pattern: (a)-[*1..2]->(b) finds nodes 1 or 2 hops away
-      exec("CREATE (a:Person {name: 'Alice'})");
-      exec("CREATE (b:Person {name: 'Bob'})");
-      exec("CREATE (c:Person {name: 'Charlie'})");
-      exec("CREATE (d:Person {name: 'Diana'})");
+      await exec("CREATE (a:Person {name: 'Alice'})");
+      await exec("CREATE (b:Person {name: 'Bob'})");
+      await exec("CREATE (c:Person {name: 'Charlie'})");
+      await exec("CREATE (d:Person {name: 'Diana'})");
       
       // Create chain: Alice -> Bob -> Charlie -> Diana
-      exec(`
+      await exec(`
         MATCH (a:Person {name: 'Alice'}), (b:Person {name: 'Bob'})
         CREATE (a)-[:KNOWS]->(b)
       `);
-      exec(`
+      await exec(`
         MATCH (b:Person {name: 'Bob'}), (c:Person {name: 'Charlie'})
         CREATE (b)-[:KNOWS]->(c)
       `);
-      exec(`
+      await exec(`
         MATCH (c:Person {name: 'Charlie'}), (d:Person {name: 'Diana'})
         CREATE (c)-[:KNOWS]->(d)
       `);
 
       // Find nodes 1-2 hops from Alice
-      const result = exec(`
+      const result = await exec(`
         MATCH (a:Person {name: 'Alice'})-[*1..2]->(other:Person)
         RETURN other.name as name
         ORDER BY name
@@ -2054,30 +2051,30 @@ describe("CypherQueries.json Patterns", () => {
       expect(result.data[1].name).toBe("Charlie");
     });
 
-    it("matches variable-length path with specific relationship type", () => {
+    it("matches variable-length path with specific relationship type", async () => {
       // Pattern: (a)-[:KNOWS*1..3]->(b) filters by relationship type
-      exec("CREATE (a:Person {name: 'Alice'})");
-      exec("CREATE (b:Person {name: 'Bob'})");
-      exec("CREATE (c:Person {name: 'Charlie'})");
-      exec("CREATE (d:Company {name: 'Acme'})");
+      await exec("CREATE (a:Person {name: 'Alice'})");
+      await exec("CREATE (b:Person {name: 'Bob'})");
+      await exec("CREATE (c:Person {name: 'Charlie'})");
+      await exec("CREATE (d:Company {name: 'Acme'})");
       
       // Create chain: Alice -KNOWS-> Bob -KNOWS-> Charlie
-      exec(`
+      await exec(`
         MATCH (a:Person {name: 'Alice'}), (b:Person {name: 'Bob'})
         CREATE (a)-[:KNOWS]->(b)
       `);
-      exec(`
+      await exec(`
         MATCH (b:Person {name: 'Bob'}), (c:Person {name: 'Charlie'})
         CREATE (b)-[:KNOWS]->(c)
       `);
       // Add a WORKS_AT edge that should not be included
-      exec(`
+      await exec(`
         MATCH (c:Person {name: 'Charlie'}), (d:Company {name: 'Acme'})
         CREATE (c)-[:WORKS_AT]->(d)
       `);
 
       // Find all reachable via KNOWS relationships (1-3 hops)
-      const result = exec(`
+      const result = await exec(`
         MATCH (a:Person {name: 'Alice'})-[:KNOWS*1..3]->(other)
         RETURN other.name as name
         ORDER BY name
@@ -2088,29 +2085,29 @@ describe("CypherQueries.json Patterns", () => {
       expect(result.data[1].name).toBe("Charlie");
     });
 
-    it("matches variable-length path with minimum bound only [*n..]", () => {
+    it("matches variable-length path with minimum bound only [*n..]", async () => {
       // Pattern: (a)-[*2..]->(b) finds nodes at least 2 hops away
-      exec("CREATE (a:Person {name: 'Alice'})");
-      exec("CREATE (b:Person {name: 'Bob'})");
-      exec("CREATE (c:Person {name: 'Charlie'})");
-      exec("CREATE (d:Person {name: 'Diana'})");
+      await exec("CREATE (a:Person {name: 'Alice'})");
+      await exec("CREATE (b:Person {name: 'Bob'})");
+      await exec("CREATE (c:Person {name: 'Charlie'})");
+      await exec("CREATE (d:Person {name: 'Diana'})");
       
       // Create chain: Alice -> Bob -> Charlie -> Diana
-      exec(`
+      await exec(`
         MATCH (a:Person {name: 'Alice'}), (b:Person {name: 'Bob'})
         CREATE (a)-[:KNOWS]->(b)
       `);
-      exec(`
+      await exec(`
         MATCH (b:Person {name: 'Bob'}), (c:Person {name: 'Charlie'})
         CREATE (b)-[:KNOWS]->(c)
       `);
-      exec(`
+      await exec(`
         MATCH (c:Person {name: 'Charlie'}), (d:Person {name: 'Diana'})
         CREATE (c)-[:KNOWS]->(d)
       `);
 
       // Find nodes at least 2 hops from Alice
-      const result = exec(`
+      const result = await exec(`
         MATCH (a:Person {name: 'Alice'})-[*2..]->(other:Person)
         RETURN other.name as name
         ORDER BY name
@@ -2121,28 +2118,28 @@ describe("CypherQueries.json Patterns", () => {
       expect(result.data[1].name).toBe("Diana");
     });
 
-    it("handles cycles in variable-length paths", () => {
+    it("handles cycles in variable-length paths", async () => {
       // Create a cycle: Alice -> Bob -> Charlie -> Alice
-      exec("CREATE (a:Person {name: 'Alice'})");
-      exec("CREATE (b:Person {name: 'Bob'})");
-      exec("CREATE (c:Person {name: 'Charlie'})");
+      await exec("CREATE (a:Person {name: 'Alice'})");
+      await exec("CREATE (b:Person {name: 'Bob'})");
+      await exec("CREATE (c:Person {name: 'Charlie'})");
       
-      exec(`
+      await exec(`
         MATCH (a:Person {name: 'Alice'}), (b:Person {name: 'Bob'})
         CREATE (a)-[:KNOWS]->(b)
       `);
-      exec(`
+      await exec(`
         MATCH (b:Person {name: 'Bob'}), (c:Person {name: 'Charlie'})
         CREATE (b)-[:KNOWS]->(c)
       `);
-      exec(`
+      await exec(`
         MATCH (c:Person {name: 'Charlie'}), (a:Person {name: 'Alice'})
         CREATE (c)-[:KNOWS]->(a)
       `);
 
       // Find all nodes reachable from Alice within 3 hops
       // Should return Bob, Charlie, and Alice (via cycle)
-      const result = exec(`
+      const result = await exec(`
         MATCH (a:Person {name: 'Alice'})-[*1..3]->(other:Person)
         RETURN DISTINCT other.name as name
         ORDER BY name
@@ -2154,36 +2151,36 @@ describe("CypherQueries.json Patterns", () => {
       expect(result.data[2].name).toBe("Charlie");
     });
 
-    it("returns count of reachable nodes via variable-length path", () => {
+    it("returns count of reachable nodes via variable-length path", async () => {
       // Create a small social network
-      exec("CREATE (a:Person {name: 'Alice'})");
-      exec("CREATE (b:Person {name: 'Bob'})");
-      exec("CREATE (c:Person {name: 'Charlie'})");
-      exec("CREATE (d:Person {name: 'Diana'})");
-      exec("CREATE (e:Person {name: 'Eve'})");
+      await exec("CREATE (a:Person {name: 'Alice'})");
+      await exec("CREATE (b:Person {name: 'Bob'})");
+      await exec("CREATE (c:Person {name: 'Charlie'})");
+      await exec("CREATE (d:Person {name: 'Diana'})");
+      await exec("CREATE (e:Person {name: 'Eve'})");
       
       // Alice knows Bob and Charlie
-      exec(`
+      await exec(`
         MATCH (a:Person {name: 'Alice'}), (b:Person {name: 'Bob'})
         CREATE (a)-[:KNOWS]->(b)
       `);
-      exec(`
+      await exec(`
         MATCH (a:Person {name: 'Alice'}), (c:Person {name: 'Charlie'})
         CREATE (a)-[:KNOWS]->(c)
       `);
       // Bob knows Diana
-      exec(`
+      await exec(`
         MATCH (b:Person {name: 'Bob'}), (d:Person {name: 'Diana'})
         CREATE (b)-[:KNOWS]->(d)
       `);
       // Charlie knows Eve
-      exec(`
+      await exec(`
         MATCH (c:Person {name: 'Charlie'}), (e:Person {name: 'Eve'})
         CREATE (c)-[:KNOWS]->(e)
       `);
 
       // Count all reachable from Alice within 2 hops
-      const result = exec(`
+      const result = await exec(`
         MATCH (a:Person {name: 'Alice'})-[*1..2]->(other:Person)
         RETURN count(DISTINCT other) as total
       `);
@@ -2194,11 +2191,11 @@ describe("CypherQueries.json Patterns", () => {
   });
 
   describe("Path Expressions", () => {
-    it("returns a path from simple pattern", () => {
+    it("returns a path from simple pattern", async () => {
       // Pattern: MATCH p = (a)-[r]->(b) RETURN p
-      exec("CREATE (a:Person {name: 'Alice'})-[:KNOWS]->(b:Person {name: 'Bob'})");
+      await exec("CREATE (a:Person {name: 'Alice'})-[:KNOWS]->(b:Person {name: 'Bob'})");
 
-      const result = exec(`
+      const result = await exec(`
         MATCH p = (a:Person {name: 'Alice'})-[r:KNOWS]->(b:Person {name: 'Bob'})
         RETURN p
       `);
@@ -2209,11 +2206,11 @@ describe("CypherQueries.json Patterns", () => {
       // Path should be an object or array containing nodes and relationships
     });
 
-    it("returns path length with length() function", () => {
+    it("returns path length with length() function", async () => {
       // Pattern: MATCH p = (a)-[r]->(b) RETURN length(p)
-      exec("CREATE (a:Person {name: 'Alice'})-[:KNOWS]->(b:Person {name: 'Bob'})");
+      await exec("CREATE (a:Person {name: 'Alice'})-[:KNOWS]->(b:Person {name: 'Bob'})");
 
-      const result = exec(`
+      const result = await exec(`
         MATCH p = (a:Person {name: 'Alice'})-[r:KNOWS]->(b:Person {name: 'Bob'})
         RETURN length(p) as pathLength
       `);
@@ -2222,22 +2219,22 @@ describe("CypherQueries.json Patterns", () => {
       expect(result.data[0].pathLength).toBe(1); // 1 relationship = length 1
     });
 
-    it("returns path length for multi-hop path", () => {
+    it("returns path length for multi-hop path", async () => {
       // Pattern: MATCH p = (a)-[r1]->(b)-[r2]->(c) RETURN length(p)
-      exec("CREATE (a:Person {name: 'Alice'})");
-      exec("CREATE (b:Person {name: 'Bob'})");
-      exec("CREATE (c:Person {name: 'Charlie'})");
+      await exec("CREATE (a:Person {name: 'Alice'})");
+      await exec("CREATE (b:Person {name: 'Bob'})");
+      await exec("CREATE (c:Person {name: 'Charlie'})");
       
-      exec(`
+      await exec(`
         MATCH (a:Person {name: 'Alice'}), (b:Person {name: 'Bob'})
         CREATE (a)-[:KNOWS]->(b)
       `);
-      exec(`
+      await exec(`
         MATCH (b:Person {name: 'Bob'}), (c:Person {name: 'Charlie'})
         CREATE (b)-[:KNOWS]->(c)
       `);
 
-      const result = exec(`
+      const result = await exec(`
         MATCH p = (a:Person {name: 'Alice'})-[:KNOWS]->(b:Person)-[:KNOWS]->(c:Person)
         RETURN length(p) as pathLength
       `);
@@ -2246,11 +2243,11 @@ describe("CypherQueries.json Patterns", () => {
       expect(result.data[0].pathLength).toBe(2); // 2 relationships = length 2
     });
 
-    it("returns nodes in path with nodes() function", () => {
+    it("returns nodes in path with nodes() function", async () => {
       // Pattern: MATCH p = (a)-[r]->(b) RETURN nodes(p)
-      exec("CREATE (a:Person {name: 'Alice'})-[:KNOWS]->(b:Person {name: 'Bob'})");
+      await exec("CREATE (a:Person {name: 'Alice'})-[:KNOWS]->(b:Person {name: 'Bob'})");
 
-      const result = exec(`
+      const result = await exec(`
         MATCH p = (a:Person {name: 'Alice'})-[r:KNOWS]->(b:Person {name: 'Bob'})
         RETURN nodes(p) as pathNodes
       `);
@@ -2262,11 +2259,11 @@ describe("CypherQueries.json Patterns", () => {
       expect(nodes[1].name).toBe("Bob");
     });
 
-    it("returns relationships in path with relationships() function", () => {
+    it("returns relationships in path with relationships() function", async () => {
       // Pattern: MATCH p = (a)-[r]->(b) RETURN relationships(p)
-      exec("CREATE (a:Person {name: 'Alice'})-[:KNOWS {since: 2020}]->(b:Person {name: 'Bob'})");
+      await exec("CREATE (a:Person {name: 'Alice'})-[:KNOWS {since: 2020}]->(b:Person {name: 'Bob'})");
 
-      const result = exec(`
+      const result = await exec(`
         MATCH p = (a:Person {name: 'Alice'})-[r:KNOWS]->(b:Person {name: 'Bob'})
         RETURN relationships(p) as pathRels
       `);
@@ -2279,22 +2276,22 @@ describe("CypherQueries.json Patterns", () => {
       expect(rels[0].since).toBe(2020);
     });
 
-    it("returns path with multiple relationships", () => {
+    it("returns path with multiple relationships", async () => {
       // Pattern: MATCH p = (a)-[r1]->(b)-[r2]->(c) RETURN p, length(p)
-      exec("CREATE (a:Person {name: 'Alice'})");
-      exec("CREATE (b:Person {name: 'Bob'})");
-      exec("CREATE (c:Person {name: 'Charlie'})");
+      await exec("CREATE (a:Person {name: 'Alice'})");
+      await exec("CREATE (b:Person {name: 'Bob'})");
+      await exec("CREATE (c:Person {name: 'Charlie'})");
       
-      exec(`
+      await exec(`
         MATCH (a:Person {name: 'Alice'}), (b:Person {name: 'Bob'})
         CREATE (a)-[:KNOWS]->(b)
       `);
-      exec(`
+      await exec(`
         MATCH (b:Person {name: 'Bob'}), (c:Person {name: 'Charlie'})
         CREATE (b)-[:KNOWS]->(c)
       `);
 
-      const result = exec(`
+      const result = await exec(`
         MATCH p = (a:Person {name: 'Alice'})-[:KNOWS]->(b:Person)-[:KNOWS]->(c:Person)
         RETURN p, length(p) as len, nodes(p) as pathNodes
       `);
@@ -2305,12 +2302,12 @@ describe("CypherQueries.json Patterns", () => {
       expect(nodes).toHaveLength(3); // Alice, Bob, Charlie
     });
 
-    it("handles path expressions with WHERE clause", () => {
+    it("handles path expressions with WHERE clause", async () => {
       // Pattern: MATCH p = (a)-[r]->(b) WHERE length(p) = 1 RETURN p
-      exec("CREATE (a:Person {name: 'Alice'})-[:KNOWS]->(b:Person {name: 'Bob'})");
-      exec("CREATE (c:Person {name: 'Charlie'})-[:KNOWS]->(d:Person {name: 'Diana'})");
+      await exec("CREATE (a:Person {name: 'Alice'})-[:KNOWS]->(b:Person {name: 'Bob'})");
+      await exec("CREATE (c:Person {name: 'Charlie'})-[:KNOWS]->(d:Person {name: 'Diana'})");
 
-      const result = exec(`
+      const result = await exec(`
         MATCH p = (a:Person)-[r:KNOWS]->(b:Person)
         WHERE length(p) = 1
         RETURN p, a.name as from, b.name as to
@@ -2320,22 +2317,22 @@ describe("CypherQueries.json Patterns", () => {
       // Both paths have length 1
     });
 
-    it("returns path from variable-length pattern", () => {
+    it("returns path from variable-length pattern", async () => {
       // Pattern: MATCH p = (a)-[*1..2]->(b) RETURN p, length(p)
-      exec("CREATE (a:Person {name: 'Alice'})");
-      exec("CREATE (b:Person {name: 'Bob'})");
-      exec("CREATE (c:Person {name: 'Charlie'})");
+      await exec("CREATE (a:Person {name: 'Alice'})");
+      await exec("CREATE (b:Person {name: 'Bob'})");
+      await exec("CREATE (c:Person {name: 'Charlie'})");
       
-      exec(`
+      await exec(`
         MATCH (a:Person {name: 'Alice'}), (b:Person {name: 'Bob'})
         CREATE (a)-[:KNOWS]->(b)
       `);
-      exec(`
+      await exec(`
         MATCH (b:Person {name: 'Bob'}), (c:Person {name: 'Charlie'})
         CREATE (b)-[:KNOWS]->(c)
       `);
 
-      const result = exec(`
+      const result = await exec(`
         MATCH p = (a:Person {name: 'Alice'})-[*1..2]->(other:Person)
         RETURN p, length(p) as len, other.name as name
         ORDER BY len, name
@@ -2350,30 +2347,30 @@ describe("CypherQueries.json Patterns", () => {
       expect(result.data[1].name).toBe("Charlie");
     });
 
-    it("counts paths with different lengths", () => {
+    it("counts paths with different lengths", async () => {
       // Pattern: MATCH p = (a)-[*]->(b) RETURN length(p) as len, count(*) as pathCount
-      exec("CREATE (a:Person {name: 'Alice'})");
-      exec("CREATE (b:Person {name: 'Bob'})");
-      exec("CREATE (c:Person {name: 'Charlie'})");
-      exec("CREATE (d:Person {name: 'Diana'})");
+      await exec("CREATE (a:Person {name: 'Alice'})");
+      await exec("CREATE (b:Person {name: 'Bob'})");
+      await exec("CREATE (c:Person {name: 'Charlie'})");
+      await exec("CREATE (d:Person {name: 'Diana'})");
       
       // Alice -> Bob
-      exec(`
+      await exec(`
         MATCH (a:Person {name: 'Alice'}), (b:Person {name: 'Bob'})
         CREATE (a)-[:KNOWS]->(b)
       `);
       // Alice -> Charlie
-      exec(`
+      await exec(`
         MATCH (a:Person {name: 'Alice'}), (c:Person {name: 'Charlie'})
         CREATE (a)-[:KNOWS]->(c)
       `);
       // Bob -> Diana
-      exec(`
+      await exec(`
         MATCH (b:Person {name: 'Bob'}), (d:Person {name: 'Diana'})
         CREATE (b)-[:KNOWS]->(d)
       `);
 
-      const result = exec(`
+      const result = await exec(`
         MATCH p = (a:Person {name: 'Alice'})-[*1..2]->(other:Person)
         RETURN length(p) as len, count(*) as pathCount
         ORDER BY len
@@ -2390,19 +2387,19 @@ describe("CypherQueries.json Patterns", () => {
   });
 
   describe("MERGE with Relationships", () => {
-    it("creates relationship if it doesn't exist", () => {
+    it("creates relationship if it doesn't exist", async () => {
       // Setup: Create two nodes that are not connected
-      exec("CREATE (a:Person {name: 'Alice'})");
-      exec("CREATE (b:Person {name: 'Bob'})");
+      await exec("CREATE (a:Person {name: 'Alice'})");
+      await exec("CREATE (b:Person {name: 'Bob'})");
 
       // MERGE should create the relationship since it doesn't exist
-      exec(`
+      await exec(`
         MATCH (a:Person {name: 'Alice'}), (b:Person {name: 'Bob'})
         MERGE (a)-[:KNOWS]->(b)
       `);
 
       // Verify the relationship was created
-      const result = exec(`
+      const result = await exec(`
         MATCH (a:Person {name: 'Alice'})-[:KNOWS]->(b:Person {name: 'Bob'})
         RETURN a.name as from, b.name as to
       `);
@@ -2412,18 +2409,18 @@ describe("CypherQueries.json Patterns", () => {
       expect(result.data[0].to).toBe("Bob");
     });
 
-    it("does not create duplicate relationship if it already exists", () => {
+    it("does not create duplicate relationship if it already exists", async () => {
       // Setup: Create two nodes and connect them
-      exec("CREATE (a:Person {name: 'Alice'})-[:KNOWS]->(b:Person {name: 'Bob'})");
+      await exec("CREATE (a:Person {name: 'Alice'})-[:KNOWS]->(b:Person {name: 'Bob'})");
 
       // MERGE should NOT create a new relationship since one already exists
-      exec(`
+      await exec(`
         MATCH (a:Person {name: 'Alice'}), (b:Person {name: 'Bob'})
         MERGE (a)-[:KNOWS]->(b)
       `);
 
       // Verify only one relationship exists
-      const result = exec(`
+      const result = await exec(`
         MATCH (a:Person {name: 'Alice'})-[r:KNOWS]->(b:Person {name: 'Bob'})
         RETURN count(r) as relCount
       `);
@@ -2432,16 +2429,16 @@ describe("CypherQueries.json Patterns", () => {
       expect(result.data[0].relCount).toBe(1);
     });
 
-    it("creates relationship with properties if it doesn't exist", () => {
-      exec("CREATE (a:Person {name: 'Alice'})");
-      exec("CREATE (b:Person {name: 'Bob'})");
+    it("creates relationship with properties if it doesn't exist", async () => {
+      await exec("CREATE (a:Person {name: 'Alice'})");
+      await exec("CREATE (b:Person {name: 'Bob'})");
 
-      exec(`
+      await exec(`
         MATCH (a:Person {name: 'Alice'}), (b:Person {name: 'Bob'})
         MERGE (a)-[:KNOWS {since: 2020}]->(b)
       `);
 
-      const result = exec(`
+      const result = await exec(`
         MATCH (a:Person {name: 'Alice'})-[r:KNOWS]->(b:Person {name: 'Bob'})
         RETURN r.since as since
       `);
@@ -2450,13 +2447,13 @@ describe("CypherQueries.json Patterns", () => {
       expect(result.data[0].since).toBe(2020);
     });
 
-    it("creates entire pattern (nodes + relationship) if none exists", () => {
+    it("creates entire pattern (nodes + relationship) if none exists", async () => {
       // MERGE should create both nodes and the relationship
-      exec(`
+      await exec(`
         MERGE (a:Person {name: 'Alice'})-[:KNOWS]->(b:Person {name: 'Bob'})
       `);
 
-      const result = exec(`
+      const result = await exec(`
         MATCH (a:Person {name: 'Alice'})-[:KNOWS]->(b:Person {name: 'Bob'})
         RETURN a.name as from, b.name as to
       `);
@@ -2466,12 +2463,12 @@ describe("CypherQueries.json Patterns", () => {
       expect(result.data[0].to).toBe("Bob");
     });
 
-    it("returns the merged relationship", () => {
-      exec("CREATE (a:Person {name: 'Alice'})");
-      exec("CREATE (b:Person {name: 'Bob'})");
+    it("returns the merged relationship", async () => {
+      await exec("CREATE (a:Person {name: 'Alice'})");
+      await exec("CREATE (b:Person {name: 'Bob'})");
 
       // Neo4j 3.5 format: RETURN r returns just properties, use type(r) for type
-      const result = exec(`
+      const result = await exec(`
         MATCH (a:Person {name: 'Alice'}), (b:Person {name: 'Bob'})
         MERGE (a)-[r:KNOWS {since: 2024}]->(b)
         RETURN r, type(r) as relType
@@ -2483,12 +2480,12 @@ describe("CypherQueries.json Patterns", () => {
       expect(result.data[0].relType).toBe("KNOWS");
     });
 
-    it("matches existing pattern instead of creating duplicate", () => {
+    it("matches existing pattern instead of creating duplicate", async () => {
       // Create Alice -> Bob with KNOWS
-      exec("CREATE (a:Person {name: 'Alice'})-[:KNOWS {since: 2020}]->(b:Person {name: 'Bob'})");
+      await exec("CREATE (a:Person {name: 'Alice'})-[:KNOWS {since: 2020}]->(b:Person {name: 'Bob'})");
 
       // MERGE the same pattern
-      const result = exec(`
+      const result = await exec(`
         MERGE (a:Person {name: 'Alice'})-[r:KNOWS]->(b:Person {name: 'Bob'})
         RETURN r.since as since
       `);
@@ -2497,23 +2494,23 @@ describe("CypherQueries.json Patterns", () => {
       expect(result.data[0].since).toBe(2020);
 
       // Verify only one Person named Alice and one named Bob
-      const aliceCount = exec("MATCH (p:Person {name: 'Alice'}) RETURN count(p) as c");
+      const aliceCount = await exec("MATCH (p:Person {name: 'Alice'}) RETURN count(p) as c");
       expect(aliceCount.data[0].c).toBe(1);
 
-      const bobCount = exec("MATCH (p:Person {name: 'Bob'}) RETURN count(p) as c");
+      const bobCount = await exec("MATCH (p:Person {name: 'Bob'}) RETURN count(p) as c");
       expect(bobCount.data[0].c).toBe(1);
     });
 
-    it("creates pattern when only partial match exists", () => {
+    it("creates pattern when only partial match exists", async () => {
       // Create Alice but not Bob
-      exec("CREATE (a:Person {name: 'Alice'})");
+      await exec("CREATE (a:Person {name: 'Alice'})");
 
       // MERGE should create Bob and the relationship
-      exec(`
+      await exec(`
         MERGE (a:Person {name: 'Alice'})-[:KNOWS]->(b:Person {name: 'Bob'})
       `);
 
-      const result = exec(`
+      const result = await exec(`
         MATCH (a:Person {name: 'Alice'})-[:KNOWS]->(b:Person {name: 'Bob'})
         RETURN a.name as from, b.name as to
       `);
@@ -2523,15 +2520,15 @@ describe("CypherQueries.json Patterns", () => {
       expect(result.data[0].to).toBe("Bob");
 
       // Verify only one Alice exists
-      const aliceCount = exec("MATCH (p:Person {name: 'Alice'}) RETURN count(p) as c");
+      const aliceCount = await exec("MATCH (p:Person {name: 'Alice'}) RETURN count(p) as c");
       expect(aliceCount.data[0].c).toBe(1);
     });
 
-    it("handles MERGE with relationship variable binding", () => {
-      exec("CREATE (a:Person {name: 'Alice'})");
-      exec("CREATE (b:Person {name: 'Bob'})");
+    it("handles MERGE with relationship variable binding", async () => {
+      await exec("CREATE (a:Person {name: 'Alice'})");
+      await exec("CREATE (b:Person {name: 'Bob'})");
 
-      const result = exec(`
+      const result = await exec(`
         MATCH (a:Person {name: 'Alice'}), (b:Person {name: 'Bob'})
         MERGE (a)-[r:KNOWS {since: 2020}]->(b)
         RETURN type(r) as relType, r.since as since
@@ -2542,12 +2539,12 @@ describe("CypherQueries.json Patterns", () => {
       expect(result.data[0].since).toBe(2020);
     });
 
-    it("handles MERGE with aliased nodes through WITH clause", () => {
+    it("handles MERGE with aliased nodes through WITH clause", async () => {
       // TCK test case: MATCH (n) MATCH (m) WITH n AS a, m AS b MERGE (a)-[:T]->(b)
-      exec("CREATE (n:Node {id: 1})");
-      exec("CREATE (m:Node {id: 2})");
+      await exec("CREATE (n:Node {id: 1})");
+      await exec("CREATE (m:Node {id: 2})");
 
-      exec(`
+      await exec(`
         MATCH (n:Node {id: 1})
         MATCH (m:Node {id: 2})
         WITH n AS a, m AS b
@@ -2555,7 +2552,7 @@ describe("CypherQueries.json Patterns", () => {
       `);
 
       // Verify relationship was created
-      const result = exec(`
+      const result = await exec(`
         MATCH (a:Node {id: 1})-[:T]->(b:Node {id: 2})
         RETURN a.id AS aId, b.id AS bId
       `);
@@ -2565,11 +2562,11 @@ describe("CypherQueries.json Patterns", () => {
       expect(result.data[0].bId).toBe(2);
     });
 
-    it("handles MERGE with aliased nodes and RETURN", () => {
-      exec("CREATE (n:Node {id: 1})");
-      exec("CREATE (m:Node {id: 2})");
+    it("handles MERGE with aliased nodes and RETURN", async () => {
+      await exec("CREATE (n:Node {id: 1})");
+      await exec("CREATE (m:Node {id: 2})");
 
-      const result = exec(`
+      const result = await exec(`
         MATCH (n:Node {id: 1})
         MATCH (m:Node {id: 2})
         WITH n AS a, m AS b
@@ -2582,18 +2579,18 @@ describe("CypherQueries.json Patterns", () => {
       expect(result.data[0].bId).toBe(2);
     });
 
-    it("handles MERGE with self-aliased node through WITH clause", () => {
+    it("handles MERGE with self-aliased node through WITH clause", async () => {
       // TCK test case: MATCH (n) WITH n AS a, n AS b MERGE (a)-[:T]->(b)
-      exec("CREATE (n:Node {id: 1})");
+      await exec("CREATE (n:Node {id: 1})");
 
-      exec(`
+      await exec(`
         MATCH (n:Node {id: 1})
         WITH n AS a, n AS b
         MERGE (a)-[:T]->(b)
       `);
 
       // Verify self-relationship was created
-      const result = exec(`
+      const result = await exec(`
         MATCH (n:Node {id: 1})-[:T]->(n)
         RETURN n.id AS id
       `);
@@ -2604,12 +2601,12 @@ describe("CypherQueries.json Patterns", () => {
   });
 
   describe("Bidirectional Relationships", () => {
-    it("matches relationships in either direction with <-->", () => {
+    it("matches relationships in either direction with <-->", async () => {
       // Create A -> B relationship
-      exec("CREATE (a:Node {name: 'A'})-[:KNOWS]->(b:Node {name: 'B'})");
+      await exec("CREATE (a:Node {name: 'A'})-[:KNOWS]->(b:Node {name: 'B'})");
 
       // <--> should match in either direction (same as --)
-      const result = exec(`
+      const result = await exec(`
         MATCH (a:Node {name: 'A'})<-->(b:Node {name: 'B'})
         RETURN a.name AS a, b.name AS b
       `);
@@ -2619,12 +2616,12 @@ describe("CypherQueries.json Patterns", () => {
       expect(result.data[0].b).toBe("B");
     });
 
-    it("matches with relationship type in bidirectional", () => {
-      exec("CREATE (a:Node {name: 'A'})-[:KNOWS]->(b:Node {name: 'B'})");
+    it("matches with relationship type in bidirectional", async () => {
+      await exec("CREATE (a:Node {name: 'A'})-[:KNOWS]->(b:Node {name: 'B'})");
 
       // Bidirectional without name filters matches both directions
       // (A, B) and (B, A) since undirected pattern matches edge in either direction
-      const result = exec(`
+      const result = await exec(`
         MATCH (a:Node)<-[:KNOWS]->(b:Node)
         RETURN a.name AS a, b.name AS b
       `);
@@ -2634,12 +2631,12 @@ describe("CypherQueries.json Patterns", () => {
       expect(names).toEqual(["A-B", "B-A"]);
     });
 
-    it("bidirectional matches outgoing relationship", () => {
+    it("bidirectional matches outgoing relationship", async () => {
       // Create A -> B relationship
-      exec("CREATE (a:Node {name: 'A'})-[:R]->(b:Node {name: 'B'})");
+      await exec("CREATE (a:Node {name: 'A'})-[:R]->(b:Node {name: 'B'})");
 
       // Using -- (undirected) to match A -> B
-      const result = exec(`
+      const result = await exec(`
         MATCH (a:Node {name: 'A'})--(b:Node {name: 'B'})
         RETURN a.name AS a, b.name AS b
       `);
@@ -2649,12 +2646,12 @@ describe("CypherQueries.json Patterns", () => {
       expect(result.data[0].b).toBe("B");
     });
 
-    it("bidirectional matches incoming relationship", () => {
+    it("bidirectional matches incoming relationship", async () => {
       // Create A -> B relationship
-      exec("CREATE (a:Node {name: 'A'})-[:R]->(b:Node {name: 'B'})");
+      await exec("CREATE (a:Node {name: 'A'})-[:R]->(b:Node {name: 'B'})");
 
       // Using -- (undirected) from B's perspective should also match
-      const result = exec(`
+      const result = await exec(`
         MATCH (b:Node {name: 'B'})--(a:Node {name: 'A'})
         RETURN a.name AS a, b.name AS b
       `);
@@ -2666,13 +2663,13 @@ describe("CypherQueries.json Patterns", () => {
   });
 
   describe("Multiple Relationship Types", () => {
-    it("matches any of multiple relationship types with pipe syntax", () => {
-      exec("CREATE (a:Person {name: 'Alice'})-[:KNOWS]->(b:Person {name: 'Bob'})");
-      exec("CREATE (b:Person {name: 'Bob'})-[:WORKS_WITH]->(c:Person {name: 'Charlie'})");
-      exec("CREATE (a:Person {name: 'Alice'})-[:LIKES]->(d:Person {name: 'David'})");
+    it("matches any of multiple relationship types with pipe syntax", async () => {
+      await exec("CREATE (a:Person {name: 'Alice'})-[:KNOWS]->(b:Person {name: 'Bob'})");
+      await exec("CREATE (b:Person {name: 'Bob'})-[:WORKS_WITH]->(c:Person {name: 'Charlie'})");
+      await exec("CREATE (a:Person {name: 'Alice'})-[:LIKES]->(d:Person {name: 'David'})");
 
       // Match KNOWS or WORKS_WITH but not LIKES
-      const result = exec(`
+      const result = await exec(`
         MATCH (p:Person)-[:KNOWS|WORKS_WITH]->(other:Person)
         RETURN p.name AS person, other.name AS other
         ORDER BY person, other
@@ -2683,13 +2680,13 @@ describe("CypherQueries.json Patterns", () => {
       expect(result.data[1]).toEqual({ person: "Bob", other: "Charlie" });
     });
 
-    it("matches three relationship types", () => {
-      exec("CREATE (a:Node {name: 'A'})-[:R1]->(b:Node {name: 'B'})");
-      exec("CREATE (a:Node {name: 'A'})-[:R2]->(c:Node {name: 'C'})");
-      exec("CREATE (a:Node {name: 'A'})-[:R3]->(d:Node {name: 'D'})");
-      exec("CREATE (a:Node {name: 'A'})-[:R4]->(e:Node {name: 'E'})");
+    it("matches three relationship types", async () => {
+      await exec("CREATE (a:Node {name: 'A'})-[:R1]->(b:Node {name: 'B'})");
+      await exec("CREATE (a:Node {name: 'A'})-[:R2]->(c:Node {name: 'C'})");
+      await exec("CREATE (a:Node {name: 'A'})-[:R3]->(d:Node {name: 'D'})");
+      await exec("CREATE (a:Node {name: 'A'})-[:R4]->(e:Node {name: 'E'})");
 
-      const result = exec(`
+      const result = await exec(`
         MATCH (a:Node {name: 'A'})-[:R1|R2|R3]->(target:Node)
         RETURN target.name AS name
         ORDER BY name
@@ -2701,11 +2698,11 @@ describe("CypherQueries.json Patterns", () => {
   });
 
   describe("IS NULL / IS NOT NULL", () => {
-    it("returns IS NULL in expressions", () => {
-      exec("CREATE (a:Node {name: 'A'})");
-      exec("CREATE (b:Node)"); // No name property
+    it("returns IS NULL in expressions", async () => {
+      await exec("CREATE (a:Node {name: 'A'})");
+      await exec("CREATE (b:Node)"); // No name property
       
-      const result = exec(`
+      const result = await exec(`
         MATCH (n:Node)
         RETURN n.name AS name, n.name IS NULL AS isNull, n.name IS NOT NULL AS isNotNull
         ORDER BY name
@@ -2720,11 +2717,11 @@ describe("CypherQueries.json Patterns", () => {
       expect(result.data[1].isNotNull).toBe(true);
     });
 
-    it("uses IS NOT NULL on variable in expression", () => {
-      exec("CREATE (a:Node {name: 'A', value: 10})");
-      exec("CREATE (b:Node {name: 'B'})"); // No value property
+    it("uses IS NOT NULL on variable in expression", async () => {
+      await exec("CREATE (a:Node {name: 'A', value: 10})");
+      await exec("CREATE (b:Node {name: 'B'})"); // No value property
       
-      const result = exec(`
+      const result = await exec(`
         MATCH (n:Node)
         RETURN n.name AS name, n.value IS NOT NULL AS hasValue
         ORDER BY name
@@ -2739,80 +2736,80 @@ describe("CypherQueries.json Patterns", () => {
   });
 
   describe("SET with Expressions", () => {
-    it("sets property with parenthesized variable (n).property", () => {
-      exec("CREATE (n:Person {name: 'Alice'})");
+    it("sets property with parenthesized variable (n).property", async () => {
+      await exec("CREATE (n:Person {name: 'Alice'})");
       
-      exec(`
+      await exec(`
         MATCH (n:Person)
         SET (n).name = 'Bob'
       `);
       
-      const result = exec("MATCH (n:Person) RETURN n.name AS name");
+      const result = await exec("MATCH (n:Person) RETURN n.name AS name");
       expect(result.data).toHaveLength(1);
       expect(result.data[0].name).toBe("Bob");
     });
 
-    it("sets a property to an arithmetic expression", () => {
+    it("sets a property to an arithmetic expression", async () => {
       // TCK pattern: SET n.num = n.num + 1
-      exec("CREATE (n:Counter {num: 5})");
+      await exec("CREATE (n:Counter {num: 5})");
       
-      exec(`
+      await exec(`
         MATCH (n:Counter)
         SET n.num = n.num + 1
       `);
       
-      const result = exec("MATCH (n:Counter) RETURN n.num AS num");
+      const result = await exec("MATCH (n:Counter) RETURN n.num AS num");
       expect(result.data).toHaveLength(1);
       expect(result.data[0].num).toBe(6);
     });
 
-    it("handles SET with multiplication", () => {
-      exec("CREATE (n:Counter {num: 5})");
+    it("handles SET with multiplication", async () => {
+      await exec("CREATE (n:Counter {num: 5})");
       
-      exec(`
+      await exec(`
         MATCH (n:Counter)
         SET n.num = n.num * 2
       `);
       
-      const result = exec("MATCH (n:Counter) RETURN n.num AS num");
+      const result = await exec("MATCH (n:Counter) RETURN n.num AS num");
       expect(result.data).toHaveLength(1);
       expect(result.data[0].num).toBe(10);
     });
   });
 
   describe("Anonymous Node Creation", () => {
-    it("creates a relationship between anonymous nodes", () => {
+    it("creates a relationship between anonymous nodes", async () => {
       // TCK pattern: CREATE ()-[:R]->()
-      exec("CREATE ()-[:R]->()");
+      await exec("CREATE ()-[:R]->()");
       
       // Verify the relationship was created
-      const result = exec("MATCH ()-[r:R]->() RETURN count(r) AS count");
+      const result = await exec("MATCH ()-[r:R]->() RETURN count(r) AS count");
       expect(result.data).toHaveLength(1);
       expect(result.data[0].count).toBe(1);
     });
 
-    it("creates a relationship with properties between anonymous nodes", () => {
+    it("creates a relationship with properties between anonymous nodes", async () => {
       // TCK pattern: CREATE ()-[:R {num: 42}]->()
-      exec("CREATE ()-[:R {num: 42}]->()");
+      await exec("CREATE ()-[:R {num: 42}]->()");
       
-      const result = exec("MATCH ()-[r:R]->() RETURN r.num AS num");
+      const result = await exec("MATCH ()-[r:R]->() RETURN r.num AS num");
       expect(result.data).toHaveLength(1);
       expect(result.data[0].num).toBe(42);
     });
 
-    it("creates a relationship with two properties between anonymous nodes", () => {
+    it("creates a relationship with two properties between anonymous nodes", async () => {
       // TCK pattern: CREATE ()-[:R {id: 12, name: 'foo'}]->()
-      exec("CREATE ()-[:R {id: 12, name: 'foo'}]->()");
+      await exec("CREATE ()-[:R {id: 12, name: 'foo'}]->()");
       
-      const result = exec("MATCH ()-[r:R]->() RETURN r.id AS id, r.name AS name");
+      const result = await exec("MATCH ()-[r:R]->() RETURN r.id AS id, r.name AS name");
       expect(result.data).toHaveLength(1);
       expect(result.data[0].id).toBe(12);
       expect(result.data[0].name).toBe("foo");
     });
 
-    it("returns relationship properties from anonymous nodes", () => {
+    it("returns relationship properties from anonymous nodes", async () => {
       // TCK pattern: CREATE ()-[r:R {num: 42}]->() RETURN r.num
-      const result = exec("CREATE ()-[r:R {num: 42}]->() RETURN r.num AS num");
+      const result = await exec("CREATE ()-[r:R {num: 42}]->() RETURN r.num AS num");
       
       expect(result.data).toHaveLength(1);
       expect(result.data[0].num).toBe(42);
@@ -2820,42 +2817,42 @@ describe("CypherQueries.json Patterns", () => {
   });
 
   describe("List Comprehensions", () => {
-    it("filters a list with WHERE clause", () => {
+    it("filters a list with WHERE clause", async () => {
       // Pattern: [x IN list WHERE condition]
-      const result = exec("RETURN [x IN [1, 2, 3, 4, 5] WHERE x > 2] AS filtered");
+      const result = await exec("RETURN [x IN [1, 2, 3, 4, 5] WHERE x > 2] AS filtered");
       
       expect(result.data).toHaveLength(1);
       expect(result.data[0].filtered).toEqual([3, 4, 5]);
     });
 
-    it("maps over a list with projection", () => {
+    it("maps over a list with projection", async () => {
       // Pattern: [x IN list | expression]
-      const result = exec("RETURN [x IN [1, 2, 3] | x * 2] AS doubled");
+      const result = await exec("RETURN [x IN [1, 2, 3] | x * 2] AS doubled");
       
       expect(result.data).toHaveLength(1);
       expect(result.data[0].doubled).toEqual([2, 4, 6]);
     });
 
-    it("filters and maps a list", () => {
+    it("filters and maps a list", async () => {
       // Pattern: [x IN list WHERE condition | expression]
-      const result = exec("RETURN [x IN [1, 2, 3, 4, 5] WHERE x > 2 | x * 10] AS result");
+      const result = await exec("RETURN [x IN [1, 2, 3, 4, 5] WHERE x > 2 | x * 10] AS result");
       
       expect(result.data).toHaveLength(1);
       expect(result.data[0].result).toEqual([30, 40, 50]);
     });
 
-    it("uses range() with list comprehension", () => {
+    it("uses range() with list comprehension", async () => {
       // Pattern: [x IN range(1, 5) WHERE x % 2 = 0]
-      const result = exec("RETURN [x IN range(1, 5) WHERE x % 2 = 0] AS evens");
+      const result = await exec("RETURN [x IN range(1, 5) WHERE x % 2 = 0] AS evens");
       
       expect(result.data).toHaveLength(1);
       expect(result.data[0].evens).toEqual([2, 4]);
     });
 
-    it("handles nested property access in comprehension", () => {
-      exec("CREATE (n:Item {values: [1, 2, 3, 4, 5]})");
+    it("handles nested property access in comprehension", async () => {
+      await exec("CREATE (n:Item {values: [1, 2, 3, 4, 5]})");
       
-      const result = exec(`
+      const result = await exec(`
         MATCH (n:Item)
         RETURN [x IN n.values WHERE x > 2] AS filtered
       `);
@@ -2864,22 +2861,22 @@ describe("CypherQueries.json Patterns", () => {
       expect(result.data[0].filtered).toEqual([3, 4, 5]);
     });
 
-    it("handles string list comprehension", () => {
-      const result = exec("RETURN [x IN ['a', 'bb', 'ccc'] WHERE size(x) > 1] AS longStrings");
+    it("handles string list comprehension", async () => {
+      const result = await exec("RETURN [x IN ['a', 'bb', 'ccc'] WHERE size(x) > 1] AS longStrings");
       
       expect(result.data).toHaveLength(1);
       expect(result.data[0].longStrings).toEqual(["bb", "ccc"]);
     });
 
-    it("returns empty list when no elements match", () => {
-      const result = exec("RETURN [x IN [1, 2, 3] WHERE x > 10] AS empty");
+    it("returns empty list when no elements match", async () => {
+      const result = await exec("RETURN [x IN [1, 2, 3] WHERE x > 10] AS empty");
       
       expect(result.data).toHaveLength(1);
       expect(result.data[0].empty).toEqual([]);
     });
 
-    it("handles empty source list", () => {
-      const result = exec("RETURN [x IN [] | x * 2] AS empty");
+    it("handles empty source list", async () => {
+      const result = await exec("RETURN [x IN [] | x * 2] AS empty");
       
       expect(result.data).toHaveLength(1);
       expect(result.data[0].empty).toEqual([]);
@@ -2888,40 +2885,40 @@ describe("CypherQueries.json Patterns", () => {
 
   describe("Type Conversion Functions", () => {
     describe("toInteger()", () => {
-      it("converts string to integer", () => {
-        const result = exec("RETURN toInteger('42') AS num");
+      it("converts string to integer", async () => {
+        const result = await exec("RETURN toInteger('42') AS num");
         expect(result.data).toHaveLength(1);
         expect(result.data[0].num).toBe(42);
       });
 
-      it("converts float to integer (truncates)", () => {
-        const result = exec("RETURN toInteger(3.7) AS num");
+      it("converts float to integer (truncates)", async () => {
+        const result = await exec("RETURN toInteger(3.7) AS num");
         expect(result.data).toHaveLength(1);
         expect(result.data[0].num).toBe(3);
       });
 
-      it("converts negative float to integer", () => {
+      it("converts negative float to integer", async () => {
         // Use 0 - 3.7 since parser doesn't support negative literals directly
-        const result = exec("RETURN toInteger(0 - 3.7) AS num");
+        const result = await exec("RETURN toInteger(0 - 3.7) AS num");
         expect(result.data).toHaveLength(1);
         expect(result.data[0].num).toBe(-3);
       });
 
-      it("converts string with leading zeros", () => {
-        const result = exec("RETURN toInteger('007') AS num");
+      it("converts string with leading zeros", async () => {
+        const result = await exec("RETURN toInteger('007') AS num");
         expect(result.data).toHaveLength(1);
         expect(result.data[0].num).toBe(7);
       });
 
-      it("converts integer to integer (no-op)", () => {
-        const result = exec("RETURN toInteger(42) AS num");
+      it("converts integer to integer (no-op)", async () => {
+        const result = await exec("RETURN toInteger(42) AS num");
         expect(result.data).toHaveLength(1);
         expect(result.data[0].num).toBe(42);
       });
 
-      it("converts property value to integer", () => {
-        exec("CREATE (n:Item {quantity: '100'})");
-        const result = exec(`
+      it("converts property value to integer", async () => {
+        await exec("CREATE (n:Item {quantity: '100'})");
+        const result = await exec(`
           MATCH (n:Item)
           RETURN toInteger(n.quantity) AS qty
         `);
@@ -2929,47 +2926,47 @@ describe("CypherQueries.json Patterns", () => {
         expect(result.data[0].qty).toBe(100);
       });
 
-      it("returns null for invalid string", () => {
-        const result = exec("RETURN toInteger('abc') AS num");
+      it("returns null for invalid string", async () => {
+        const result = await exec("RETURN toInteger('abc') AS num");
         expect(result.data).toHaveLength(1);
         expect(result.data[0].num).toBe(null);
       });
 
-      it("returns null for null input", () => {
-        const result = exec("RETURN toInteger(null) AS num");
+      it("returns null for null input", async () => {
+        const result = await exec("RETURN toInteger(null) AS num");
         expect(result.data).toHaveLength(1);
         expect(result.data[0].num).toBe(null);
       });
     });
 
     describe("toFloat()", () => {
-      it("converts string to float", () => {
-        const result = exec("RETURN toFloat('3.14') AS num");
+      it("converts string to float", async () => {
+        const result = await exec("RETURN toFloat('3.14') AS num");
         expect(result.data).toHaveLength(1);
         expect(result.data[0].num).toBeCloseTo(3.14);
       });
 
-      it("converts integer string to float", () => {
-        const result = exec("RETURN toFloat('42') AS num");
+      it("converts integer string to float", async () => {
+        const result = await exec("RETURN toFloat('42') AS num");
         expect(result.data).toHaveLength(1);
         expect(result.data[0].num).toBe(42.0);
       });
 
-      it("converts integer to float", () => {
-        const result = exec("RETURN toFloat(42) AS num");
+      it("converts integer to float", async () => {
+        const result = await exec("RETURN toFloat(42) AS num");
         expect(result.data).toHaveLength(1);
         expect(result.data[0].num).toBe(42.0);
       });
 
-      it("converts negative string to float", () => {
-        const result = exec("RETURN toFloat('-3.14') AS num");
+      it("converts negative string to float", async () => {
+        const result = await exec("RETURN toFloat('-3.14') AS num");
         expect(result.data).toHaveLength(1);
         expect(result.data[0].num).toBeCloseTo(-3.14);
       });
 
-      it("converts property value to float", () => {
-        exec("CREATE (n:Item {price: '19.99'})");
-        const result = exec(`
+      it("converts property value to float", async () => {
+        await exec("CREATE (n:Item {price: '19.99'})");
+        const result = await exec(`
           MATCH (n:Item)
           RETURN toFloat(n.price) AS price
         `);
@@ -2977,14 +2974,14 @@ describe("CypherQueries.json Patterns", () => {
         expect(result.data[0].price).toBeCloseTo(19.99);
       });
 
-      it("returns null for invalid string", () => {
-        const result = exec("RETURN toFloat('abc') AS num");
+      it("returns null for invalid string", async () => {
+        const result = await exec("RETURN toFloat('abc') AS num");
         expect(result.data).toHaveLength(1);
         expect(result.data[0].num).toBe(null);
       });
 
-      it("returns null for null input", () => {
-        const result = exec("RETURN toFloat(null) AS num");
+      it("returns null for null input", async () => {
+        const result = await exec("RETURN toFloat(null) AS num");
         expect(result.data).toHaveLength(1);
         expect(result.data[0].num).toBe(null);
       });
@@ -2993,40 +2990,40 @@ describe("CypherQueries.json Patterns", () => {
     describe("toString()", () => {
       // Note: Due to the executor's deepParseJson behavior, numeric and boolean
       // strings get parsed back to their original types. This is a known limitation
-      it("converts integer to string", () => {
-        const result = exec("RETURN toString(42) AS str");
+      it("converts integer to string", async () => {
+        const result = await exec("RETURN toString(42) AS str");
         expect(result.data).toHaveLength(1);
         expect(result.data[0].str).toBe("42");
       });
 
-      it("converts float to string", () => {
-        const result = exec("RETURN toString(3.14) AS str");
+      it("converts float to string", async () => {
+        const result = await exec("RETURN toString(3.14) AS str");
         expect(result.data).toHaveLength(1);
         expect(result.data[0].str).toBe("3.14");
       });
 
-      it("converts boolean true to string", () => {
-        const result = exec("RETURN toString(true) AS str");
+      it("converts boolean true to string", async () => {
+        const result = await exec("RETURN toString(true) AS str");
         expect(result.data).toHaveLength(1);
         expect(result.data[0].str).toBe("true");
       });
 
-      it("converts boolean false to string", () => {
-        const result = exec("RETURN toString(false) AS str");
+      it("converts boolean false to string", async () => {
+        const result = await exec("RETURN toString(false) AS str");
         expect(result.data).toHaveLength(1);
         expect(result.data[0].str).toBe("false");
       });
 
-      it("keeps string as string", () => {
-        const result = exec("RETURN toString('hello') AS str");
+      it("keeps string as string", async () => {
+        const result = await exec("RETURN toString('hello') AS str");
         expect(result.data).toHaveLength(1);
         expect(result.data[0].str).toBe("hello");
       });
 
-      it("converts property value to string", () => {
+      it("converts property value to string", async () => {
         // Use a non-numeric string property to avoid JSON parsing issues
-        exec("CREATE (n:Item {name: 'widget'})");
-        const result = exec(`
+        await exec("CREATE (n:Item {name: 'widget'})");
+        const result = await exec(`
           MATCH (n:Item)
           RETURN toString(n.name) AS name
         `);
@@ -3034,48 +3031,48 @@ describe("CypherQueries.json Patterns", () => {
         expect(result.data[0].name).toBe("widget");
       });
 
-      it("returns null for null input", () => {
-        const result = exec("RETURN toString(null) AS str");
+      it("returns null for null input", async () => {
+        const result = await exec("RETURN toString(null) AS str");
         expect(result.data).toHaveLength(1);
         expect(result.data[0].str).toBe(null);
       });
     });
 
     describe("toBoolean()", () => {
-      it("converts 'true' string to boolean", () => {
-        const result = exec("RETURN toBoolean('true') AS bool");
+      it("converts 'true' string to boolean", async () => {
+        const result = await exec("RETURN toBoolean('true') AS bool");
         expect(result.data).toHaveLength(1);
         // SQLite stores booleans as 1/0
         expect(result.data[0].bool).toBe(1);
       });
 
-      it("converts 'false' string to boolean", () => {
-        const result = exec("RETURN toBoolean('false') AS bool");
+      it("converts 'false' string to boolean", async () => {
+        const result = await exec("RETURN toBoolean('false') AS bool");
         expect(result.data).toHaveLength(1);
         expect(result.data[0].bool).toBe(0);
       });
 
-      it("converts 'TRUE' string to boolean (case insensitive)", () => {
-        const result = exec("RETURN toBoolean('TRUE') AS bool");
+      it("converts 'TRUE' string to boolean (case insensitive)", async () => {
+        const result = await exec("RETURN toBoolean('TRUE') AS bool");
         expect(result.data).toHaveLength(1);
         expect(result.data[0].bool).toBe(1);
       });
 
-      it("converts 'FALSE' string to boolean (case insensitive)", () => {
-        const result = exec("RETURN toBoolean('FALSE') AS bool");
+      it("converts 'FALSE' string to boolean (case insensitive)", async () => {
+        const result = await exec("RETURN toBoolean('FALSE') AS bool");
         expect(result.data).toHaveLength(1);
         expect(result.data[0].bool).toBe(0);
       });
 
-      it("returns boolean as is", () => {
-        const result = exec("RETURN toBoolean(true) AS bool");
+      it("returns boolean as is", async () => {
+        const result = await exec("RETURN toBoolean(true) AS bool");
         expect(result.data).toHaveLength(1);
         expect(result.data[0].bool).toBe(1);
       });
 
-      it("converts property value to boolean", () => {
-        exec("CREATE (n:Item {active: 'true'})");
-        const result = exec(`
+      it("converts property value to boolean", async () => {
+        await exec("CREATE (n:Item {active: 'true'})");
+        const result = await exec(`
           MATCH (n:Item)
           RETURN toBoolean(n.active) AS active
         `);
@@ -3083,14 +3080,14 @@ describe("CypherQueries.json Patterns", () => {
         expect(result.data[0].active).toBe(1);
       });
 
-      it("returns null for invalid string", () => {
-        const result = exec("RETURN toBoolean('yes') AS bool");
+      it("returns null for invalid string", async () => {
+        const result = await exec("RETURN toBoolean('yes') AS bool");
         expect(result.data).toHaveLength(1);
         expect(result.data[0].bool).toBe(null);
       });
 
-      it("returns null for null input", () => {
-        const result = exec("RETURN toBoolean(null) AS bool");
+      it("returns null for null input", async () => {
+        const result = await exec("RETURN toBoolean(null) AS bool");
         expect(result.data).toHaveLength(1);
         expect(result.data[0].bool).toBe(null);
       });
@@ -3098,33 +3095,33 @@ describe("CypherQueries.json Patterns", () => {
 
     describe("String Functions (Extended)", () => {
       describe("left()", () => {
-        it("returns leftmost N characters from string", () => {
-          const result = exec("RETURN left('hello', 3) AS result");
+        it("returns leftmost N characters from string", async () => {
+          const result = await exec("RETURN left('hello', 3) AS result");
           expect(result.data).toHaveLength(1);
           expect(result.data[0].result).toBe("hel");
         });
 
-        it("returns full string when N exceeds length", () => {
-          const result = exec("RETURN left('hi', 10) AS result");
+        it("returns full string when N exceeds length", async () => {
+          const result = await exec("RETURN left('hi', 10) AS result");
           expect(result.data).toHaveLength(1);
           expect(result.data[0].result).toBe("hi");
         });
 
-        it("returns empty string when N is 0", () => {
-          const result = exec("RETURN left('hello', 0) AS result");
+        it("returns empty string when N is 0", async () => {
+          const result = await exec("RETURN left('hello', 0) AS result");
           expect(result.data).toHaveLength(1);
           expect(result.data[0].result).toBe("");
         });
 
-        it("returns null for null input", () => {
-          const result = exec("RETURN left(null, 3) AS result");
+        it("returns null for null input", async () => {
+          const result = await exec("RETURN left(null, 3) AS result");
           expect(result.data).toHaveLength(1);
           expect(result.data[0].result).toBe(null);
         });
 
-        it("works with property values", () => {
-          exec("CREATE (n:Item {name: 'testing'})");
-          const result = exec(`
+        it("works with property values", async () => {
+          await exec("CREATE (n:Item {name: 'testing'})");
+          const result = await exec(`
             MATCH (n:Item)
             RETURN left(n.name, 4) AS prefix
           `);
@@ -3134,33 +3131,33 @@ describe("CypherQueries.json Patterns", () => {
       });
 
       describe("right()", () => {
-        it("returns rightmost N characters from string", () => {
-          const result = exec("RETURN right('hello', 3) AS result");
+        it("returns rightmost N characters from string", async () => {
+          const result = await exec("RETURN right('hello', 3) AS result");
           expect(result.data).toHaveLength(1);
           expect(result.data[0].result).toBe("llo");
         });
 
-        it("returns full string when N exceeds length", () => {
-          const result = exec("RETURN right('hi', 10) AS result");
+        it("returns full string when N exceeds length", async () => {
+          const result = await exec("RETURN right('hi', 10) AS result");
           expect(result.data).toHaveLength(1);
           expect(result.data[0].result).toBe("hi");
         });
 
-        it("returns empty string when N is 0", () => {
-          const result = exec("RETURN right('hello', 0) AS result");
+        it("returns empty string when N is 0", async () => {
+          const result = await exec("RETURN right('hello', 0) AS result");
           expect(result.data).toHaveLength(1);
           expect(result.data[0].result).toBe("");
         });
 
-        it("returns null for null input", () => {
-          const result = exec("RETURN right(null, 3) AS result");
+        it("returns null for null input", async () => {
+          const result = await exec("RETURN right(null, 3) AS result");
           expect(result.data).toHaveLength(1);
           expect(result.data[0].result).toBe(null);
         });
 
-        it("works with property values", () => {
-          exec("CREATE (n:Item {name: 'testing'})");
-          const result = exec(`
+        it("works with property values", async () => {
+          await exec("CREATE (n:Item {name: 'testing'})");
+          const result = await exec(`
             MATCH (n:Item)
             RETURN right(n.name, 3) AS suffix
           `);
@@ -3170,33 +3167,33 @@ describe("CypherQueries.json Patterns", () => {
       });
 
       describe("ltrim()", () => {
-        it("removes leading whitespace", () => {
-          const result = exec("RETURN ltrim('   hello') AS result");
+        it("removes leading whitespace", async () => {
+          const result = await exec("RETURN ltrim('   hello') AS result");
           expect(result.data).toHaveLength(1);
           expect(result.data[0].result).toBe("hello");
         });
 
-        it("preserves trailing whitespace", () => {
-          const result = exec("RETURN ltrim('   hello   ') AS result");
+        it("preserves trailing whitespace", async () => {
+          const result = await exec("RETURN ltrim('   hello   ') AS result");
           expect(result.data).toHaveLength(1);
           expect(result.data[0].result).toBe("hello   ");
         });
 
-        it("returns unchanged string with no leading whitespace", () => {
-          const result = exec("RETURN ltrim('hello') AS result");
+        it("returns unchanged string with no leading whitespace", async () => {
+          const result = await exec("RETURN ltrim('hello') AS result");
           expect(result.data).toHaveLength(1);
           expect(result.data[0].result).toBe("hello");
         });
 
-        it("returns null for null input", () => {
-          const result = exec("RETURN ltrim(null) AS result");
+        it("returns null for null input", async () => {
+          const result = await exec("RETURN ltrim(null) AS result");
           expect(result.data).toHaveLength(1);
           expect(result.data[0].result).toBe(null);
         });
 
-        it("works with property values", () => {
-          exec("CREATE (n:Item {name: '  spaced  '})");
-          const result = exec(`
+        it("works with property values", async () => {
+          await exec("CREATE (n:Item {name: '  spaced  '})");
+          const result = await exec(`
             MATCH (n:Item)
             RETURN ltrim(n.name) AS trimmed
           `);
@@ -3206,33 +3203,33 @@ describe("CypherQueries.json Patterns", () => {
       });
 
       describe("rtrim()", () => {
-        it("removes trailing whitespace", () => {
-          const result = exec("RETURN rtrim('hello   ') AS result");
+        it("removes trailing whitespace", async () => {
+          const result = await exec("RETURN rtrim('hello   ') AS result");
           expect(result.data).toHaveLength(1);
           expect(result.data[0].result).toBe("hello");
         });
 
-        it("preserves leading whitespace", () => {
-          const result = exec("RETURN rtrim('   hello   ') AS result");
+        it("preserves leading whitespace", async () => {
+          const result = await exec("RETURN rtrim('   hello   ') AS result");
           expect(result.data).toHaveLength(1);
           expect(result.data[0].result).toBe("   hello");
         });
 
-        it("returns unchanged string with no trailing whitespace", () => {
-          const result = exec("RETURN rtrim('hello') AS result");
+        it("returns unchanged string with no trailing whitespace", async () => {
+          const result = await exec("RETURN rtrim('hello') AS result");
           expect(result.data).toHaveLength(1);
           expect(result.data[0].result).toBe("hello");
         });
 
-        it("returns null for null input", () => {
-          const result = exec("RETURN rtrim(null) AS result");
+        it("returns null for null input", async () => {
+          const result = await exec("RETURN rtrim(null) AS result");
           expect(result.data).toHaveLength(1);
           expect(result.data[0].result).toBe(null);
         });
 
-        it("works with property values", () => {
-          exec("CREATE (n:Item {name: '  spaced  '})");
-          const result = exec(`
+        it("works with property values", async () => {
+          await exec("CREATE (n:Item {name: '  spaced  '})");
+          const result = await exec(`
             MATCH (n:Item)
             RETURN rtrim(n.name) AS trimmed
           `);
@@ -3242,33 +3239,33 @@ describe("CypherQueries.json Patterns", () => {
       });
 
       describe("reverse()", () => {
-        it("reverses a string", () => {
-          const result = exec("RETURN reverse('hello') AS result");
+        it("reverses a string", async () => {
+          const result = await exec("RETURN reverse('hello') AS result");
           expect(result.data).toHaveLength(1);
           expect(result.data[0].result).toBe("olleh");
         });
 
-        it("handles palindrome", () => {
-          const result = exec("RETURN reverse('radar') AS result");
+        it("handles palindrome", async () => {
+          const result = await exec("RETURN reverse('radar') AS result");
           expect(result.data).toHaveLength(1);
           expect(result.data[0].result).toBe("radar");
         });
 
-        it("handles empty string", () => {
-          const result = exec("RETURN reverse('') AS result");
+        it("handles empty string", async () => {
+          const result = await exec("RETURN reverse('') AS result");
           expect(result.data).toHaveLength(1);
           expect(result.data[0].result).toBe("");
         });
 
-        it("returns null for null input", () => {
-          const result = exec("RETURN reverse(null) AS result");
+        it("returns null for null input", async () => {
+          const result = await exec("RETURN reverse(null) AS result");
           expect(result.data).toHaveLength(1);
           expect(result.data[0].result).toBe(null);
         });
 
-        it("works with property values", () => {
-          exec("CREATE (n:Item {name: 'test'})");
-          const result = exec(`
+        it("works with property values", async () => {
+          await exec("CREATE (n:Item {name: 'test'})");
+          const result = await exec(`
             MATCH (n:Item)
             RETURN reverse(n.name) AS reversed
           `);
@@ -3279,24 +3276,24 @@ describe("CypherQueries.json Patterns", () => {
     });
 
     describe("Type conversion in expressions", () => {
-      it("uses toInteger in arithmetic expressions", () => {
-        const result = exec("RETURN toInteger('10') + toInteger('5') AS sum");
+      it("uses toInteger in arithmetic expressions", async () => {
+        const result = await exec("RETURN toInteger('10') + toInteger('5') AS sum");
         expect(result.data).toHaveLength(1);
         expect(result.data[0].sum).toBe(15);
       });
 
-      it("uses toFloat in arithmetic expressions", () => {
-        const result = exec("RETURN toFloat('10.5') + toFloat('5.5') AS sum");
+      it("uses toFloat in arithmetic expressions", async () => {
+        const result = await exec("RETURN toFloat('10.5') + toFloat('5.5') AS sum");
         expect(result.data).toHaveLength(1);
         expect(result.data[0].sum).toBe(16.0);
       });
 
-      it("converts and compares in WHERE clause", () => {
-        exec("CREATE (n:Item {quantity: '100'})");
-        exec("CREATE (n:Item {quantity: '50'})");
-        exec("CREATE (n:Item {quantity: '200'})");
+      it("converts and compares in WHERE clause", async () => {
+        await exec("CREATE (n:Item {quantity: '100'})");
+        await exec("CREATE (n:Item {quantity: '50'})");
+        await exec("CREATE (n:Item {quantity: '200'})");
         
-        const result = exec(`
+        const result = await exec(`
           MATCH (n:Item)
           WHERE toInteger(n.quantity) > 75
           RETURN n.quantity as qty
@@ -3310,11 +3307,11 @@ describe("CypherQueries.json Patterns", () => {
         expect(quantities).toContain("200");
       });
 
-      it("uses type conversion with COALESCE", () => {
-        exec("CREATE (n:Item {price: '19.99'})");
-        exec("CREATE (n:Item {name: 'Free'})"); // No price
+      it("uses type conversion with COALESCE", async () => {
+        await exec("CREATE (n:Item {price: '19.99'})");
+        await exec("CREATE (n:Item {name: 'Free'})"); // No price
         
-        const result = exec(`
+        const result = await exec(`
           MATCH (n:Item)
           RETURN COALESCE(toFloat(n.price), 0.0) AS price
           ORDER BY price DESC
@@ -3331,33 +3328,33 @@ describe("CypherQueries.json Patterns", () => {
     // Note: SQLite returns 1/0 for boolean predicates, not true/false
 
     describe("ALL()", () => {
-      it("returns true when all elements satisfy condition", () => {
+      it("returns true when all elements satisfy condition", async () => {
         // Pattern: ALL(x IN list WHERE x > 0)
-        const result = exec("RETURN ALL(x IN [1, 2, 3, 4, 5] WHERE x > 0) AS allPositive");
+        const result = await exec("RETURN ALL(x IN [1, 2, 3, 4, 5] WHERE x > 0) AS allPositive");
         
         expect(result.data).toHaveLength(1);
         expect(result.data[0].allPositive).toBe(1); // SQLite returns 1 for true
       });
 
-      it("returns false when some elements do not satisfy condition", () => {
-        const result = exec("RETURN ALL(x IN [1, 2, 3, -1, 5] WHERE x > 0) AS allPositive");
+      it("returns false when some elements do not satisfy condition", async () => {
+        const result = await exec("RETURN ALL(x IN [1, 2, 3, -1, 5] WHERE x > 0) AS allPositive");
         
         expect(result.data).toHaveLength(1);
         expect(result.data[0].allPositive).toBe(0); // SQLite returns 0 for false
       });
 
-      it("returns true for empty list", () => {
+      it("returns true for empty list", async () => {
         // ALL over empty list is vacuously true
-        const result = exec("RETURN ALL(x IN [] WHERE x > 0) AS allPositive");
+        const result = await exec("RETURN ALL(x IN [] WHERE x > 0) AS allPositive");
         
         expect(result.data).toHaveLength(1);
         expect(result.data[0].allPositive).toBe(1);
       });
 
-      it("works with property lists", () => {
-        exec("CREATE (n:Item {scores: [10, 20, 30, 40]})");
+      it("works with property lists", async () => {
+        await exec("CREATE (n:Item {scores: [10, 20, 30, 40]})");
         
-        const result = exec(`
+        const result = await exec(`
           MATCH (n:Item)
           RETURN ALL(x IN n.scores WHERE x >= 10) AS allAbove10
         `);
@@ -3366,11 +3363,11 @@ describe("CypherQueries.json Patterns", () => {
         expect(result.data[0].allAbove10).toBe(1);
       });
 
-      it("can be used in WHERE clause", () => {
-        exec("CREATE (n:Item {name: 'A', scores: [10, 20, 30]})");
-        exec("CREATE (n:Item {name: 'B', scores: [5, 10, 15]})");
+      it("can be used in WHERE clause", async () => {
+        await exec("CREATE (n:Item {name: 'A', scores: [10, 20, 30]})");
+        await exec("CREATE (n:Item {name: 'B', scores: [5, 10, 15]})");
         
-        const result = exec(`
+        const result = await exec(`
           MATCH (n:Item)
           WHERE ALL(x IN n.scores WHERE x >= 10)
           RETURN n.name AS name
@@ -3382,32 +3379,32 @@ describe("CypherQueries.json Patterns", () => {
     });
 
     describe("ANY()", () => {
-      it("returns true when at least one element satisfies condition", () => {
+      it("returns true when at least one element satisfies condition", async () => {
         // Pattern: ANY(x IN list WHERE condition)
-        const result = exec("RETURN ANY(x IN [1, 2, 3, 4, 5] WHERE x > 4) AS anyLarge");
+        const result = await exec("RETURN ANY(x IN [1, 2, 3, 4, 5] WHERE x > 4) AS anyLarge");
         
         expect(result.data).toHaveLength(1);
         expect(result.data[0].anyLarge).toBe(1);
       });
 
-      it("returns false when no elements satisfy condition", () => {
-        const result = exec("RETURN ANY(x IN [1, 2, 3] WHERE x > 10) AS anyLarge");
+      it("returns false when no elements satisfy condition", async () => {
+        const result = await exec("RETURN ANY(x IN [1, 2, 3] WHERE x > 10) AS anyLarge");
         
         expect(result.data).toHaveLength(1);
         expect(result.data[0].anyLarge).toBe(0);
       });
 
-      it("returns false for empty list", () => {
-        const result = exec("RETURN ANY(x IN [] WHERE x > 0) AS anyPositive");
+      it("returns false for empty list", async () => {
+        const result = await exec("RETURN ANY(x IN [] WHERE x > 0) AS anyPositive");
         
         expect(result.data).toHaveLength(1);
         expect(result.data[0].anyPositive).toBe(0);
       });
 
-      it("works with property lists", () => {
-        exec("CREATE (n:Item {tags: ['urgent', 'important', 'low']})");
+      it("works with property lists", async () => {
+        await exec("CREATE (n:Item {tags: ['urgent', 'important', 'low']})");
         
-        const result = exec(`
+        const result = await exec(`
           MATCH (n:Item)
           RETURN ANY(t IN n.tags WHERE t = 'urgent') AS hasUrgent
         `);
@@ -3416,11 +3413,11 @@ describe("CypherQueries.json Patterns", () => {
         expect(result.data[0].hasUrgent).toBe(1);
       });
 
-      it("can be used in WHERE clause", () => {
-        exec("CREATE (n:Task {name: 'Task1', tags: ['urgent', 'bug']})");
-        exec("CREATE (n:Task {name: 'Task2', tags: ['feature', 'enhancement']})");
+      it("can be used in WHERE clause", async () => {
+        await exec("CREATE (n:Task {name: 'Task1', tags: ['urgent', 'bug']})");
+        await exec("CREATE (n:Task {name: 'Task2', tags: ['feature', 'enhancement']})");
         
-        const result = exec(`
+        const result = await exec(`
           MATCH (n:Task)
           WHERE ANY(t IN n.tags WHERE t = 'urgent')
           RETURN n.name AS name
@@ -3432,33 +3429,33 @@ describe("CypherQueries.json Patterns", () => {
     });
 
     describe("NONE()", () => {
-      it("returns true when no elements satisfy condition", () => {
+      it("returns true when no elements satisfy condition", async () => {
         // Pattern: NONE(x IN list WHERE condition)
-        const result = exec("RETURN NONE(x IN [1, 2, 3] WHERE x > 10) AS noneAbove10");
+        const result = await exec("RETURN NONE(x IN [1, 2, 3] WHERE x > 10) AS noneAbove10");
         
         expect(result.data).toHaveLength(1);
         expect(result.data[0].noneAbove10).toBe(1);
       });
 
-      it("returns false when some elements satisfy condition", () => {
-        const result = exec("RETURN NONE(x IN [1, 2, 3, 15] WHERE x > 10) AS noneAbove10");
+      it("returns false when some elements satisfy condition", async () => {
+        const result = await exec("RETURN NONE(x IN [1, 2, 3, 15] WHERE x > 10) AS noneAbove10");
         
         expect(result.data).toHaveLength(1);
         expect(result.data[0].noneAbove10).toBe(0);
       });
 
-      it("returns true for empty list", () => {
+      it("returns true for empty list", async () => {
         // NONE over empty list is true (no elements violate)
-        const result = exec("RETURN NONE(x IN [] WHERE x > 0) AS nonePositive");
+        const result = await exec("RETURN NONE(x IN [] WHERE x > 0) AS nonePositive");
         
         expect(result.data).toHaveLength(1);
         expect(result.data[0].nonePositive).toBe(1);
       });
 
-      it("works with property lists", () => {
-        exec("CREATE (n:Item {values: [1, 2, 3, 4, 5]})");
+      it("works with property lists", async () => {
+        await exec("CREATE (n:Item {values: [1, 2, 3, 4, 5]})");
         
-        const result = exec(`
+        const result = await exec(`
           MATCH (n:Item)
           RETURN NONE(x IN n.values WHERE x < 0) AS noneNegative
         `);
@@ -3467,11 +3464,11 @@ describe("CypherQueries.json Patterns", () => {
         expect(result.data[0].noneNegative).toBe(1);
       });
 
-      it("can be used in WHERE clause", () => {
-        exec("CREATE (n:Product {name: 'Good', reviews: [4, 5, 4, 5]})");
-        exec("CREATE (n:Product {name: 'Bad', reviews: [2, 1, 3, 1]})");
+      it("can be used in WHERE clause", async () => {
+        await exec("CREATE (n:Product {name: 'Good', reviews: [4, 5, 4, 5]})");
+        await exec("CREATE (n:Product {name: 'Bad', reviews: [2, 1, 3, 1]})");
         
-        const result = exec(`
+        const result = await exec(`
           MATCH (n:Product)
           WHERE NONE(r IN n.reviews WHERE r < 3)
           RETURN n.name AS name
@@ -3483,39 +3480,39 @@ describe("CypherQueries.json Patterns", () => {
     });
 
     describe("SINGLE()", () => {
-      it("returns true when exactly one element satisfies condition", () => {
+      it("returns true when exactly one element satisfies condition", async () => {
         // Pattern: SINGLE(x IN list WHERE condition)
-        const result = exec("RETURN SINGLE(x IN [1, 2, 3, 4, 5] WHERE x > 4) AS exactlyOne");
+        const result = await exec("RETURN SINGLE(x IN [1, 2, 3, 4, 5] WHERE x > 4) AS exactlyOne");
         
         expect(result.data).toHaveLength(1);
         expect(result.data[0].exactlyOne).toBe(1);
       });
 
-      it("returns false when more than one element satisfies condition", () => {
-        const result = exec("RETURN SINGLE(x IN [1, 2, 3, 4, 5] WHERE x > 3) AS exactlyOne");
+      it("returns false when more than one element satisfies condition", async () => {
+        const result = await exec("RETURN SINGLE(x IN [1, 2, 3, 4, 5] WHERE x > 3) AS exactlyOne");
         
         expect(result.data).toHaveLength(1);
         expect(result.data[0].exactlyOne).toBe(0); // 4 and 5 both satisfy
       });
 
-      it("returns false when no elements satisfy condition", () => {
-        const result = exec("RETURN SINGLE(x IN [1, 2, 3] WHERE x > 10) AS exactlyOne");
+      it("returns false when no elements satisfy condition", async () => {
+        const result = await exec("RETURN SINGLE(x IN [1, 2, 3] WHERE x > 10) AS exactlyOne");
         
         expect(result.data).toHaveLength(1);
         expect(result.data[0].exactlyOne).toBe(0);
       });
 
-      it("returns false for empty list", () => {
-        const result = exec("RETURN SINGLE(x IN [] WHERE x > 0) AS exactlyOne");
+      it("returns false for empty list", async () => {
+        const result = await exec("RETURN SINGLE(x IN [] WHERE x > 0) AS exactlyOne");
         
         expect(result.data).toHaveLength(1);
         expect(result.data[0].exactlyOne).toBe(0);
       });
 
-      it("works with property lists", () => {
-        exec("CREATE (n:Item {values: [1, 2, 100, 3, 4]})");
+      it("works with property lists", async () => {
+        await exec("CREATE (n:Item {values: [1, 2, 100, 3, 4]})");
         
-        const result = exec(`
+        const result = await exec(`
           MATCH (n:Item)
           RETURN SINGLE(x IN n.values WHERE x > 50) AS singleLarge
         `);
@@ -3524,11 +3521,11 @@ describe("CypherQueries.json Patterns", () => {
         expect(result.data[0].singleLarge).toBe(1);
       });
 
-      it("can be used in WHERE clause", () => {
-        exec("CREATE (n:Team {name: 'Alpha', members: ['Alice', 'Bob', 'Charlie']})");
-        exec("CREATE (n:Team {name: 'Beta', members: ['Alice', 'Alice', 'Bob']})");
+      it("can be used in WHERE clause", async () => {
+        await exec("CREATE (n:Team {name: 'Alpha', members: ['Alice', 'Bob', 'Charlie']})");
+        await exec("CREATE (n:Team {name: 'Beta', members: ['Alice', 'Alice', 'Bob']})");
         
-        const result = exec(`
+        const result = await exec(`
           MATCH (n:Team)
           WHERE SINGLE(m IN n.members WHERE m = 'Alice')
           RETURN n.name AS name
@@ -3540,10 +3537,10 @@ describe("CypherQueries.json Patterns", () => {
     });
 
     describe("Combined list predicates", () => {
-      it("combines ALL and ANY with AND", () => {
-        exec("CREATE (n:Data {nums: [2, 4, 6, 8, 10]})");
+      it("combines ALL and ANY with AND", async () => {
+        await exec("CREATE (n:Data {nums: [2, 4, 6, 8, 10]})");
         
-        const result = exec(`
+        const result = await exec(`
           MATCH (n:Data)
           WHERE ALL(x IN n.nums WHERE x > 0) AND ANY(x IN n.nums WHERE x > 8)
           RETURN n
@@ -3552,15 +3549,15 @@ describe("CypherQueries.json Patterns", () => {
         expect(result.data).toHaveLength(1);
       });
 
-      it("uses NOT with list predicates", () => {
-        const result = exec("RETURN NOT ALL(x IN [1, 2, -3] WHERE x > 0) AS notAllPositive");
+      it("uses NOT with list predicates", async () => {
+        const result = await exec("RETURN NOT ALL(x IN [1, 2, -3] WHERE x > 0) AS notAllPositive");
         
         expect(result.data).toHaveLength(1);
         expect(result.data[0].notAllPositive).toBe(1);
       });
 
-      it("uses list predicate with range()", () => {
-        const result = exec("RETURN ALL(x IN range(1, 5) WHERE x > 0) AS allPositive");
+      it("uses list predicate with range()", async () => {
+        const result = await exec("RETURN ALL(x IN range(1, 5) WHERE x > 0) AS allPositive");
         
         expect(result.data).toHaveLength(1);
         expect(result.data[0].allPositive).toBe(1);
@@ -3569,19 +3566,19 @@ describe("CypherQueries.json Patterns", () => {
   });
 
   describe("Percentile Functions", () => {
-    beforeEach(() => {
+    beforeEach(async () => {
       // Create a set of nodes with numeric values for percentile calculations
-      exec("CREATE (n:Score {value: 10})");
-      exec("CREATE (n:Score {value: 20})");
-      exec("CREATE (n:Score {value: 30})");
-      exec("CREATE (n:Score {value: 40})");
-      exec("CREATE (n:Score {value: 50})");
+      await exec("CREATE (n:Score {value: 10})");
+      await exec("CREATE (n:Score {value: 20})");
+      await exec("CREATE (n:Score {value: 30})");
+      await exec("CREATE (n:Score {value: 40})");
+      await exec("CREATE (n:Score {value: 50})");
     });
 
     describe("percentileDisc()", () => {
-      it("returns median value (0.5 percentile) for discrete percentile", () => {
+      it("returns median value (0.5 percentile) for discrete percentile", async () => {
         // percentileDisc returns an actual value from the dataset
-        const result = exec(`
+        const result = await exec(`
           MATCH (n:Score)
           RETURN percentileDisc(n.value, 0.5) AS median
         `);
@@ -3590,8 +3587,8 @@ describe("CypherQueries.json Patterns", () => {
         expect(result.data[0].median).toBe(30); // Middle value for odd count
       });
 
-      it("returns minimum value (0th percentile)", () => {
-        const result = exec(`
+      it("returns minimum value (0th percentile)", async () => {
+        const result = await exec(`
           MATCH (n:Score)
           RETURN percentileDisc(n.value, 0) AS minVal
         `);
@@ -3600,8 +3597,8 @@ describe("CypherQueries.json Patterns", () => {
         expect(result.data[0].minVal).toBe(10);
       });
 
-      it("returns maximum value (100th percentile)", () => {
-        const result = exec(`
+      it("returns maximum value (100th percentile)", async () => {
+        const result = await exec(`
           MATCH (n:Score)
           RETURN percentileDisc(n.value, 1) AS maxVal
         `);
@@ -3610,8 +3607,8 @@ describe("CypherQueries.json Patterns", () => {
         expect(result.data[0].maxVal).toBe(50);
       });
 
-      it("returns 90th percentile value", () => {
-        const result = exec(`
+      it("returns 90th percentile value", async () => {
+        const result = await exec(`
           MATCH (n:Score)
           RETURN percentileDisc(n.value, 0.9) AS p90
         `);
@@ -3620,8 +3617,8 @@ describe("CypherQueries.json Patterns", () => {
         expect(result.data[0].p90).toBe(50); // 90th percentile rounds to highest value
       });
 
-      it("returns 25th percentile value", () => {
-        const result = exec(`
+      it("returns 25th percentile value", async () => {
+        const result = await exec(`
           MATCH (n:Score)
           RETURN percentileDisc(n.value, 0.25) AS p25
         `);
@@ -3630,11 +3627,11 @@ describe("CypherQueries.json Patterns", () => {
         expect(result.data[0].p25).toBe(20); // 25th percentile
       });
 
-      it("works with WHERE clause filtering", () => {
-        exec("CREATE (n:Score {value: 100, category: 'high'})");
-        exec("CREATE (n:Score {value: 200, category: 'high'})");
+      it("works with WHERE clause filtering", async () => {
+        await exec("CREATE (n:Score {value: 100, category: 'high'})");
+        await exec("CREATE (n:Score {value: 200, category: 'high'})");
         
-        const result = exec(`
+        const result = await exec(`
           MATCH (n:Score)
           WHERE n.category = 'high'
           RETURN percentileDisc(n.value, 0.5) AS median
@@ -3647,9 +3644,9 @@ describe("CypherQueries.json Patterns", () => {
     });
 
     describe("percentileCont()", () => {
-      it("returns interpolated median value (0.5 percentile)", () => {
+      it("returns interpolated median value (0.5 percentile)", async () => {
         // percentileCont can interpolate between values
-        const result = exec(`
+        const result = await exec(`
           MATCH (n:Score)
           RETURN percentileCont(n.value, 0.5) AS median
         `);
@@ -3658,8 +3655,8 @@ describe("CypherQueries.json Patterns", () => {
         expect(result.data[0].median).toBe(30); // Median for 5 values
       });
 
-      it("returns minimum value (0th percentile)", () => {
-        const result = exec(`
+      it("returns minimum value (0th percentile)", async () => {
+        const result = await exec(`
           MATCH (n:Score)
           RETURN percentileCont(n.value, 0) AS minVal
         `);
@@ -3668,8 +3665,8 @@ describe("CypherQueries.json Patterns", () => {
         expect(result.data[0].minVal).toBe(10);
       });
 
-      it("returns maximum value (100th percentile)", () => {
-        const result = exec(`
+      it("returns maximum value (100th percentile)", async () => {
+        const result = await exec(`
           MATCH (n:Score)
           RETURN percentileCont(n.value, 1) AS maxVal
         `);
@@ -3678,11 +3675,11 @@ describe("CypherQueries.json Patterns", () => {
         expect(result.data[0].maxVal).toBe(50);
       });
 
-      it("interpolates for 0.3 percentile", () => {
+      it("interpolates for 0.3 percentile", async () => {
         // With values [10, 20, 30, 40, 50], 0.3 percentile should interpolate
         // Position = 0.3 * (5-1) = 1.2, so between index 1 (20) and index 2 (30)
         // Value = 20 + 0.2 * (30 - 20) = 20 + 2 = 22
-        const result = exec(`
+        const result = await exec(`
           MATCH (n:Score)
           RETURN percentileCont(n.value, 0.3) AS p30
         `);
@@ -3691,9 +3688,9 @@ describe("CypherQueries.json Patterns", () => {
         expect(result.data[0].p30).toBe(22);
       });
 
-      it("interpolates for 0.75 percentile", () => {
+      it("interpolates for 0.75 percentile", async () => {
         // Position = 0.75 * (5-1) = 3, exactly at index 3 (40)
-        const result = exec(`
+        const result = await exec(`
           MATCH (n:Score)
           RETURN percentileCont(n.value, 0.75) AS p75
         `);
@@ -3702,12 +3699,12 @@ describe("CypherQueries.json Patterns", () => {
         expect(result.data[0].p75).toBe(40);
       });
 
-      it("handles even number of elements", () => {
-        exec("CREATE (n:Score {value: 60})");
+      it("handles even number of elements", async () => {
+        await exec("CREATE (n:Score {value: 60})");
         // Now we have [10, 20, 30, 40, 50, 60]
         // Median position = 0.5 * (6-1) = 2.5, between index 2 (30) and index 3 (40)
         // Value = 30 + 0.5 * (40 - 30) = 35
-        const result = exec(`
+        const result = await exec(`
           MATCH (n:Score)
           RETURN percentileCont(n.value, 0.5) AS median
         `);
@@ -3718,10 +3715,10 @@ describe("CypherQueries.json Patterns", () => {
     });
 
     describe("Edge cases", () => {
-      it("handles single value for percentileDisc", () => {
-        exec("CREATE (n:SingleScore {value: 42})");
+      it("handles single value for percentileDisc", async () => {
+        await exec("CREATE (n:SingleScore {value: 42})");
         
-        const result = exec(`
+        const result = await exec(`
           MATCH (n:SingleScore)
           RETURN percentileDisc(n.value, 0.5) AS median
         `);
@@ -3730,10 +3727,10 @@ describe("CypherQueries.json Patterns", () => {
         expect(result.data[0].median).toBe(42);
       });
 
-      it("handles single value for percentileCont", () => {
-        exec("CREATE (n:SingleScore {value: 42})");
+      it("handles single value for percentileCont", async () => {
+        await exec("CREATE (n:SingleScore {value: 42})");
         
-        const result = exec(`
+        const result = await exec(`
           MATCH (n:SingleScore)
           RETURN percentileCont(n.value, 0.5) AS median
         `);
@@ -3742,8 +3739,8 @@ describe("CypherQueries.json Patterns", () => {
         expect(result.data[0].median).toBe(42);
       });
 
-      it("returns null for empty result set in percentileDisc", () => {
-        const result = exec(`
+      it("returns null for empty result set in percentileDisc", async () => {
+        const result = await exec(`
           MATCH (n:NonExistent)
           RETURN percentileDisc(n.value, 0.5) AS median
         `);
@@ -3752,8 +3749,8 @@ describe("CypherQueries.json Patterns", () => {
         expect(result.data[0].median).toBe(null);
       });
 
-      it("returns null for empty result set in percentileCont", () => {
-        const result = exec(`
+      it("returns null for empty result set in percentileCont", async () => {
+        const result = await exec(`
           MATCH (n:NonExistent)
           RETURN percentileCont(n.value, 0.5) AS median
         `);
@@ -3765,16 +3762,16 @@ describe("CypherQueries.json Patterns", () => {
   });
 
   describe("Post Operations", () => {
-    it("creates a post authored by a user", () => {
+    it("creates a post authored by a user", async () => {
       // Pattern: MATCH (u:User {id: $userId})
       //          CREATE (p:Post {id: $postId, title: $title, content: $content, createdAt: datetime()})
       //          CREATE (u)-[:AUTHORED]->(p)
-      exec(`CREATE (u:User {id: $userId, name: $name})`, {
+      await exec(`CREATE (u:User {id: $userId, name: $name})`, {
         userId: "user-123",
         name: "Alice",
       });
 
-      const result = exec(
+      const result = await exec(
         `MATCH (u:User {id: $userId})
          CREATE (p:Post {id: $postId, title: $title, content: $content, createdAt: datetime()})
          CREATE (u)-[:AUTHORED]->(p)
@@ -3798,7 +3795,7 @@ describe("CypherQueries.json Patterns", () => {
       expect(result.data[0].author).toBe("Alice");
 
       // Verify the relationship was created
-      const relationshipCheck = exec(
+      const relationshipCheck = await exec(
         `MATCH (u:User {id: $userId})-[:AUTHORED]->(p:Post {id: $postId})
          RETURN p.title AS title`,
         { userId: "user-123", postId: "post-456" }
@@ -3807,14 +3804,14 @@ describe("CypherQueries.json Patterns", () => {
       expect(relationshipCheck.data[0].title).toBe("My First Post");
     });
 
-    it("creates multiple posts by the same user", () => {
-      exec(`CREATE (u:User {id: $userId, name: $name})`, {
+    it("creates multiple posts by the same user", async () => {
+      await exec(`CREATE (u:User {id: $userId, name: $name})`, {
         userId: "user-789",
         name: "Bob",
       });
 
       // Create first post
-      exec(
+      await exec(
         `MATCH (u:User {id: $userId})
          CREATE (p:Post {id: $postId, title: $title, content: $content, createdAt: datetime()})
          CREATE (u)-[:AUTHORED]->(p)`,
@@ -3827,7 +3824,7 @@ describe("CypherQueries.json Patterns", () => {
       );
 
       // Create second post
-      exec(
+      await exec(
         `MATCH (u:User {id: $userId})
          CREATE (p:Post {id: $postId, title: $title, content: $content, createdAt: datetime()})
          CREATE (u)-[:AUTHORED]->(p)`,
@@ -3840,7 +3837,7 @@ describe("CypherQueries.json Patterns", () => {
       );
 
       // Verify both posts are linked to the user
-      const result = exec(
+      const result = await exec(
         `MATCH (u:User {id: $userId})-[:AUTHORED]->(p:Post)
          RETURN p.title AS title
          ORDER BY title`,
@@ -3852,8 +3849,8 @@ describe("CypherQueries.json Patterns", () => {
       expect(result.data[1].title).toBe("Second Post");
     });
 
-    it("does not create post when user does not exist", () => {
-      const result = exec(
+    it("does not create post when user does not exist", async () => {
+      const result = await exec(
         `MATCH (u:User {id: $userId})
          CREATE (p:Post {id: $postId, title: $title, content: $content, createdAt: datetime()})
          CREATE (u)-[:AUTHORED]->(p)
@@ -3870,25 +3867,25 @@ describe("CypherQueries.json Patterns", () => {
       expect(result.data).toHaveLength(0);
 
       // Verify no post was created
-      const postCheck = exec(`MATCH (p:Post {id: 'post-999'}) RETURN p`);
+      const postCheck = await exec(`MATCH (p:Post {id: 'post-999'}) RETURN p`);
       expect(postCheck.data).toHaveLength(0);
     });
   });
 
   describe("Additional Query Patterns", () => {
     // datetime() function
-    it("supporte datetime() dans CREATE", () => {
-      const result = exec(`CREATE (n:Event {name: 'Test', createdAt: datetime()}) RETURN n`);
+    it("supporte datetime() dans CREATE", async () => {
+      const result = await exec(`CREATE (n:Event {name: 'Test', createdAt: datetime()}) RETURN n`);
       
       expect(result.data).toHaveLength(1);
       const node = result.data[0].n as Record<string, unknown>;
       expect(node.createdAt).toBeDefined();
     });
 
-    it("supporte datetime() dans SET", () => {
-      exec(`CREATE (n:Event {name: 'Test'})`);
+    it("supporte datetime() dans SET", async () => {
+      await exec(`CREATE (n:Event {name: 'Test'})`);
       
-      const result = exec(`MATCH (n:Event {name: 'Test'}) SET n.updatedAt = datetime() RETURN n`);
+      const result = await exec(`MATCH (n:Event {name: 'Test'}) SET n.updatedAt = datetime() RETURN n`);
       
       expect(result.data).toHaveLength(1);
       const node = result.data[0].n as Record<string, unknown>;
@@ -3897,12 +3894,12 @@ describe("CypherQueries.json Patterns", () => {
 
     // ORDER BY on node property
     // Neo4j 3.5 format: properties are directly on the node object
-    it("supporte ORDER BY sur propriété de noeud ASC", () => {
-      exec(`CREATE (n:Item {name: 'C', order: 3})`);
-      exec(`CREATE (n:Item {name: 'A', order: 1})`);
-      exec(`CREATE (n:Item {name: 'B', order: 2})`);
+    it("supporte ORDER BY sur propriété de noeud ASC", async () => {
+      await exec(`CREATE (n:Item {name: 'C', order: 3})`);
+      await exec(`CREATE (n:Item {name: 'A', order: 1})`);
+      await exec(`CREATE (n:Item {name: 'B', order: 2})`);
       
-      const result = exec(`MATCH (n:Item) RETURN n ORDER BY n.order`);
+      const result = await exec(`MATCH (n:Item) RETURN n ORDER BY n.order`);
       
       expect(result.data).toHaveLength(3);
       expect((result.data[0].n as Record<string, unknown>).name).toBe('A');
@@ -3910,12 +3907,12 @@ describe("CypherQueries.json Patterns", () => {
       expect((result.data[2].n as Record<string, unknown>).name).toBe('C');
     });
 
-    it("supporte ORDER BY sur propriété de noeud DESC", () => {
-      exec(`CREATE (n:Item {name: 'A', order: 1})`);
-      exec(`CREATE (n:Item {name: 'B', order: 2})`);
-      exec(`CREATE (n:Item {name: 'C', order: 3})`);
+    it("supporte ORDER BY sur propriété de noeud DESC", async () => {
+      await exec(`CREATE (n:Item {name: 'A', order: 1})`);
+      await exec(`CREATE (n:Item {name: 'B', order: 2})`);
+      await exec(`CREATE (n:Item {name: 'C', order: 3})`);
       
-      const result = exec(`MATCH (n:Item) RETURN n ORDER BY n.order DESC`);
+      const result = await exec(`MATCH (n:Item) RETURN n ORDER BY n.order DESC`);
       
       expect(result.data).toHaveLength(3);
       expect((result.data[0].n as Record<string, unknown>).name).toBe('C');
@@ -3923,24 +3920,24 @@ describe("CypherQueries.json Patterns", () => {
       expect((result.data[2].n as Record<string, unknown>).name).toBe('A');
     });
 
-    it("supporte ORDER BY avec LIMIT", () => {
-      exec(`CREATE (n:Item {name: 'C', order: 3})`);
-      exec(`CREATE (n:Item {name: 'A', order: 1})`);
-      exec(`CREATE (n:Item {name: 'B', order: 2})`);
+    it("supporte ORDER BY avec LIMIT", async () => {
+      await exec(`CREATE (n:Item {name: 'C', order: 3})`);
+      await exec(`CREATE (n:Item {name: 'A', order: 1})`);
+      await exec(`CREATE (n:Item {name: 'B', order: 2})`);
       
-      const result = exec(`MATCH (n:Item) RETURN n ORDER BY n.order DESC LIMIT 1`);
+      const result = await exec(`MATCH (n:Item) RETURN n ORDER BY n.order DESC LIMIT 1`);
       
       expect(result.data).toHaveLength(1);
       expect((result.data[0].n as Record<string, unknown>).name).toBe('C');
     });
 
     // WHERE with property comparison
-    it("supporte WHERE avec comparaison de propriété (<>)", () => {
-      exec(`CREATE (n:Session {status: 'active'})`);
-      exec(`CREATE (n:Session {status: 'completed'})`);
-      exec(`CREATE (n:Session {status: 'pending'})`);
+    it("supporte WHERE avec comparaison de propriété (<>)", async () => {
+      await exec(`CREATE (n:Session {status: 'active'})`);
+      await exec(`CREATE (n:Session {status: 'completed'})`);
+      await exec(`CREATE (n:Session {status: 'pending'})`);
       
-      const result = exec(`MATCH (n:Session) WHERE n.status <> 'completed' RETURN n`);
+      const result = await exec(`MATCH (n:Session) WHERE n.status <> 'completed' RETURN n`);
       
       expect(result.data).toHaveLength(2);
       const statuses = result.data.map(r => (r.n as Record<string, unknown>).status);
@@ -3949,22 +3946,22 @@ describe("CypherQueries.json Patterns", () => {
       expect(statuses).not.toContain('completed');
     });
 
-    it("supporte WHERE avec comparaison de propriété (=)", () => {
-      exec(`CREATE (n:Session {status: 'active'})`);
-      exec(`CREATE (n:Session {status: 'completed'})`);
+    it("supporte WHERE avec comparaison de propriété (=)", async () => {
+      await exec(`CREATE (n:Session {status: 'active'})`);
+      await exec(`CREATE (n:Session {status: 'completed'})`);
       
-      const result = exec(`MATCH (n:Session) WHERE n.status = 'active' RETURN n`);
+      const result = await exec(`MATCH (n:Session) WHERE n.status = 'active' RETURN n`);
       
       expect(result.data).toHaveLength(1);
       expect((result.data[0].n as Record<string, unknown>).status).toBe('active');
     });
 
-    it("supporte WHERE avec comparaison numérique (>)", () => {
-      exec(`CREATE (n:Item {name: 'A', quantity: 5})`);
-      exec(`CREATE (n:Item {name: 'B', quantity: 10})`);
-      exec(`CREATE (n:Item {name: 'C', quantity: 0})`);
+    it("supporte WHERE avec comparaison numérique (>)", async () => {
+      await exec(`CREATE (n:Item {name: 'A', quantity: 5})`);
+      await exec(`CREATE (n:Item {name: 'B', quantity: 10})`);
+      await exec(`CREATE (n:Item {name: 'C', quantity: 0})`);
       
-      const result = exec(`MATCH (n:Item) WHERE n.quantity > 0 RETURN n`);
+      const result = await exec(`MATCH (n:Item) WHERE n.quantity > 0 RETURN n`);
       
       expect(result.data).toHaveLength(2);
       const names = result.data.map(r => (r.n as Record<string, unknown>).name);
@@ -3972,12 +3969,12 @@ describe("CypherQueries.json Patterns", () => {
       expect(names).toContain('B');
     });
 
-    it("supporte WHERE avec conditions multiples (AND)", () => {
-      exec(`CREATE (n:SessionItem {purchased: true, toBuy: 5})`);
-      exec(`CREATE (n:SessionItem {purchased: true, toBuy: 0})`);
-      exec(`CREATE (n:SessionItem {purchased: false, toBuy: 3})`);
+    it("supporte WHERE avec conditions multiples (AND)", async () => {
+      await exec(`CREATE (n:SessionItem {purchased: true, toBuy: 5})`);
+      await exec(`CREATE (n:SessionItem {purchased: true, toBuy: 0})`);
+      await exec(`CREATE (n:SessionItem {purchased: false, toBuy: 3})`);
       
-      const result = exec(`MATCH (n:SessionItem) WHERE n.purchased = true AND n.toBuy > 0 RETURN n`);
+      const result = await exec(`MATCH (n:SessionItem) WHERE n.purchased = true AND n.toBuy > 0 RETURN n`);
       
       expect(result.data).toHaveLength(1);
       const n = result.data[0].n as Record<string, unknown>;
@@ -3985,60 +3982,60 @@ describe("CypherQueries.json Patterns", () => {
       expect(n.toBuy).toBe(5);
     });
 
-    it("supporte WHERE avec conditions multiples (OR)", () => {
-      exec(`CREATE (n:Item {status: 'active'})`);
-      exec(`CREATE (n:Item {status: 'pending'})`);
-      exec(`CREATE (n:Item {status: 'completed'})`);
+    it("supporte WHERE avec conditions multiples (OR)", async () => {
+      await exec(`CREATE (n:Item {status: 'active'})`);
+      await exec(`CREATE (n:Item {status: 'pending'})`);
+      await exec(`CREATE (n:Item {status: 'completed'})`);
       
-      const result = exec(`MATCH (n:Item) WHERE n.status = 'active' OR n.status = 'pending' RETURN n`);
+      const result = await exec(`MATCH (n:Item) WHERE n.status = 'active' OR n.status = 'pending' RETURN n`);
       
       expect(result.data).toHaveLength(2);
     });
 
     // count() aggregation
-    it("supporte count() dans RETURN", () => {
-      exec(`CREATE (n:Person {name: 'Alice'})`);
-      exec(`CREATE (n:Person {name: 'Bob'})`);
-      exec(`CREATE (n:Person {name: 'Charlie'})`);
+    it("supporte count() dans RETURN", async () => {
+      await exec(`CREATE (n:Person {name: 'Alice'})`);
+      await exec(`CREATE (n:Person {name: 'Bob'})`);
+      await exec(`CREATE (n:Person {name: 'Charlie'})`);
       
-      const result = exec(`MATCH (n:Person) RETURN count(n) AS count`);
+      const result = await exec(`MATCH (n:Person) RETURN count(n) AS count`);
       
       expect(result.data).toHaveLength(1);
       expect(result.data[0].count).toBe(3);
     });
 
-    it("supporte count() avec WHERE", () => {
-      exec(`CREATE (n:Session {userId: 'user1', status: 'active'})`);
-      exec(`CREATE (n:Session {userId: 'user1', status: 'completed'})`);
-      exec(`CREATE (n:Session {userId: 'user2', status: 'active'})`);
+    it("supporte count() avec WHERE", async () => {
+      await exec(`CREATE (n:Session {userId: 'user1', status: 'active'})`);
+      await exec(`CREATE (n:Session {userId: 'user1', status: 'completed'})`);
+      await exec(`CREATE (n:Session {userId: 'user2', status: 'active'})`);
       
-      const result = exec(`MATCH (n:Session {userId: 'user1'}) WHERE n.status <> 'completed' RETURN count(n) AS count`);
+      const result = await exec(`MATCH (n:Session {userId: 'user1'}) WHERE n.status <> 'completed' RETURN count(n) AS count`);
       
       expect(result.data).toHaveLength(1);
       expect(result.data[0].count).toBe(1);
     });
 
     // DETACH DELETE with RETURN count
-    it("supporte DETACH DELETE avec RETURN count()", () => {
-      exec(`CREATE (n:Item {id: 'item1'})`);
-      exec(`CREATE (n:Item {id: 'item2'})`);
+    it("supporte DETACH DELETE avec RETURN count()", async () => {
+      await exec(`CREATE (n:Item {id: 'item1'})`);
+      await exec(`CREATE (n:Item {id: 'item2'})`);
       
-      const result = exec(`MATCH (n:Item {id: 'item1'}) DETACH DELETE n RETURN count(n) AS count`);
+      const result = await exec(`MATCH (n:Item {id: 'item1'}) DETACH DELETE n RETURN count(n) AS count`);
       
       expect(result.data).toHaveLength(1);
       expect(result.data[0].count).toBe(1);
       
       // Verify deletion
-      const remaining = exec(`MATCH (n:Item) RETURN n`);
+      const remaining = await exec(`MATCH (n:Item) RETURN n`);
       expect(remaining.data).toHaveLength(1);
       expect((remaining.data[0].n as Record<string, unknown>).id).toBe('item2');
     });
 
     // Multi-line queries
-    it("supporte les requêtes multi-lignes", () => {
-      exec(`CREATE (n:Person {name: 'Alice'})`);
+    it("supporte les requêtes multi-lignes", async () => {
+      await exec(`CREATE (n:Person {name: 'Alice'})`);
       
-      const result = exec(`
+      const result = await exec(`
         MATCH (n:Person {name: 'Alice'})
         RETURN n
       `);
@@ -4047,10 +4044,10 @@ describe("CypherQueries.json Patterns", () => {
       expect((result.data[0].n as Record<string, unknown>).name).toBe('Alice');
     });
 
-    it("supporte les requêtes multi-lignes avec SET", () => {
-      exec(`CREATE (n:Person {name: 'Alice', age: 25})`);
+    it("supporte les requêtes multi-lignes avec SET", async () => {
+      await exec(`CREATE (n:Person {name: 'Alice', age: 25})`);
       
-      const result = exec(`
+      const result = await exec(`
         MATCH (n:Person {name: 'Alice'})
         SET n.age = 26,
             n.updated = true
@@ -4064,48 +4061,48 @@ describe("CypherQueries.json Patterns", () => {
     });
 
     // Arithmetic in SET (i.currentQuantity + $toBuy)
-    it("supporte l'arithmétique dans SET", () => {
-      exec(`CREATE (n:Item {name: 'Apples', quantity: 5})`);
+    it("supporte l'arithmétique dans SET", async () => {
+      await exec(`CREATE (n:Item {name: 'Apples', quantity: 5})`);
       
-      const result = exec(`MATCH (n:Item {name: 'Apples'}) SET n.quantity = n.quantity + 3 RETURN n`);
+      const result = await exec(`MATCH (n:Item {name: 'Apples'}) SET n.quantity = n.quantity + 3 RETURN n`);
       
       expect(result.data).toHaveLength(1);
       expect((result.data[0].n as Record<string, unknown>).quantity).toBe(8);
     });
 
-    it("supporte l'arithmétique dans SET avec paramètre", () => {
-      exec(`CREATE (n:Item {name: 'Apples', quantity: 5})`);
+    it("supporte l'arithmétique dans SET avec paramètre", async () => {
+      await exec(`CREATE (n:Item {name: 'Apples', quantity: 5})`);
       
-      const result = exec(`MATCH (n:Item {name: 'Apples'}) SET n.quantity = n.quantity + $amount RETURN n`, { amount: 10 });
+      const result = await exec(`MATCH (n:Item {name: 'Apples'}) SET n.quantity = n.quantity + $amount RETURN n`, { amount: 10 });
       
       expect(result.data).toHaveLength(1);
       expect((result.data[0].n as Record<string, unknown>).quantity).toBe(15);
     });
 
     // max() aggregation for getNextOrders pattern
-    it("supporte max() dans RETURN", () => {
-      exec(`CREATE (n:Item {userId: 'user1', order: 1})`);
-      exec(`CREATE (n:Item {userId: 'user1', order: 5})`);
-      exec(`CREATE (n:Item {userId: 'user1', order: 3})`);
+    it("supporte max() dans RETURN", async () => {
+      await exec(`CREATE (n:Item {userId: 'user1', order: 1})`);
+      await exec(`CREATE (n:Item {userId: 'user1', order: 5})`);
+      await exec(`CREATE (n:Item {userId: 'user1', order: 3})`);
       
-      const result = exec(`MATCH (n:Item {userId: 'user1'}) RETURN max(n.order) AS maxOrder`);
+      const result = await exec(`MATCH (n:Item {userId: 'user1'}) RETURN max(n.order) AS maxOrder`);
       
       expect(result.data).toHaveLength(1);
       expect(result.data[0].maxOrder).toBe(5);
     });
 
-    it("supporte max() avec résultat null quand aucun noeud", () => {
-      const result = exec(`MATCH (n:Item {userId: 'nonexistent'}) RETURN max(n.order) AS maxOrder`);
+    it("supporte max() avec résultat null quand aucun noeud", async () => {
+      const result = await exec(`MATCH (n:Item {userId: 'nonexistent'}) RETURN max(n.order) AS maxOrder`);
       
       expect(result.data).toHaveLength(1);
       expect(result.data[0].maxOrder).toBeNull();
     });
 
     // Returning property directly (n.name AS name)
-    it("supporte RETURN avec alias de propriété", () => {
-      exec(`CREATE (n:Person {name: 'Alice', age: 30})`);
+    it("supporte RETURN avec alias de propriété", async () => {
+      await exec(`CREATE (n:Person {name: 'Alice', age: 30})`);
       
-      const result = exec(`MATCH (n:Person) RETURN n.name AS name, n.age AS age`);
+      const result = await exec(`MATCH (n:Person) RETURN n.name AS name, n.age AS age`);
       
       expect(result.data).toHaveLength(1);
       expect(result.data[0].name).toBe('Alice');
