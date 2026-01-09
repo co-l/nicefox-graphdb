@@ -10,24 +10,17 @@ A lightweight, embeddable graph database with **full Cypher query support**, pow
 
 ## Installation
 
+### Remote Mode (Production)
+
+For connecting to a remote LeanGraph server, no native dependencies are needed:
+
 ```bash
 npm install leangraph
 ```
 
-### Native Dependencies
+### Local Mode (Development)
 
-The `better-sqlite3` native module is an **optional dependency**:
-
-- **Production mode** (remote HTTP client): No native dependencies, no compilation required
-- **Development mode** (local SQLite): Requires `better-sqlite3`
-
-If you only connect to a remote GraphDB server, you can skip native compilation entirely:
-
-```bash
-npm install leangraph --ignore-optional
-```
-
-For local/embedded mode, ensure `better-sqlite3` is installed:
+For local embedded mode with SQLite, also install `better-sqlite3`:
 
 ```bash
 npm install leangraph better-sqlite3

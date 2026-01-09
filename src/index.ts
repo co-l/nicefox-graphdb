@@ -134,8 +134,18 @@ export async function GraphDB(options: GraphDBOptions = {}): Promise<GraphDBClie
     return createRemoteClient(options);
   } else {
     // Lazy-load local client to avoid requiring better-sqlite3 when not needed
-    const { createLocalClient } = await import("./local.js");
-    return createLocalClient(options);
+    try {
+      const { createLocalClient } = await import("./local.js");
+      return createLocalClient(options);
+    } catch (err) {
+      if (err instanceof Error && err.message.includes("better-sqlite3")) {
+        throw new Error(
+          "Local mode requires better-sqlite3. Install it with: npm install better-sqlite3\n" +
+          "Or set NODE_ENV=production to use remote mode instead."
+        );
+      }
+      throw err;
+    }
   }
 }
 
