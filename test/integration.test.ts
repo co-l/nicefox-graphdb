@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { ExecutionResult } from "../src/executor";
-import { createTestClient, TestClient, expectSuccess, requireDatabase } from "./utils";
+import { createTestClient, TestClient, expectSuccess } from "./utils";
 
 describe("Integration Tests", () => {
   let client: TestClient;
@@ -226,8 +226,11 @@ describe("Integration Tests", () => {
       );
       expect(nodesResult.data).toHaveLength(2);
 
-      // Verify edge exists by checking the raw database
-      expect(requireDatabase(client).countEdges()).toBe(1);
+      // Verify edge exists by querying
+      const edgeCount = expectSuccess(
+        await client.execute("MATCH ()-[r]->() RETURN count(r) as count")
+      );
+      expect(edgeCount.data[0].count).toBe(1);
     });
 
     it("matches relationship patterns", async () => {
@@ -260,13 +263,17 @@ describe("Integration Tests", () => {
     });
 
     it("filters by target node properties in relationships", async () => {
-      // Create multiple relationships
-      await client.execute("CREATE (a:Person {name: 'Alice'})-[:WORKS_ON]->(p:Project {name: 'Alpha', status: 'active'})");
-      await client.execute("CREATE (a:Person {name: 'Alice'})-[:WORKS_ON]->(q:Project {name: 'Beta', status: 'archived'})");
-
-      // We need to use raw DB to create the second edge since the translator generates new IDs
-      const alice = requireDatabase(client).getNodesByLabel("Person").find(n => n.properties.name === "Alice");
-      const projects = requireDatabase(client).getNodesByLabel("Project");
+      // Create a person node first
+      await client.execute("CREATE (a:Person {name: 'Alice'})");
+      // Create projects and relationships using MATCH
+      await client.execute(`
+        MATCH (a:Person {name: 'Alice'})
+        CREATE (a)-[:WORKS_ON]->(p:Project {name: 'Alpha', status: 'active'})
+      `);
+      await client.execute(`
+        MATCH (a:Person {name: 'Alice'})
+        CREATE (a)-[:WORKS_ON]->(q:Project {name: 'Beta', status: 'archived'})
+      `);
 
       // Filter by target node property
       const result = expectSuccess(
@@ -284,18 +291,19 @@ describe("Integration Tests", () => {
       await client.execute("CREATE (p1:Product {name: 'Premium Widget', category: 'premium'})");
       await client.execute("CREATE (p2:Product {name: 'Basic Widget', category: 'basic'})");
 
-      // Get node IDs
-      const users = requireDatabase(client).getNodesByLabel("User");
-      const products = requireDatabase(client).getNodesByLabel("Product");
-      const alice = users.find(u => u.properties.name === "Alice")!;
-      const bob = users.find(u => u.properties.name === "Bob")!;
-      const premium = products.find(p => p.properties.name === "Premium Widget")!;
-      const basic = products.find(p => p.properties.name === "Basic Widget")!;
-
-      // Create purchase relationships
-      requireDatabase(client).insertEdge("purchase1", "PURCHASED", alice.id, premium.id);
-      requireDatabase(client).insertEdge("purchase2", "PURCHASED", alice.id, basic.id);
-      requireDatabase(client).insertEdge("purchase3", "PURCHASED", bob.id, basic.id);
+      // Create purchase relationships using MATCH...CREATE
+      await client.execute(`
+        MATCH (u:User {name: 'Alice'}), (p:Product {name: 'Premium Widget'})
+        CREATE (u)-[:PURCHASED]->(p)
+      `);
+      await client.execute(`
+        MATCH (u:User {name: 'Alice'}), (p:Product {name: 'Basic Widget'})
+        CREATE (u)-[:PURCHASED]->(p)
+      `);
+      await client.execute(`
+        MATCH (u:User {name: 'Bob'}), (p:Product {name: 'Basic Widget'})
+        CREATE (u)-[:PURCHASED]->(p)
+      `);
 
       // Filter by both source (gold tier) and target (premium category)
       const result = expectSuccess(
@@ -312,14 +320,15 @@ describe("Integration Tests", () => {
       await client.execute("CREATE (b:Employee {name: 'Bob', dept: 'sales'})");
       await client.execute("CREATE (t:Task {title: 'Code Review'})");
 
-      const employees = requireDatabase(client).getNodesByLabel("Employee");
-      const tasks = requireDatabase(client).getNodesByLabel("Task");
-      const alice = employees.find(e => e.properties.name === "Alice")!;
-      const bob = employees.find(e => e.properties.name === "Bob")!;
-      const task = tasks[0];
-
-      requireDatabase(client).insertEdge("assign1", "ASSIGNED", alice.id, task.id);
-      requireDatabase(client).insertEdge("assign2", "ASSIGNED", bob.id, task.id);
+      // Create assignments using MATCH...CREATE
+      await client.execute(`
+        MATCH (e:Employee {name: 'Alice'}), (t:Task {title: 'Code Review'})
+        CREATE (e)-[:ASSIGNED]->(t)
+      `);
+      await client.execute(`
+        MATCH (e:Employee {name: 'Bob'}), (t:Task {title: 'Code Review'})
+        CREATE (e)-[:ASSIGNED]->(t)
+      `);
 
       // Use parameter for filtering
       const result = expectSuccess(
@@ -497,26 +506,36 @@ describe("Integration Tests", () => {
     it("updates node properties", async () => {
       // First create a node
       await client.execute("CREATE (n:Person {name: 'Alice', age: 30})");
-      
-      // Get the node to find its ID (we need to use a workaround since SET requires id)
-      const nodes = requireDatabase(client).getNodesByLabel("Person");
-      expect(nodes).toHaveLength(1);
-      const nodeId = nodes[0].id;
 
-      // For now, let's verify SET works at the translator level
-      // The current implementation needs the node ID from MATCH context
-      // This is a limitation we'll address in a future iteration
+      // Update using MATCH...SET
+      await client.execute("MATCH (n:Person {name: 'Alice'}) SET n.age = 31");
+
+      // Verify the update
+      const result = expectSuccess(
+        await client.execute("MATCH (n:Person {name: 'Alice'}) RETURN n.age")
+      );
+      expect(result.data[0]["n.age"]).toBe(31);
     });
   });
 
   describe("DELETE", () => {
     it("deletes nodes", async () => {
       await client.execute("CREATE (n:Person {name: 'Alice'})");
-      expect(requireDatabase(client).countNodes()).toBe(1);
 
-      // DELETE requires the node to be matched first
-      // Current implementation needs ID from MATCH context
-      // This is a limitation we'll address
+      // Verify node exists
+      const beforeCount = expectSuccess(
+        await client.execute("MATCH (n:Person) RETURN count(n) as count")
+      );
+      expect(beforeCount.data[0].count).toBe(1);
+
+      // Delete using MATCH...DELETE
+      await client.execute("MATCH (n:Person {name: 'Alice'}) DELETE n");
+
+      // Verify node is deleted
+      const afterCount = expectSuccess(
+        await client.execute("MATCH (n:Person) RETURN count(n) as count")
+      );
+      expect(afterCount.data[0].count).toBe(0);
     });
   });
 
@@ -766,18 +785,16 @@ describe("Integration Tests", () => {
       }
     });
 
-    it("returns error for SQL failures", async () => {
-      // Try to create an edge to non-existent node
-      // This will fail due to foreign key constraint
+    it("handles queries gracefully when no matching nodes", async () => {
+      // Try to match and create relationship with non-existent nodes
       const result = await client.execute(
-        "CREATE (a:Person {name: 'Alice'})"
+        "MATCH (a:Person {name: 'NonExistent1'}), (b:Person {name: 'NonExistent2'}) CREATE (a)-[:KNOWS]->(b)"
       );
+      // Should succeed but create nothing (no matching nodes)
       expect(result.success).toBe(true);
-
-      // Manually try to insert invalid edge (bypassing normal flow)
-      expect(() => {
-        requireDatabase(client).insertEdge("edge1", "KNOWS", "nonexistent1", "nonexistent2");
-      }).toThrow();
+      if (result.success) {
+        expect(result.data).toHaveLength(0);
+      }
     });
   });
 
@@ -960,13 +977,15 @@ describe("Integration Tests", () => {
       await client.execute("CREATE (i:CC_Invoice {id: 'inv-1', amount: 100})");
       await client.execute("CREATE (c:CC_Customer {id: 'cust-1', name: 'Acme Corp'})");
 
-      // Create relationships manually
-      const users = requireDatabase(client).getNodesByLabel("CC_User");
-      const invoices = requireDatabase(client).getNodesByLabel("CC_Invoice");
-      const customers = requireDatabase(client).getNodesByLabel("CC_Customer");
-
-      requireDatabase(client).insertEdge("edge-1", "HAS_INVOICE", users[0].id, invoices[0].id);
-      requireDatabase(client).insertEdge("edge-2", "BILLED_TO", invoices[0].id, customers[0].id);
+      // Create relationships using MATCH...CREATE
+      await client.execute(`
+        MATCH (u:CC_User {id: 'user-1'}), (i:CC_Invoice {id: 'inv-1'})
+        CREATE (u)-[:HAS_INVOICE]->(i)
+      `);
+      await client.execute(`
+        MATCH (i:CC_Invoice {id: 'inv-1'}), (c:CC_Customer {id: 'cust-1'})
+        CREATE (i)-[:BILLED_TO]->(c)
+      `);
 
       // Query with multi-hop pattern
       const result = expectSuccess(
@@ -989,14 +1008,10 @@ describe("Integration Tests", () => {
       await client.execute("CREATE (c:NodeC {id: 'c1'})");
       await client.execute("CREATE (d:NodeD {id: 'd1'})");
 
-      const nodesA = requireDatabase(client).getNodesByLabel("NodeA");
-      const nodesB = requireDatabase(client).getNodesByLabel("NodeB");
-      const nodesC = requireDatabase(client).getNodesByLabel("NodeC");
-      const nodesD = requireDatabase(client).getNodesByLabel("NodeD");
-
-      requireDatabase(client).insertEdge("e1", "REL1", nodesA[0].id, nodesB[0].id);
-      requireDatabase(client).insertEdge("e2", "REL2", nodesB[0].id, nodesC[0].id);
-      requireDatabase(client).insertEdge("e3", "REL3", nodesC[0].id, nodesD[0].id);
+      // Create relationships using MATCH...CREATE
+      await client.execute("MATCH (a:NodeA {id: 'a1'}), (b:NodeB {id: 'b1'}) CREATE (a)-[:REL1]->(b)");
+      await client.execute("MATCH (b:NodeB {id: 'b1'}), (c:NodeC {id: 'c1'}) CREATE (b)-[:REL2]->(c)");
+      await client.execute("MATCH (c:NodeC {id: 'c1'}), (d:NodeD {id: 'd1'}) CREATE (c)-[:REL3]->(d)");
 
       const result = expectSuccess(
         await client.execute(
@@ -1034,19 +1049,11 @@ describe("Integration Tests", () => {
       await client.execute("CREATE (c1:TestCustomer {id: 'tc1', tier: 'gold'})");
       await client.execute("CREATE (c2:TestCustomer {id: 'tc2', tier: 'silver'})");
 
-      const users = requireDatabase(client).getNodesByLabel("TestUser");
-      const invoices = requireDatabase(client).getNodesByLabel("TestInvoice");
-      const customers = requireDatabase(client).getNodesByLabel("TestCustomer");
-
-      const inv1 = invoices.find(i => i.properties.id === "ti1")!;
-      const inv2 = invoices.find(i => i.properties.id === "ti2")!;
-      const cust1 = customers.find(c => c.properties.id === "tc1")!;
-      const cust2 = customers.find(c => c.properties.id === "tc2")!;
-
-      requireDatabase(client).insertEdge("te1", "HAS_INV", users[0].id, inv1.id);
-      requireDatabase(client).insertEdge("te2", "HAS_INV", users[0].id, inv2.id);
-      requireDatabase(client).insertEdge("te3", "FOR_CUST", inv1.id, cust1.id);
-      requireDatabase(client).insertEdge("te4", "FOR_CUST", inv2.id, cust2.id);
+      // Create relationships using MATCH...CREATE
+      await client.execute("MATCH (u:TestUser {id: 'tu1'}), (i:TestInvoice {id: 'ti1'}) CREATE (u)-[:HAS_INV]->(i)");
+      await client.execute("MATCH (u:TestUser {id: 'tu1'}), (i:TestInvoice {id: 'ti2'}) CREATE (u)-[:HAS_INV]->(i)");
+      await client.execute("MATCH (i:TestInvoice {id: 'ti1'}), (c:TestCustomer {id: 'tc1'}) CREATE (i)-[:FOR_CUST]->(c)");
+      await client.execute("MATCH (i:TestInvoice {id: 'ti2'}), (c:TestCustomer {id: 'tc2'}) CREATE (i)-[:FOR_CUST]->(c)");
 
       // Filter by customer tier
       const result = expectSuccess(
@@ -1067,13 +1074,15 @@ describe("Integration Tests", () => {
       await client.execute("CREATE (bs:CC_BankStatement {id: 'bs-1', name: 'Bank Statement 1'})");
       await client.execute("CREATE (t:CC_Transaction {id: 'tx-1', amount: 100})");
 
-      // Create relationships
-      const reports = requireDatabase(client).getNodesByLabel("CC_MonthlyReport");
-      const statements = requireDatabase(client).getNodesByLabel("CC_BankStatement");
-      const transactions = requireDatabase(client).getNodesByLabel("CC_Transaction");
-
-      requireDatabase(client).insertEdge("e1", "HAS_BANK_STATEMENT", reports[0].id, statements[0].id);
-      requireDatabase(client).insertEdge("e2", "PART_OF", transactions[0].id, statements[0].id);
+      // Create relationships using MATCH...CREATE
+      await client.execute(`
+        MATCH (r:CC_MonthlyReport {id: 'report-1'}), (bs:CC_BankStatement {id: 'bs-1'})
+        CREATE (r)-[:HAS_BANK_STATEMENT]->(bs)
+      `);
+      await client.execute(`
+        MATCH (t:CC_Transaction {id: 'tx-1'}), (bs:CC_BankStatement {id: 'bs-1'})
+        CREATE (t)-[:PART_OF]->(bs)
+      `);
 
       // This is the failing query - two separate MATCH clauses
       const result = expectSuccess(
@@ -1098,13 +1107,19 @@ describe("Integration Tests", () => {
       await client.execute("CREATE (t1:CC_Transaction {id: 'tx-2', amount: 50})");
       await client.execute("CREATE (t2:CC_Transaction {id: 'tx-3', amount: 75})");
 
-      const reports = requireDatabase(client).getNodesByLabel("CC_MonthlyReport").filter(r => r.properties.id === "report-2");
-      const statements = requireDatabase(client).getNodesByLabel("CC_BankStatement").filter(s => s.properties.id === "bs-2");
-      const transactions = requireDatabase(client).getNodesByLabel("CC_Transaction").filter(t => ["tx-2", "tx-3"].includes(t.properties.id as string));
-
-      requireDatabase(client).insertEdge("e3", "HAS_BANK_STATEMENT", reports[0].id, statements[0].id);
-      requireDatabase(client).insertEdge("e4", "PART_OF", transactions[0].id, statements[0].id);
-      requireDatabase(client).insertEdge("e5", "PART_OF", transactions[1].id, statements[0].id);
+      // Create relationships using MATCH...CREATE
+      await client.execute(`
+        MATCH (r:CC_MonthlyReport {id: 'report-2'}), (bs:CC_BankStatement {id: 'bs-2'})
+        CREATE (r)-[:HAS_BANK_STATEMENT]->(bs)
+      `);
+      await client.execute(`
+        MATCH (t:CC_Transaction {id: 'tx-2'}), (bs:CC_BankStatement {id: 'bs-2'})
+        CREATE (t)-[:PART_OF]->(bs)
+      `);
+      await client.execute(`
+        MATCH (t:CC_Transaction {id: 'tx-3'}), (bs:CC_BankStatement {id: 'bs-2'})
+        CREATE (t)-[:PART_OF]->(bs)
+      `);
 
       const result = expectSuccess(
         await client.execute(
@@ -1126,10 +1141,11 @@ describe("Integration Tests", () => {
       await client.execute("CREATE (r:CC_MonthlyReport {id: 'report-3'})");
       await client.execute("CREATE (bs:CC_BankStatement {id: 'bs-3'})");
 
-      const reports = requireDatabase(client).getNodesByLabel("CC_MonthlyReport").filter(r => r.properties.id === "report-3");
-      const statements = requireDatabase(client).getNodesByLabel("CC_BankStatement").filter(s => s.properties.id === "bs-3");
-
-      requireDatabase(client).insertEdge("e6", "HAS_BANK_STATEMENT", reports[0].id, statements[0].id);
+      // Create relationship using MATCH...CREATE
+      await client.execute(`
+        MATCH (r:CC_MonthlyReport {id: 'report-3'}), (bs:CC_BankStatement {id: 'bs-3'})
+        CREATE (r)-[:HAS_BANK_STATEMENT]->(bs)
+      `);
 
       const result = expectSuccess(
         await client.execute(
@@ -1286,12 +1302,11 @@ describe("Integration Tests", () => {
       await client.execute("CREATE (a:Person {name: 'Alice'})");
       await client.execute("CREATE (b:Person {name: 'Bob'})");
 
-      // Get node IDs
-      const alice = requireDatabase(client).getNodesByLabel("Person").find(n => n.properties.name === "Alice")!;
-      const bob = requireDatabase(client).getNodesByLabel("Person").find(n => n.properties.name === "Bob")!;
-
-      // Create relationship with edge variable
-      requireDatabase(client).insertEdge("knows-1", "KNOWS", alice.id, bob.id, { since: 2020 });
+      // Create relationship using MATCH...CREATE with properties
+      await client.execute(`
+        MATCH (a:Person {name: 'Alice'}), (b:Person {name: 'Bob'})
+        CREATE (a)-[:KNOWS {since: 2020}]->(b)
+      `);
 
       // Query and return node properties (edge return not fully supported)
       const result = expectSuccess(
@@ -1477,10 +1492,7 @@ describe("Integration Tests", () => {
       // Create a person with a friend
       await client.execute("CREATE (n:Person {name: 'Alice'})");
       await client.execute("CREATE (m:Person {name: 'Bob'})");
-      
-      const alice = requireDatabase(client).getNodesByLabel("Person").find(n => n.properties.name === "Alice")!;
-      const bob = requireDatabase(client).getNodesByLabel("Person").find(n => n.properties.name === "Bob")!;
-      requireDatabase(client).insertEdge("e1", "KNOWS", alice.id, bob.id);
+      await client.execute("MATCH (a:Person {name: 'Alice'}), (b:Person {name: 'Bob'}) CREATE (a)-[:KNOWS]->(b)");
 
       const result = expectSuccess(
         await client.execute(
@@ -1498,12 +1510,8 @@ describe("Integration Tests", () => {
       await client.execute("CREATE (n:Person {name: 'Alice'})");
       await client.execute("CREATE (m1:Person {name: 'Bob'})");
       await client.execute("CREATE (m2:Person {name: 'Charlie'})");
-      
-      const alice = requireDatabase(client).getNodesByLabel("Person").find(n => n.properties.name === "Alice")!;
-      const bob = requireDatabase(client).getNodesByLabel("Person").find(n => n.properties.name === "Bob")!;
-      const charlie = requireDatabase(client).getNodesByLabel("Person").find(n => n.properties.name === "Charlie")!;
-      requireDatabase(client).insertEdge("e1", "KNOWS", alice.id, bob.id);
-      requireDatabase(client).insertEdge("e2", "KNOWS", alice.id, charlie.id);
+      await client.execute("MATCH (a:Person {name: 'Alice'}), (b:Person {name: 'Bob'}) CREATE (a)-[:KNOWS]->(b)");
+      await client.execute("MATCH (a:Person {name: 'Alice'}), (c:Person {name: 'Charlie'}) CREATE (a)-[:KNOWS]->(c)");
 
       const result = expectSuccess(
         await client.execute(
@@ -1521,10 +1529,7 @@ describe("Integration Tests", () => {
       // Create a person with a friend but no employer
       await client.execute("CREATE (n:Person {name: 'Alice'})");
       await client.execute("CREATE (m:Person {name: 'Bob'})");
-      
-      const alice = requireDatabase(client).getNodesByLabel("Person").find(n => n.properties.name === "Alice")!;
-      const bob = requireDatabase(client).getNodesByLabel("Person").find(n => n.properties.name === "Bob")!;
-      requireDatabase(client).insertEdge("e1", "KNOWS", alice.id, bob.id);
+      await client.execute("MATCH (a:Person {name: 'Alice'}), (b:Person {name: 'Bob'}) CREATE (a)-[:KNOWS]->(b)");
 
       const result = expectSuccess(
         await client.execute(`
@@ -1546,12 +1551,8 @@ describe("Integration Tests", () => {
       await client.execute("CREATE (n:Person {name: 'Alice'})");
       await client.execute("CREATE (m1:Person {name: 'Bob', age: 30})");
       await client.execute("CREATE (m2:Person {name: 'Charlie', age: 20})");
-      
-      const alice = requireDatabase(client).getNodesByLabel("Person").find(n => n.properties.name === "Alice")!;
-      const bob = requireDatabase(client).getNodesByLabel("Person").find(n => n.properties.name === "Bob")!;
-      const charlie = requireDatabase(client).getNodesByLabel("Person").find(n => n.properties.name === "Charlie")!;
-      requireDatabase(client).insertEdge("e1", "KNOWS", alice.id, bob.id);
-      requireDatabase(client).insertEdge("e2", "KNOWS", alice.id, charlie.id);
+      await client.execute("MATCH (a:Person {name: 'Alice'}), (b:Person {name: 'Bob'}) CREATE (a)-[:KNOWS]->(b)");
+      await client.execute("MATCH (a:Person {name: 'Alice'}), (c:Person {name: 'Charlie'}) CREATE (a)-[:KNOWS]->(c)");
 
       const result = expectSuccess(
         await client.execute(
@@ -1568,10 +1569,7 @@ describe("Integration Tests", () => {
       // Create: Person -> Works at Company, Person may or may not have friends
       await client.execute("CREATE (n:Person {name: 'Alice'})");
       await client.execute("CREATE (c:Company {name: 'Acme'})");
-      
-      const alice = requireDatabase(client).getNodesByLabel("Person").find(n => n.properties.name === "Alice")!;
-      const acme = requireDatabase(client).getNodesByLabel("Company").find(c => c.properties.name === "Acme")!;
-      requireDatabase(client).insertEdge("e1", "WORKS_AT", alice.id, acme.id);
+      await client.execute("MATCH (a:Person {name: 'Alice'}), (c:Company {name: 'Acme'}) CREATE (a)-[:WORKS_AT]->(c)");
 
       const result = expectSuccess(
         await client.execute(`
@@ -1889,10 +1887,8 @@ describe("Integration Tests", () => {
     });
 
     it("chains WITH followed by MATCH", async () => {
-      // Create some relationships
-      const alice = requireDatabase(client).getNodesByLabel("Person").find(n => n.properties.name === "Alice")!;
-      const bob = requireDatabase(client).getNodesByLabel("Person").find(n => n.properties.name === "Bob")!;
-      requireDatabase(client).insertEdge("e1", "KNOWS", alice.id, bob.id);
+      // Create relationship using Cypher
+      await client.execute("MATCH (a:Person {name: 'Alice'}), (b:Person {name: 'Bob'}) CREATE (a)-[:KNOWS]->(b)");
 
       const result = expectSuccess(
         await client.execute(`
@@ -2608,17 +2604,11 @@ describe("Integration Tests", () => {
     });
 
     it("returns all relationship types with db.relationshipTypes()", async () => {
-      // Create nodes and relationships
-      await client.execute("CREATE (a:Person {name: 'Alice'})");
-      await client.execute("CREATE (b:Person {name: 'Bob'})");
-      await client.execute("CREATE (c:Company {name: 'Acme'})");
-      
-      const alice = requireDatabase(client).getNodesByLabel("Person").find(n => n.properties.name === "Alice")!;
-      const bob = requireDatabase(client).getNodesByLabel("Person").find(n => n.properties.name === "Bob")!;
-      const acme = requireDatabase(client).getNodesByLabel("Company")[0];
-      
-      requireDatabase(client).insertEdge("e1", "KNOWS", alice.id, bob.id);
-      requireDatabase(client).insertEdge("e2", "WORKS_AT", alice.id, acme.id);
+      // Create nodes and relationships using Cypher
+      await client.execute(`
+        CREATE (a:Person {name: 'Alice'})-[:KNOWS]->(b:Person {name: 'Bob'}),
+               (a)-[:WORKS_AT]->(c:Company {name: 'Acme'})
+      `);
 
       const result = expectSuccess(
         await client.execute("CALL db.relationshipTypes()")

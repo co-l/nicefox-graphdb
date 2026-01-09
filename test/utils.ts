@@ -95,6 +95,14 @@ function createRemoteTestClient(): TestClient {
     headers["Authorization"] = `Bearer ${REMOTE_API_KEY}`;
   }
 
+  // JSON replacer to handle types that JSON.stringify can't serialize
+  const jsonReplacer = (_key: string, value: unknown) => {
+    if (typeof value === "bigint") {
+      return Number(value); // Convert BigInt to number (may lose precision for very large values)
+    }
+    return value;
+  };
+
   return {
     async execute(
       cypher: string,
@@ -103,7 +111,7 @@ function createRemoteTestClient(): TestClient {
       const response = await fetch(endpoint, {
         method: "POST",
         headers,
-        body: JSON.stringify({ cypher, params }),
+        body: JSON.stringify({ cypher, params }, jsonReplacer),
       });
 
       const data = await response.json();

@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { parse } from "../src/parser";
 import { createApp } from "../src/routes";
 import { DatabaseManager } from "../src/db";
-import { createTestClient, TestClient, requireDatabase } from "./utils";
+import { createTestClient, TestClient } from "./utils";
 
 /**
  * Security tests - SQL injection, Cypher injection, and other attack vectors
@@ -38,8 +38,12 @@ describe("Security Tests", () => {
         expect(check.data[0]["n.value"]).toBe("'; DROP TABLE nodes; --");
       }
 
-      // Verify nodes table still has data
-      expect(requireDatabase(client).countNodes()).toBeGreaterThan(0);
+      // Verify nodes table still has data using Cypher
+      const countResult = await client.execute("MATCH (n) RETURN count(n) as count");
+      expect(countResult.success).toBe(true);
+      if (countResult.success) {
+        expect(countResult.data[0].count).toBeGreaterThan(0);
+      }
     });
 
     it("escapes double quotes in string values", async () => {
@@ -66,9 +70,12 @@ describe("Security Tests", () => {
       );
       expect(result.success).toBe(true);
 
-      // Verify data integrity
-      const nodeCount = requireDatabase(client).countNodes();
-      expect(nodeCount).toBeGreaterThanOrEqual(3); // Original 3 + new one
+      // Verify data integrity using Cypher
+      const countResult = await client.execute("MATCH (n) RETURN count(n) as count");
+      expect(countResult.success).toBe(true);
+      if (countResult.success) {
+        expect(countResult.data[0].count).toBeGreaterThanOrEqual(3); // Original 3 + new one
+      }
     });
 
     it("escapes backslashes and special characters", async () => {
@@ -88,8 +95,12 @@ describe("Security Tests", () => {
         expect(result.success).toBe(true);
       }
 
-      // Verify database integrity
-      expect(requireDatabase(client).countNodes()).toBeGreaterThan(0);
+      // Verify database integrity using Cypher
+      const countResult = await client.execute("MATCH (n) RETURN count(n) as count");
+      expect(countResult.success).toBe(true);
+      if (countResult.success) {
+        expect(countResult.data[0].count).toBeGreaterThan(0);
+      }
     });
 
     it("prevents SQL injection via numeric parameters", async () => {
@@ -189,12 +200,8 @@ describe("Security Tests", () => {
     });
 
     it("correctly handles multiple relationship types in traversals", async () => {
-      // Setup: create edges
-      const users = requireDatabase(client).getNodesByLabel("User");
-      const secrets = requireDatabase(client).getNodesByLabel("Secret");
-      if (users.length > 0 && secrets.length > 0) {
-        requireDatabase(client).insertEdge("access1", "CAN_ACCESS", users[0].id, secrets[0].id);
-      }
+      // Setup: create edge from Alice to Secret using Cypher
+      await client.execute("MATCH (u:User {name: 'Alice'}), (s:Secret) CREATE (u)-[:CAN_ACCESS]->(s)");
 
       // Multiple relationship types are valid syntax
       // Security should be handled at the authorization layer, not by syntax limitations

@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { ExecutionResult } from "../src/executor";
-import { createTestClient, TestClient, requireDatabase } from "./utils";
+import { createTestClient, TestClient } from "./utils";
 
 /**
  * Tests for Cypher query patterns from /tmp/cypherqueries.json
@@ -1033,14 +1033,8 @@ describe("CypherQueries.json Patterns", () => {
         await exec("CREATE (u:User {user_id: 'u2', first_name: 'Bob', last_name: 'Jones', email: 'bob@example.com'})");
         await exec("CREATE (c:Company {company_id: 'c1', name: 'Acme'})");
         
-        // Link users to company
-        const users = (await exec("MATCH (u:User) RETURN u.user_id, id(u) as uid")).data;
-        const company = (await exec("MATCH (c:Company) RETURN id(c) as cid")).data[0];
-        
-        for (const user of users) {
-          // Column name uses dot notation: u.user_id
-          requireDatabase(client).insertEdge(`admin-${user["u.user_id"]}`, "IS_ADMIN", user.uid as string, company.cid as string);
-        }
+        // Link users to company using Cypher
+        await exec("MATCH (u:User), (c:Company) CREATE (u)-[:IS_ADMIN]->(c)");
 
         // Collect users into objects
         const result = await exec(`
@@ -1094,21 +1088,14 @@ describe("CypherQueries.json Patterns", () => {
       it("filters by relationship property in MATCH pattern", async () => {
         // Pattern: (p:Product)-[:PRODUCT_INFO{market_place:$market_place}]->(pi:ProductInfo)
         await exec("CREATE (p:Product {product_id: 'p1', sku: 'SKU001'})");
-        
+
         // Create product infos with different market_places
-        const product = (await exec("MATCH (p:Product {product_id: 'p1'}) RETURN id(p) as pid")).data[0];
-        
         await exec("CREATE (pi:ProductInfo {title: 'US Product', price: 99.99})");
         await exec("CREATE (pi:ProductInfo {title: 'EU Product', price: 89.99})");
-        
-        const productInfos = (await exec("MATCH (pi:ProductInfo) RETURN pi.title, id(pi) as piid")).data;
-        
-        // Column name uses dot notation: pi.title
-        const usInfo = productInfos.find(pi => pi["pi.title"] === "US Product");
-        const euInfo = productInfos.find(pi => pi["pi.title"] === "EU Product");
-        
-        requireDatabase(client).insertEdge("pi-us", "PRODUCT_INFO", product.pid as string, usInfo?.piid as string, { market_place: "us" });
-        requireDatabase(client).insertEdge("pi-eu", "PRODUCT_INFO", product.pid as string, euInfo?.piid as string, { market_place: "eu" });
+
+        // Create relationships with market_place property using Cypher
+        await exec("MATCH (p:Product {product_id: 'p1'}), (pi:ProductInfo {title: 'US Product'}) CREATE (p)-[:PRODUCT_INFO {market_place: 'us'}]->(pi)");
+        await exec("MATCH (p:Product {product_id: 'p1'}), (pi:ProductInfo {title: 'EU Product'}) CREATE (p)-[:PRODUCT_INFO {market_place: 'eu'}]->(pi)");
 
         // Query with relationship property filter
         const result = await exec(`
@@ -1127,11 +1114,9 @@ describe("CypherQueries.json Patterns", () => {
         // Pattern: MATCH (pi:ProductInfo)-[s:SOLD_BY]->(a) DELETE s
         await exec("CREATE (pi:ProductInfo {title: 'Product'})");
         await exec("CREATE (a:AmazonAccount {merchant_id: 'M001'})");
-        
-        const pi = (await exec("MATCH (pi:ProductInfo) RETURN id(pi) as piid")).data[0];
-        const acc = (await exec("MATCH (a:AmazonAccount) RETURN id(a) as aid")).data[0];
-        
-        requireDatabase(client).insertEdge("sold-by-1", "SOLD_BY", pi.piid as string, acc.aid as string);
+
+        // Create relationship using Cypher
+        await exec("MATCH (pi:ProductInfo), (a:AmazonAccount) CREATE (pi)-[:SOLD_BY]->(a)");
 
         // Verify relationship exists
         let check = await exec("MATCH (pi:ProductInfo)-[:SOLD_BY]->(a:AmazonAccount) RETURN pi.title");
@@ -1170,14 +1155,11 @@ describe("CypherQueries.json Patterns", () => {
         await exec("CREATE (a:Person {name: 'Alice'})");
         await exec("CREATE (b:Person {name: 'Bob'})");
         await exec("CREATE (c:Company {name: 'Acme'})");
-        
-        const alice = (await exec("MATCH (p:Person {name: 'Alice'}) RETURN id(p) as pid")).data[0];
-        const bob = (await exec("MATCH (p:Person {name: 'Bob'}) RETURN id(p) as pid")).data[0];
-        const acme = (await exec("MATCH (c:Company) RETURN id(c) as cid")).data[0];
-        
-        requireDatabase(client).insertEdge("r1", "KNOWS", alice.pid as string, bob.pid as string);
-        requireDatabase(client).insertEdge("r2", "WORKS_AT", alice.pid as string, acme.cid as string);
-        requireDatabase(client).insertEdge("r3", "WORKS_AT", bob.pid as string, acme.cid as string);
+
+        // Create relationships using Cypher
+        await exec("MATCH (a:Person {name: 'Alice'}), (b:Person {name: 'Bob'}) CREATE (a)-[:KNOWS]->(b)");
+        await exec("MATCH (a:Person {name: 'Alice'}), (c:Company {name: 'Acme'}) CREATE (a)-[:WORKS_AT]->(c)");
+        await exec("MATCH (b:Person {name: 'Bob'}), (c:Company {name: 'Acme'}) CREATE (b)-[:WORKS_AT]->(c)");
 
         const result = await exec("MATCH (m)-[r]->(o) RETURN count(r) as count");
 
@@ -1191,11 +1173,9 @@ describe("CypherQueries.json Patterns", () => {
         // Pattern: MATCH (u:User{email:$email})-[prev_admin:IS_ADMIN]->(c:Company) DETACH DELETE prev_admin, c
         await exec("CREATE (u:User {email: 'test@example.com', name: 'Test User'})");
         await exec("CREATE (c:Company {company_id: 'c1', name: 'Old Company'})");
-        
-        const user = (await exec("MATCH (u:User) RETURN id(u) as uid")).data[0];
-        const company = (await exec("MATCH (c:Company) RETURN id(c) as cid")).data[0];
-        
-        requireDatabase(client).insertEdge("admin-rel", "IS_ADMIN", user.uid as string, company.cid as string);
+
+        // Create relationship using Cypher
+        await exec("MATCH (u:User), (c:Company) CREATE (u)-[:IS_ADMIN]->(c)");
 
         // Verify setup
         let check = await exec("MATCH (u:User)-[:IS_ADMIN]->(c:Company) RETURN u.email, c.name");
@@ -1223,13 +1203,10 @@ describe("CypherQueries.json Patterns", () => {
         await exec("CREATE (c:Company {company_id: 'c1'})");
         await exec("CREATE (cat:Category {name: 'Electronics'})");
         await exec("CREATE (p:Product {name: 'Laptop'})");
-        
-        const company = (await exec("MATCH (c:Company) RETURN id(c) as cid")).data[0];
-        const category = (await exec("MATCH (cat:Category) RETURN id(cat) as catid")).data[0];
-        const product = (await exec("MATCH (p:Product) RETURN id(p) as pid")).data[0];
-        
-        requireDatabase(client).insertEdge("r1", "HAS_CATEGORY", company.cid as string, category.catid as string);
-        requireDatabase(client).insertEdge("r2", "CONTAINS", category.catid as string, product.pid as string);
+
+        // Create relationships using Cypher
+        await exec("MATCH (c:Company), (cat:Category) CREATE (c)-[:HAS_CATEGORY]->(cat)");
+        await exec("MATCH (cat:Category), (p:Product) CREATE (cat)-[:CONTAINS]->(p)");
 
         // Find products reachable within 1-3 hops from company
         const result = await exec(`
@@ -1248,29 +1225,21 @@ describe("CypherQueries.json Patterns", () => {
         await exec("CREATE (c:Company {company_id: 'c1'})");
         await exec("CREATE (c:Company {company_id: 'c2'})");
         await exec("CREATE (f:Feature {feature: 'export'})");
-        
-        const companies = (await exec("MATCH (c:Company) RETURN c.company_id, id(c) as cid")).data;
-        const feature = (await exec("MATCH (f:Feature) RETURN id(f) as fid")).data[0];
-        
-        // Company 1 uses feature 3 times
-        for (let i = 0; i < 3; i++) {
-          requireDatabase(client).insertEdge(`used-c1-${i}`, "USED", companies[0].cid as string, feature.fid as string);
-        }
+
+        // Company 1 uses feature 3 times - create 3 separate USED edges
+        await exec("MATCH (c:Company {company_id: 'c1'}), (f:Feature {feature: 'export'}) CREATE (c)-[:USED]->(f)");
+        await exec("MATCH (c:Company {company_id: 'c1'}), (f:Feature {feature: 'export'}) CREATE (c)-[:USED]->(f)");
+        await exec("MATCH (c:Company {company_id: 'c1'}), (f:Feature {feature: 'export'}) CREATE (c)-[:USED]->(f)");
         // Company 2 uses feature 1 time
-        requireDatabase(client).insertEdge("used-c2-0", "USED", companies[1].cid as string, feature.fid as string);
+        await exec("MATCH (c:Company {company_id: 'c2'}), (f:Feature {feature: 'export'}) CREATE (c)-[:USED]->(f)");
 
         // Create users for each company
         await exec("CREATE (u:User {email: 'user1@c1.com', company_id: 'c1'})");
         await exec("CREATE (u:User {email: 'user2@c2.com', company_id: 'c2'})");
-        
-        const users = (await exec("MATCH (u:User) RETURN u.email, u.company_id, id(u) as uid")).data;
-        for (const user of users) {
-          // Column names use dot notation
-          const company = companies.find(c => c["c.company_id"] === user["u.company_id"]);
-          if (company) {
-            requireDatabase(client).insertEdge(`admin-${user["u.email"]}`, "IS_ADMIN", user.uid as string, company.cid as string);
-          }
-        }
+
+        // Link users to their companies using Cypher
+        await exec("MATCH (u:User {company_id: 'c1'}), (c:Company {company_id: 'c1'}) CREATE (u)-[:IS_ADMIN]->(c)");
+        await exec("MATCH (u:User {company_id: 'c2'}), (c:Company {company_id: 'c2'}) CREATE (u)-[:IS_ADMIN]->(c)");
 
         // Query feature usage with ORDER BY count
         const result = await exec(`

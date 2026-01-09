@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { ExecutionResult } from "../src/executor";
-import { createTestClient, TestClient, requireDatabase } from "./utils";
+import { createTestClient, TestClient } from "./utils";
 
 /**
  * Real-world scenario tests - Multi-step workflows that simulate actual usage patterns
@@ -33,18 +33,11 @@ describe("Real-World Scenarios", () => {
       await exec("CREATE (u:User {name: 'Diana', email: 'diana@example.com', joined: 2022})");
       await exec("CREATE (u:User {name: 'Eve', email: 'eve@example.com', joined: 2022})");
 
-      // Get user IDs for creating relationships
-      const users = (await exec("MATCH (u:User) RETURN u.name, id(u)")).data;
-      const userIds: Record<string, string> = {};
-      for (const row of users) {
-        userIds[row["u.name"] as string] = row["id(u)"] as string;
-      }
-
-      // Create friendships via raw DB (since we need existing node IDs)
-      requireDatabase(client).insertEdge("f1", "FRIENDS", userIds["Alice"], userIds["Bob"], { since: 2021 });
-      requireDatabase(client).insertEdge("f2", "FRIENDS", userIds["Bob"], userIds["Charlie"], { since: 2021 });
-      requireDatabase(client).insertEdge("f3", "FRIENDS", userIds["Charlie"], userIds["Diana"], { since: 2022 });
-      requireDatabase(client).insertEdge("f4", "FRIENDS", userIds["Alice"], userIds["Eve"], { since: 2022 });
+      // Create friendships using Cypher
+      await exec("MATCH (a:User {name: 'Alice'}), (b:User {name: 'Bob'}) CREATE (a)-[:FRIENDS {since: 2021}]->(b)");
+      await exec("MATCH (a:User {name: 'Bob'}), (b:User {name: 'Charlie'}) CREATE (a)-[:FRIENDS {since: 2021}]->(b)");
+      await exec("MATCH (a:User {name: 'Charlie'}), (b:User {name: 'Diana'}) CREATE (a)-[:FRIENDS {since: 2022}]->(b)");
+      await exec("MATCH (a:User {name: 'Alice'}), (b:User {name: 'Eve'}) CREATE (a)-[:FRIENDS {since: 2022}]->(b)");
 
       // Find Alice's direct friends
       const aliceFriends = await exec(`
@@ -67,25 +60,19 @@ describe("Real-World Scenarios", () => {
       await exec("CREATE (u:User {name: 'Alice', status: 'active'})");
       await exec("CREATE (u:User {name: 'Troll', status: 'active'})");
 
-      const users = (await exec("MATCH (u:User) RETURN u.name, id(u)")).data;
-      const userIds: Record<string, string> = {};
-      for (const row of users) {
-        userIds[row["u.name"] as string] = row["id(u)"] as string;
-      }
-
-      // Alice blocks Troll
-      requireDatabase(client).insertEdge("b1", "BLOCKS", userIds["Alice"], userIds["Troll"], { 
-        reason: "spam", 
-        blockedAt: "2024-01-15" 
-      });
+      // Alice blocks Troll using Cypher
+      await exec(`
+        MATCH (a:User {name: 'Alice'}), (t:User {name: 'Troll'})
+        CREATE (a)-[:BLOCKS {reason: 'spam', blockedAt: '2024-01-15'}]->(t)
+      `);
 
       // Verify block exists
       const blocks = await exec("MATCH (a:User {name: 'Alice'})-[:BLOCKS]->(blocked:User) RETURN blocked.name");
       expect(blocks.data).toHaveLength(1);
       expect(blocks.data[0]["blocked.name"]).toBe("Troll");
 
-      // Remove block
-      requireDatabase(client).deleteEdge("b1");
+      // Remove block using Cypher DELETE
+      await exec("MATCH (a:User {name: 'Alice'})-[r:BLOCKS]->(t:User {name: 'Troll'}) DELETE r");
 
       // Verify block is gone
       const blocksAfter = await exec("MATCH (a:User {name: 'Alice'})-[:BLOCKS]->(blocked:User) RETURN blocked.name");
@@ -109,24 +96,11 @@ describe("Real-World Scenarios", () => {
       // Create customer
       await exec("CREATE (c:Customer {name: 'John Doe', email: 'john@example.com', tier: 'gold'})");
 
-      // Link products to categories
-      const categories = (await exec("MATCH (c:Category) RETURN c.name, id(c)")).data;
-      const products = (await exec("MATCH (p:Product) RETURN p.name, id(p)")).data;
-
-      const catIds: Record<string, string> = {};
-      const prodIds: Record<string, string> = {};
-
-      for (const row of categories) {
-        catIds[row["c.name"] as string] = row["id(c)"] as string;
-      }
-      for (const row of products) {
-        prodIds[row["p.name"] as string] = row["id(p)"] as string;
-      }
-
-      requireDatabase(client).insertEdge("pc1", "IN_CATEGORY", prodIds["Laptop"], catIds["Electronics"]);
-      requireDatabase(client).insertEdge("pc2", "IN_CATEGORY", prodIds["Headphones"], catIds["Electronics"]);
-      requireDatabase(client).insertEdge("pc3", "IN_CATEGORY", prodIds["TypeScript Handbook"], catIds["Books"]);
-      requireDatabase(client).insertEdge("pc4", "IN_CATEGORY", prodIds["T-Shirt"], catIds["Clothing"]);
+      // Link products to categories using Cypher
+      await exec("MATCH (p:Product {name: 'Laptop'}), (c:Category {name: 'Electronics'}) CREATE (p)-[:IN_CATEGORY]->(c)");
+      await exec("MATCH (p:Product {name: 'Headphones'}), (c:Category {name: 'Electronics'}) CREATE (p)-[:IN_CATEGORY]->(c)");
+      await exec("MATCH (p:Product {name: 'TypeScript Handbook'}), (c:Category {name: 'Books'}) CREATE (p)-[:IN_CATEGORY]->(c)");
+      await exec("MATCH (p:Product {name: 'T-Shirt'}), (c:Category {name: 'Clothing'}) CREATE (p)-[:IN_CATEGORY]->(c)");
 
       // Query products in Electronics category (filters by target node property)
       const electronics = await exec(`
@@ -154,18 +128,10 @@ describe("Real-World Scenarios", () => {
       await exec("CREATE (o:Order {orderId: 'ORD-002', status: 'shipped', total: 19.99, createdAt: '2024-01-15'})");
       await exec("CREATE (o:Order {orderId: 'ORD-003', status: 'pending', total: 39.98, createdAt: '2024-01-20'})");
 
-      // Link orders to customer
-      const customer = (await exec("MATCH (c:Customer {customerId: 'CUST-001'}) RETURN id(c)")).data[0];
-      const orders = (await exec("MATCH (o:Order) RETURN o.orderId, id(o)")).data;
-
-      for (const order of orders) {
-        requireDatabase(client).insertEdge(
-          `placed-${order["o.orderId"]}`,
-          "PLACED",
-          customer["id(c)"] as string,
-          order["id(o)"] as string
-        );
-      }
+      // Link orders to customer using Cypher
+      await exec("MATCH (c:Customer {customerId: 'CUST-001'}), (o:Order {orderId: 'ORD-001'}) CREATE (c)-[:PLACED]->(o)");
+      await exec("MATCH (c:Customer {customerId: 'CUST-001'}), (o:Order {orderId: 'ORD-002'}) CREATE (c)-[:PLACED]->(o)");
+      await exec("MATCH (c:Customer {customerId: 'CUST-001'}), (o:Order {orderId: 'ORD-003'}) CREATE (c)-[:PLACED]->(o)");
 
       // Count customer's orders
       const orderCount = await exec(`
@@ -195,18 +161,12 @@ describe("Real-World Scenarios", () => {
       await exec("CREATE (e:Entity {name: 'Princeton University', type: 'Institution'})");
       await exec("CREATE (e:Entity {name: 'Nobel Prize in Physics', type: 'Award', year: 1921})");
 
-      const entities = (await exec("MATCH (e:Entity) RETURN e.name, id(e)")).data;
-      const entityIds: Record<string, string> = {};
-      for (const row of entities) {
-        entityIds[row["e.name"] as string] = row["id(e)"] as string;
-      }
-
-      // Create relationships
-      requireDatabase(client).insertEdge("r1", "DEVELOPED", entityIds["Albert Einstein"], entityIds["Theory of Relativity"]);
-      requireDatabase(client).insertEdge("r2", "BORN_IN", entityIds["Albert Einstein"], entityIds["Germany"]);
-      requireDatabase(client).insertEdge("r3", "WORKED_AT", entityIds["Albert Einstein"], entityIds["Princeton University"]);
-      requireDatabase(client).insertEdge("r4", "RECEIVED", entityIds["Albert Einstein"], entityIds["Nobel Prize in Physics"]);
-      requireDatabase(client).insertEdge("r5", "LIVED_IN", entityIds["Albert Einstein"], entityIds["Switzerland"], { years: "1895-1914" });
+      // Create relationships using Cypher
+      await exec("MATCH (e:Entity {name: 'Albert Einstein'}), (t:Entity {name: 'Theory of Relativity'}) CREATE (e)-[:DEVELOPED]->(t)");
+      await exec("MATCH (e:Entity {name: 'Albert Einstein'}), (c:Entity {name: 'Germany'}) CREATE (e)-[:BORN_IN]->(c)");
+      await exec("MATCH (e:Entity {name: 'Albert Einstein'}), (p:Entity {name: 'Princeton University'}) CREATE (e)-[:WORKED_AT]->(p)");
+      await exec("MATCH (e:Entity {name: 'Albert Einstein'}), (n:Entity {name: 'Nobel Prize in Physics'}) CREATE (e)-[:RECEIVED]->(n)");
+      await exec("MATCH (e:Entity {name: 'Albert Einstein'}), (s:Entity {name: 'Switzerland'}) CREATE (e)-[:LIVED_IN {years: '1895-1914'}]->(s)");
 
       // Query: What did Einstein develop?
       const developed = await exec(`
@@ -245,32 +205,15 @@ describe("Real-World Scenarios", () => {
       await exec("CREATE (t:Task {title: 'Write tests', status: 'pending', priority: 'medium'})");
       await exec("CREATE (t:Task {title: 'Documentation', status: 'pending', priority: 'low'})");
 
-      // Get IDs
-      const project = (await exec("MATCH (p:Project) RETURN id(p)")).data[0];
-      const members = (await exec("MATCH (m:TeamMember) RETURN m.name, id(m)")).data;
-      const tasks = (await exec("MATCH (t:Task) RETURN t.title, id(t)")).data;
+      // Link tasks to project using Cypher
+      await exec("MATCH (t:Task), (p:Project) CREATE (t)-[:BELONGS_TO]->(p)");
 
-      const memberIds: Record<string, string> = {};
-      const taskIds: Record<string, string> = {};
-
-      for (const row of members) {
-        memberIds[row["m.name"] as string] = row["id(m)"] as string;
-      }
-      for (const row of tasks) {
-        taskIds[row["t.title"] as string] = row["id(t)"] as string;
-      }
-
-      // Link tasks to project
-      for (const taskId of Object.values(taskIds)) {
-        requireDatabase(client).insertEdge(`pt-${taskId}`, "BELONGS_TO", taskId, project["id(p)"] as string);
-      }
-
-      // Assign tasks to members
-      requireDatabase(client).insertEdge("a1", "ASSIGNED_TO", taskIds["Design mockups"], memberIds["Alice"]);
-      requireDatabase(client).insertEdge("a2", "ASSIGNED_TO", taskIds["Implement frontend"], memberIds["Bob"]);
-      requireDatabase(client).insertEdge("a3", "ASSIGNED_TO", taskIds["Setup CI/CD"], memberIds["Charlie"]);
-      requireDatabase(client).insertEdge("a4", "ASSIGNED_TO", taskIds["Write tests"], memberIds["Bob"]);
-      requireDatabase(client).insertEdge("a5", "ASSIGNED_TO", taskIds["Write tests"], memberIds["Charlie"]);
+      // Assign tasks to members using Cypher
+      await exec("MATCH (t:Task {title: 'Design mockups'}), (m:TeamMember {name: 'Alice'}) CREATE (t)-[:ASSIGNED_TO]->(m)");
+      await exec("MATCH (t:Task {title: 'Implement frontend'}), (m:TeamMember {name: 'Bob'}) CREATE (t)-[:ASSIGNED_TO]->(m)");
+      await exec("MATCH (t:Task {title: 'Setup CI/CD'}), (m:TeamMember {name: 'Charlie'}) CREATE (t)-[:ASSIGNED_TO]->(m)");
+      await exec("MATCH (t:Task {title: 'Write tests'}), (m:TeamMember {name: 'Bob'}) CREATE (t)-[:ASSIGNED_TO]->(m)");
+      await exec("MATCH (t:Task {title: 'Write tests'}), (m:TeamMember {name: 'Charlie'}) CREATE (t)-[:ASSIGNED_TO]->(m)");
 
       // Find Bob's tasks (filters by target node property)
       const bobTasks = await exec(`
@@ -325,28 +268,15 @@ describe("Real-World Scenarios", () => {
         views: 0
       })`);
 
-      // Get IDs
-      const authors = (await exec("MATCH (a:Author) RETURN a.name, id(a)")).data;
-      const tags = (await exec("MATCH (t:Tag) RETURN t.name, id(t)")).data;
-      const articles = (await exec("MATCH (a:Article) RETURN a.slug, id(a)")).data;
+      // Link articles to authors using Cypher
+      await exec("MATCH (a:Author {name: 'Jane Writer'}), (ar:Article {slug: 'getting-started-typescript'}) CREATE (a)-[:WROTE]->(ar)");
+      await exec("MATCH (a:Author {name: 'John Coder'}), (ar:Article {slug: 'advanced-js-patterns'}) CREATE (a)-[:WROTE]->(ar)");
+      await exec("MATCH (a:Author {name: 'Jane Writer'}), (ar:Article {slug: 'draft-article'}) CREATE (a)-[:WROTE]->(ar)");
 
-      const authorIds: Record<string, string> = {};
-      const tagIds: Record<string, string> = {};
-      const articleIds: Record<string, string> = {};
-
-      for (const row of authors) authorIds[row["a.name"] as string] = row["id(a)"] as string;
-      for (const row of tags) tagIds[row["t.name"] as string] = row["id(t)"] as string;
-      for (const row of articles) articleIds[row["a.slug"] as string] = row["id(a)"] as string;
-
-      // Link articles to authors
-      requireDatabase(client).insertEdge("w1", "WROTE", authorIds["Jane Writer"], articleIds["getting-started-typescript"]);
-      requireDatabase(client).insertEdge("w2", "WROTE", authorIds["John Coder"], articleIds["advanced-js-patterns"]);
-      requireDatabase(client).insertEdge("w3", "WROTE", authorIds["Jane Writer"], articleIds["draft-article"]);
-
-      // Link articles to tags
-      requireDatabase(client).insertEdge("tag1", "TAGGED", articleIds["getting-started-typescript"], tagIds["typescript"]);
-      requireDatabase(client).insertEdge("tag2", "TAGGED", articleIds["getting-started-typescript"], tagIds["tutorial"]);
-      requireDatabase(client).insertEdge("tag3", "TAGGED", articleIds["advanced-js-patterns"], tagIds["javascript"]);
+      // Link articles to tags using Cypher
+      await exec("MATCH (ar:Article {slug: 'getting-started-typescript'}), (t:Tag {name: 'typescript'}) CREATE (ar)-[:TAGGED]->(t)");
+      await exec("MATCH (ar:Article {slug: 'getting-started-typescript'}), (t:Tag {name: 'tutorial'}) CREATE (ar)-[:TAGGED]->(t)");
+      await exec("MATCH (ar:Article {slug: 'advanced-js-patterns'}), (t:Tag {name: 'javascript'}) CREATE (ar)-[:TAGGED]->(t)");
 
       // Find published articles
       const published = await exec("MATCH (a:Article) WHERE a.status = 'published' RETURN a.title");
