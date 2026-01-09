@@ -8609,11 +8609,16 @@ SELECT COALESCE(json_group_array(CAST(n AS INTEGER)), json_array()) FROM r)`,
               };
             }
             // Variable or expression - evaluate and propagate null
+            // Strip JSON quotes if input is wrapped in "" (from toString() output)
             const argResult = this.translateExpression(arg);
             tables.push(...argResult.tables);
             params.push(...argResult.params, ...argResult.params);
             return {
-              sql: `CASE WHEN ${argResult.sql} IS NULL THEN NULL ELSE ${argResult.sql} END`,
+              sql: `(SELECT CASE WHEN _d IS NULL THEN NULL ELSE CASE
+                WHEN substr(_d, 1, 1) = '"' AND substr(_d, length(_d), 1) = '"'
+                THEN substr(_d, 2, length(_d) - 2)
+                ELSE _d
+              END END FROM (SELECT ${argResult.sql} AS _d))`,
               tables,
               params
             };
