@@ -9109,6 +9109,13 @@ SELECT COALESCE(json_group_array(CAST(n AS INTEGER)), json_array()) FROM r)`,
           }
         }
 
+        // Temporal truncate functions: date.truncate(), datetime.truncate(), etc.
+        const truncateFunctions = ["DATE.TRUNCATE", "TIME.TRUNCATE", "LOCALTIME.TRUNCATE",
+                                   "DATETIME.TRUNCATE", "LOCALDATETIME.TRUNCATE"];
+        if (expr.functionName && truncateFunctions.includes(expr.functionName)) {
+          return this.translateTemporalTruncate(expr);
+        }
+
         throw new Error(`Unknown function: ${expr.functionName}`);
       }
 
@@ -14290,6 +14297,822 @@ SELECT COALESCE(json_group_array(CAST(n AS INTEGER)), json_array()) FROM r)`,
         // For other expression types, be conservative and return false
         return false;
     }
+  }
+
+  /**
+   * Translate temporal truncate functions: date.truncate(), datetime.truncate(), etc.
+   * Syntax: type.truncate(unit, temporal [, mapWithOverrides])
+   * Units: millennium, century, decade, year, weekYear, quarter, month, week, day, hour, minute, second, millisecond, microsecond
+   */
+  private translateTemporalTruncate(expr: Expression): { sql: string; tables: string[]; params: unknown[] } {
+    const tables: string[] = [];
+    const params: unknown[] = [];
+
+    if (!expr.args || expr.args.length < 2) {
+      throw new Error(`${expr.functionName} requires at least 2 arguments: unit and temporal value`);
+    }
+
+    const targetType = expr.functionName!.split(".")[0]; // DATE, TIME, LOCALTIME, DATETIME, LOCALDATETIME
+
+    // First argument: unit (string literal)
+    const unitArg = expr.args[0];
+    let unit: string;
+    if (unitArg.type === "literal" && typeof unitArg.value === "string") {
+      unit = unitArg.value.toLowerCase();
+    } else {
+      throw new Error(`${expr.functionName} unit must be a string literal`);
+    }
+
+    // Second argument: temporal value to truncate
+    const temporalResult = this.translateExpression(expr.args[1]);
+    tables.push(...temporalResult.tables);
+    params.push(...temporalResult.params);
+    const temporalSql = temporalResult.sql;
+
+    // Third argument (optional): map with override values
+    let overrideDay: string | null = null;
+    let overrideDayOfWeek: string | null = null;
+    let overrideTimezone: string | null = null;
+    let overrideHour: string | null = null;
+    let overrideMinute: string | null = null;
+    let overrideSecond: string | null = null;
+    let overrideNanosecond: string | null = null;
+
+    if (expr.args.length >= 3 && expr.args[2].type === "object") {
+      const mapArg = expr.args[2];
+      for (const prop of mapArg.properties || []) {
+        const key = prop.key.toLowerCase();
+        const valResult = this.translateExpression(prop.value);
+        tables.push(...valResult.tables);
+        params.push(...valResult.params);
+
+        switch (key) {
+          case "day":
+            overrideDay = valResult.sql;
+            break;
+          case "dayofweek":
+            overrideDayOfWeek = valResult.sql;
+            break;
+          case "timezone":
+            overrideTimezone = valResult.sql;
+            break;
+          case "hour":
+            overrideHour = valResult.sql;
+            break;
+          case "minute":
+            overrideMinute = valResult.sql;
+            break;
+          case "second":
+            overrideSecond = valResult.sql;
+            break;
+          case "nanosecond":
+            overrideNanosecond = valResult.sql;
+            break;
+        }
+      }
+    }
+
+    // Generate SQL based on target type and unit
+    if (targetType === "DATE") {
+      return this.translateDateTruncate(unit, temporalSql, overrideDay, overrideDayOfWeek, tables, params);
+    } else if (targetType === "DATETIME") {
+      return this.translateDatetimeTruncate(unit, temporalSql, overrideDay, overrideDayOfWeek, overrideTimezone,
+                                            overrideHour, overrideMinute, overrideSecond, overrideNanosecond, tables, params);
+    } else if (targetType === "LOCALDATETIME") {
+      return this.translateLocaldatetimeTruncate(unit, temporalSql, overrideDay, overrideDayOfWeek,
+                                                  overrideHour, overrideMinute, overrideSecond, overrideNanosecond, tables, params);
+    } else if (targetType === "TIME") {
+      return this.translateTimeTruncate(unit, temporalSql, overrideTimezone,
+                                        overrideHour, overrideMinute, overrideSecond, overrideNanosecond, tables, params);
+    } else if (targetType === "LOCALTIME") {
+      return this.translateLocaltimeTruncate(unit, temporalSql,
+                                              overrideHour, overrideMinute, overrideSecond, overrideNanosecond, tables, params);
+    }
+
+    throw new Error(`Unsupported truncate target type: ${targetType}`);
+  }
+
+  private translateDateTruncate(
+    unit: string, temporalSql: string,
+    overrideDay: string | null, overrideDayOfWeek: string | null,
+    tables: string[], params: unknown[]
+  ): { sql: string; tables: string[]; params: unknown[] } {
+    // Wrap everything in a subquery that evaluates temporalSql once
+    // This avoids parameter duplication when temporalSql contains ? placeholders
+    // _val is the evaluated temporal value, _d is its date part
+
+    const dateSql = `DATE(_val)`;
+    const yearSql = `CAST(strftime('%Y', ${dateSql}) AS INTEGER)`;
+
+    let truncatedDateExpr: string;
+
+    switch (unit) {
+      case "millennium":
+        truncatedDateExpr = `printf('%04d-01-%02d', (${yearSql} / 1000) * 1000, COALESCE(${overrideDay || 'NULL'}, 1))`;
+        break;
+
+      case "century":
+        truncatedDateExpr = `printf('%04d-01-%02d', (${yearSql} / 100) * 100, COALESCE(${overrideDay || 'NULL'}, 1))`;
+        break;
+
+      case "decade":
+        truncatedDateExpr = `printf('%04d-01-%02d', (${yearSql} / 10) * 10, COALESCE(${overrideDay || 'NULL'}, 1))`;
+        break;
+
+      case "year":
+        truncatedDateExpr = `printf('%04d-01-%02d', ${yearSql}, COALESCE(${overrideDay || 'NULL'}, 1))`;
+        break;
+
+      case "weekyear": {
+        // First day of ISO week 1 of the ISO year
+        // ISO year = year of the Thursday of the week containing this date
+        const isoYearSql = `CAST(strftime('%Y', julianday(${dateSql}) + 4 - (((CAST(strftime('%w', ${dateSql}) AS INTEGER) + 6) % 7) + 1)) AS INTEGER)`;
+        const jan4Sql = `printf('%04d-01-04', ${isoYearSql})`;
+        const weekdayJan4Sql = `((CAST(strftime('%w', ${jan4Sql}) AS INTEGER) + 6) % 7)`;
+        const mondayWeek1Sql = `DATE(julianday(${jan4Sql}) - ${weekdayJan4Sql})`;
+        if (overrideDay) {
+          truncatedDateExpr = `printf('%04d-01-%02d', ${isoYearSql}, ${overrideDay})`;
+        } else {
+          truncatedDateExpr = mondayWeek1Sql;
+        }
+        break;
+      }
+
+      case "quarter": {
+        const monthSql = `CAST(strftime('%m', ${dateSql}) AS INTEGER)`;
+        const quarterStartMonth = `(((${monthSql} - 1) / 3) * 3 + 1)`;
+        truncatedDateExpr = `printf('%04d-%02d-%02d', ${yearSql}, ${quarterStartMonth}, COALESCE(${overrideDay || 'NULL'}, 1))`;
+        break;
+      }
+
+      case "month": {
+        const monthSql = `CAST(strftime('%m', ${dateSql}) AS INTEGER)`;
+        truncatedDateExpr = `printf('%04d-%02d-%02d', ${yearSql}, ${monthSql}, COALESCE(${overrideDay || 'NULL'}, 1))`;
+        break;
+      }
+
+      case "week": {
+        const weekdaySql = `((CAST(strftime('%w', ${dateSql}) AS INTEGER) + 6) % 7)`;
+        const mondaySql = `DATE(julianday(${dateSql}) - ${weekdaySql})`;
+        if (overrideDayOfWeek) {
+          truncatedDateExpr = `DATE(julianday(${mondaySql}) + ${overrideDayOfWeek} - 1)`;
+        } else {
+          truncatedDateExpr = mondaySql;
+        }
+        break;
+      }
+
+      case "day":
+        truncatedDateExpr = dateSql;
+        break;
+
+      default:
+        throw new Error(`Unsupported unit for date.truncate: ${unit}`);
+    }
+
+    // Wrap in subquery to evaluate temporalSql once
+    const sql = `(SELECT ${truncatedDateExpr} FROM (SELECT ${temporalSql} AS _val))`;
+
+    return { sql, tables, params };
+  }
+
+  private translateDatetimeTruncate(
+    unit: string, temporalSql: string,
+    overrideDay: string | null, overrideDayOfWeek: string | null, overrideTimezone: string | null,
+    overrideHour: string | null, overrideMinute: string | null,
+    overrideSecond: string | null, overrideNanosecond: string | null,
+    tables: string[], params: unknown[]
+  ): { sql: string; tables: string[]; params: unknown[] } {
+    // Wrap everything in a subquery that evaluates temporalSql once
+    // This avoids the parameter duplication issue when temporalSql contains ? placeholders
+
+    // Build time component
+    let timeSql = "'00:00'";
+    if (overrideHour || overrideMinute || overrideSecond || overrideNanosecond) {
+      const h = overrideHour || "0";
+      const m = overrideMinute || "0";
+      const s = overrideSecond || "0";
+      const ns = overrideNanosecond || "0";
+      timeSql = `printf('%02d:%02d:%02d', ${h}, ${m}, ${s})`;
+      if (overrideNanosecond) {
+        timeSql = `(${timeSql} || '.' || printf('%09d', ${ns}))`;
+      }
+    }
+
+    // Build timezone extraction (from the _val alias)
+    // Only extract timezone if input has a time component (contains 'T')
+    // For plain dates (YYYY-MM-DD), default to 'Z'
+    let timezoneSql: string;
+    let tzSubquerySql: string | null = null;  // Will hold the timezone subquery column if override is provided
+    if (overrideTimezone) {
+      // Override timezone is provided - we'll add it as _tz column in subquery to avoid parameter duplication
+      tzSubquerySql = overrideTimezone;
+      timezoneSql = `CASE
+        WHEN _tz LIKE '%/%' THEN '+01:00[' || _tz || ']'
+        ELSE _tz
+      END`;
+    } else {
+      // Timezone extraction: only if input contains 'T' (is a datetime)
+      // Timezone formats: Z, +HH:MM, -HH:MM, or [Region/City]
+      // For plain dates (no 'T'), return 'Z'
+      // For datetimes, extract timezone from after the time part
+      timezoneSql = `CASE
+          WHEN _val NOT LIKE '%T%' THEN 'Z'
+          WHEN _val LIKE '%Z' OR _val LIKE '%z' THEN 'Z'
+          WHEN instr(_val, '+') > instr(_val, 'T') THEN substr(_val, instr(_val, '+'))
+          WHEN _val LIKE '%T%' AND length(_val) > 19 AND instr(substr(_val, instr(_val, 'T') + 9), '-') > 0
+               THEN substr(_val, instr(_val, 'T') + 8 + instr(substr(_val, instr(_val, 'T') + 9), '-'))
+          ELSE 'Z'
+        END`;
+    }
+
+    // Build truncated date using _val (the cached temporal value)
+    const dateSql = `DATE(_val)`;
+    const yearSql = `CAST(strftime('%Y', ${dateSql}) AS INTEGER)`;
+
+    let truncatedDateExpr: string;
+    switch (unit) {
+      case "millennium":
+        truncatedDateExpr = `printf('%04d-01-%02d', (${yearSql} / 1000) * 1000, COALESCE(${overrideDay || 'NULL'}, 1))`;
+        break;
+      case "century":
+        truncatedDateExpr = `printf('%04d-01-%02d', (${yearSql} / 100) * 100, COALESCE(${overrideDay || 'NULL'}, 1))`;
+        break;
+      case "decade":
+        truncatedDateExpr = `printf('%04d-01-%02d', (${yearSql} / 10) * 10, COALESCE(${overrideDay || 'NULL'}, 1))`;
+        break;
+      case "year":
+        truncatedDateExpr = `printf('%04d-01-%02d', ${yearSql}, COALESCE(${overrideDay || 'NULL'}, 1))`;
+        break;
+      case "weekyear": {
+        const isoYearSql = `CAST(strftime('%Y', julianday(${dateSql}) + 4 - (((CAST(strftime('%w', ${dateSql}) AS INTEGER) + 6) % 7) + 1)) AS INTEGER)`;
+        const jan4Sql = `printf('%04d-01-04', ${isoYearSql})`;
+        const weekdayJan4Sql = `((CAST(strftime('%w', ${jan4Sql}) AS INTEGER) + 6) % 7)`;
+        const mondayWeek1Sql = `DATE(julianday(${jan4Sql}) - ${weekdayJan4Sql})`;
+        if (overrideDay) {
+          truncatedDateExpr = `printf('%04d-01-%02d', ${isoYearSql}, ${overrideDay})`;
+        } else {
+          truncatedDateExpr = mondayWeek1Sql;
+        }
+        break;
+      }
+      case "quarter": {
+        const monthSql = `CAST(strftime('%m', ${dateSql}) AS INTEGER)`;
+        const quarterStartMonth = `(((${monthSql} - 1) / 3) * 3 + 1)`;
+        truncatedDateExpr = `printf('%04d-%02d-%02d', ${yearSql}, ${quarterStartMonth}, COALESCE(${overrideDay || 'NULL'}, 1))`;
+        break;
+      }
+      case "month": {
+        const monthSql = `CAST(strftime('%m', ${dateSql}) AS INTEGER)`;
+        truncatedDateExpr = `printf('%04d-%02d-%02d', ${yearSql}, ${monthSql}, COALESCE(${overrideDay || 'NULL'}, 1))`;
+        break;
+      }
+      case "week": {
+        const weekdaySql = `((CAST(strftime('%w', ${dateSql}) AS INTEGER) + 6) % 7)`;
+        const mondaySql = `DATE(julianday(${dateSql}) - ${weekdaySql})`;
+        if (overrideDayOfWeek) {
+          truncatedDateExpr = `DATE(julianday(${mondaySql}) + ${overrideDayOfWeek} - 1)`;
+        } else {
+          truncatedDateExpr = mondaySql;
+        }
+        break;
+      }
+      case "day":
+        truncatedDateExpr = dateSql;
+        break;
+      case "hour":
+      case "minute":
+      case "second":
+      case "millisecond":
+      case "microsecond": {
+        // For time-based units, keep date, truncate time
+        // Extract time components from _val
+        const timePartDt = `CASE WHEN _val LIKE '%T%' THEN substr(_val, instr(_val, 'T') + 1, 8) ELSE '00:00:00' END`;
+        const hourSqlDt = `CAST(substr(${timePartDt}, 1, 2) AS INTEGER)`;
+        const minuteSqlDt = `CAST(substr(${timePartDt}, 4, 2) AS INTEGER)`;
+        const secondSqlDt = `CAST(substr(${timePartDt}, 7, 2) AS INTEGER)`;
+        // Extract fractional seconds from original datetime
+        const fractionalPartDt = `CASE
+          WHEN _val LIKE '%T%.%' THEN
+            CASE
+              WHEN _val LIKE '%+%' AND instr(_val, '+') > instr(_val, '.') THEN substr(_val, instr(_val, '.') + 1, instr(_val, '+') - instr(_val, '.') - 1)
+              WHEN _val LIKE '%-%' AND instr(_val, '-') > instr(_val, 'T') + 8 THEN substr(_val, instr(_val, '.') + 1, instr(substr(_val, instr(_val, 'T') + 9), '-') - 1 + instr(_val, 'T') + 8 - instr(_val, '.'))
+              WHEN _val LIKE '%Z' OR _val LIKE '%z' THEN substr(_val, instr(_val, '.') + 1, length(_val) - instr(_val, '.') - 1)
+              WHEN _val LIKE '%[%' THEN substr(_val, instr(_val, '.') + 1, instr(_val, '[') - instr(_val, '.') - 1)
+              ELSE substr(_val, instr(_val, '.') + 1)
+            END
+          ELSE '000000000'
+        END`;
+
+        let timeExprDt: string;
+        switch (unit) {
+          case "hour":
+            if (overrideNanosecond) {
+              timeExprDt = `(printf('%02d:00:00', ${hourSqlDt}) || '.' || printf('%09d', ${overrideNanosecond}))`;
+            } else {
+              // Format: HH:00 (no seconds for hour truncation without nanosecond override)
+              timeExprDt = `printf('%02d:00', ${hourSqlDt})`;
+            }
+            break;
+          case "minute":
+            if (overrideNanosecond) {
+              timeExprDt = `(printf('%02d:%02d:00', ${hourSqlDt}, ${minuteSqlDt}) || '.' || printf('%09d', ${overrideNanosecond}))`;
+            } else {
+              // Format: HH:MM (no seconds for minute truncation without nanosecond override)
+              timeExprDt = `printf('%02d:%02d', ${hourSqlDt}, ${minuteSqlDt})`;
+            }
+            break;
+          case "second":
+            if (overrideNanosecond) {
+              timeExprDt = `(printf('%02d:%02d:%02d', ${hourSqlDt}, ${minuteSqlDt}, ${secondSqlDt}) || '.' || printf('%09d', ${overrideNanosecond}))`;
+            } else {
+              timeExprDt = `printf('%02d:%02d:%02d', ${hourSqlDt}, ${minuteSqlDt}, ${secondSqlDt})`;
+            }
+            break;
+          case "millisecond": {
+            // Keep first 3 digits of nanoseconds
+            const msDigitsDt = `substr(${fractionalPartDt} || '000000000', 1, 3)`;
+            const truncatedMsDt = `(CAST(${msDigitsDt} AS INTEGER) * 1000000)`;
+            if (overrideNanosecond) {
+              const finalMsDt = `(${truncatedMsDt} + ${overrideNanosecond})`;
+              timeExprDt = `(printf('%02d:%02d:%02d', ${hourSqlDt}, ${minuteSqlDt}, ${secondSqlDt}) || '.' || printf('%09d', ${finalMsDt}))`;
+            } else {
+              timeExprDt = `(printf('%02d:%02d:%02d', ${hourSqlDt}, ${minuteSqlDt}, ${secondSqlDt}) || '.' || ${msDigitsDt})`;
+            }
+            break;
+          }
+          case "microsecond": {
+            // Keep first 6 digits of nanoseconds
+            const usDigitsDt = `substr(${fractionalPartDt} || '000000000', 1, 6)`;
+            const truncatedUsDt = `(CAST(${usDigitsDt} AS INTEGER) * 1000)`;
+            if (overrideNanosecond) {
+              const finalUsDt = `(${truncatedUsDt} + ${overrideNanosecond})`;
+              timeExprDt = `(printf('%02d:%02d:%02d', ${hourSqlDt}, ${minuteSqlDt}, ${secondSqlDt}) || '.' || printf('%09d', ${finalUsDt}))`;
+            } else {
+              timeExprDt = `(printf('%02d:%02d:%02d', ${hourSqlDt}, ${minuteSqlDt}, ${secondSqlDt}) || '.' || ${usDigitsDt})`;
+            }
+            break;
+          }
+          default:
+            timeExprDt = `'00:00:00'`;
+        }
+        // Override the timeSql with the time-truncated version
+        timeSql = timeExprDt;
+        truncatedDateExpr = dateSql;
+        break;
+      }
+      default:
+        throw new Error(`Unsupported unit for datetime.truncate: ${unit}`);
+    }
+
+    // Combine all in a subquery that evaluates temporalSql once
+    // If override timezone is provided, include it as _tz column in the inner subquery
+    let innerSelect = `SELECT ${temporalSql} AS _val`;
+    if (tzSubquerySql) {
+      innerSelect += `, ${tzSubquerySql} AS _tz`;
+    }
+    const sql = `(SELECT ${truncatedDateExpr} || 'T' || ${timeSql} || ${timezoneSql} FROM (${innerSelect}))`;
+
+    return { sql, tables, params };
+  }
+
+  private translateLocaldatetimeTruncate(
+    unit: string, temporalSql: string,
+    overrideDay: string | null, overrideDayOfWeek: string | null,
+    overrideHour: string | null, overrideMinute: string | null,
+    overrideSecond: string | null, overrideNanosecond: string | null,
+    tables: string[], params: unknown[]
+  ): { sql: string; tables: string[]; params: unknown[] } {
+    // Wrap everything in a subquery that evaluates temporalSql once
+    // This avoids parameter duplication issues
+
+    // Build time component - use '00:00' format when no overrides
+    let timeSql = "'00:00'";
+    if (overrideHour || overrideMinute || overrideSecond || overrideNanosecond) {
+      const h = overrideHour || "0";
+      const m = overrideMinute || "0";
+      const s = overrideSecond || "0";
+      if (overrideNanosecond) {
+        timeSql = `(printf('%02d:%02d:%02d', ${h}, ${m}, ${s}) || '.' || printf('%09d', ${overrideNanosecond}))`;
+      } else if (overrideSecond) {
+        timeSql = `printf('%02d:%02d:%02d', ${h}, ${m}, ${s})`;
+      } else {
+        timeSql = `printf('%02d:%02d', ${h}, ${m})`;
+      }
+    }
+
+    // Build truncated date using _val (the cached temporal value)
+    const dateSql = `DATE(_val)`;
+    const yearSql = `CAST(strftime('%Y', ${dateSql}) AS INTEGER)`;
+
+    let truncatedDateExpr: string;
+    switch (unit) {
+      case "millennium":
+        truncatedDateExpr = `printf('%04d-01-%02d', (${yearSql} / 1000) * 1000, COALESCE(${overrideDay || 'NULL'}, 1))`;
+        break;
+      case "century":
+        truncatedDateExpr = `printf('%04d-01-%02d', (${yearSql} / 100) * 100, COALESCE(${overrideDay || 'NULL'}, 1))`;
+        break;
+      case "decade":
+        truncatedDateExpr = `printf('%04d-01-%02d', (${yearSql} / 10) * 10, COALESCE(${overrideDay || 'NULL'}, 1))`;
+        break;
+      case "year":
+        truncatedDateExpr = `printf('%04d-01-%02d', ${yearSql}, COALESCE(${overrideDay || 'NULL'}, 1))`;
+        break;
+      case "weekyear": {
+        const isoYearSql = `CAST(strftime('%Y', julianday(${dateSql}) + 4 - (((CAST(strftime('%w', ${dateSql}) AS INTEGER) + 6) % 7) + 1)) AS INTEGER)`;
+        const jan4Sql = `printf('%04d-01-04', ${isoYearSql})`;
+        const weekdayJan4Sql = `((CAST(strftime('%w', ${jan4Sql}) AS INTEGER) + 6) % 7)`;
+        const mondayWeek1Sql = `DATE(julianday(${jan4Sql}) - ${weekdayJan4Sql})`;
+        if (overrideDay) {
+          truncatedDateExpr = `printf('%04d-01-%02d', ${isoYearSql}, ${overrideDay})`;
+        } else {
+          truncatedDateExpr = mondayWeek1Sql;
+        }
+        break;
+      }
+      case "quarter": {
+        const monthSql = `CAST(strftime('%m', ${dateSql}) AS INTEGER)`;
+        const quarterStartMonth = `(((${monthSql} - 1) / 3) * 3 + 1)`;
+        truncatedDateExpr = `printf('%04d-%02d-%02d', ${yearSql}, ${quarterStartMonth}, COALESCE(${overrideDay || 'NULL'}, 1))`;
+        break;
+      }
+      case "month": {
+        const monthSql = `CAST(strftime('%m', ${dateSql}) AS INTEGER)`;
+        truncatedDateExpr = `printf('%04d-%02d-%02d', ${yearSql}, ${monthSql}, COALESCE(${overrideDay || 'NULL'}, 1))`;
+        break;
+      }
+      case "week": {
+        const weekdaySql = `((CAST(strftime('%w', ${dateSql}) AS INTEGER) + 6) % 7)`;
+        const mondaySql = `DATE(julianday(${dateSql}) - ${weekdaySql})`;
+        if (overrideDayOfWeek) {
+          truncatedDateExpr = `DATE(julianday(${mondaySql}) + ${overrideDayOfWeek} - 1)`;
+        } else {
+          truncatedDateExpr = mondaySql;
+        }
+        break;
+      }
+      case "day":
+        truncatedDateExpr = dateSql;
+        break;
+      case "hour":
+      case "minute":
+      case "second":
+      case "millisecond":
+      case "microsecond": {
+        // For time-based units, keep date, truncate time
+        // Extract time components from _val (localdatetime format: YYYY-MM-DDTHH:MM:SS.nnnnnnnnn)
+        const timePartLdt = `CASE WHEN _val LIKE '%T%' THEN substr(_val, instr(_val, 'T') + 1, 8) ELSE '00:00:00' END`;
+        const hourSqlLdt = `CAST(substr(${timePartLdt}, 1, 2) AS INTEGER)`;
+        const minuteSqlLdt = `CAST(substr(${timePartLdt}, 4, 2) AS INTEGER)`;
+        const secondSqlLdt = `CAST(substr(${timePartLdt}, 7, 2) AS INTEGER)`;
+        // Extract fractional seconds from original localdatetime
+        const fractionalPartLdt = `CASE
+          WHEN _val LIKE '%T%.%' THEN substr(_val, instr(_val, '.') + 1)
+          ELSE '000000000'
+        END`;
+
+        let timeExprLdt: string;
+        switch (unit) {
+          case "hour":
+            if (overrideNanosecond) {
+              timeExprLdt = `(printf('%02d:00:00', ${hourSqlLdt}) || '.' || printf('%09d', ${overrideNanosecond}))`;
+            } else {
+              // Format: HH:00 (no seconds for hour truncation without nanosecond override)
+              timeExprLdt = `printf('%02d:00', ${hourSqlLdt})`;
+            }
+            break;
+          case "minute":
+            if (overrideNanosecond) {
+              timeExprLdt = `(printf('%02d:%02d:00', ${hourSqlLdt}, ${minuteSqlLdt}) || '.' || printf('%09d', ${overrideNanosecond}))`;
+            } else {
+              // Format: HH:MM (no seconds for minute truncation without nanosecond override)
+              timeExprLdt = `printf('%02d:%02d', ${hourSqlLdt}, ${minuteSqlLdt})`;
+            }
+            break;
+          case "second":
+            if (overrideNanosecond) {
+              timeExprLdt = `(printf('%02d:%02d:%02d', ${hourSqlLdt}, ${minuteSqlLdt}, ${secondSqlLdt}) || '.' || printf('%09d', ${overrideNanosecond}))`;
+            } else {
+              timeExprLdt = `printf('%02d:%02d:%02d', ${hourSqlLdt}, ${minuteSqlLdt}, ${secondSqlLdt})`;
+            }
+            break;
+          case "millisecond": {
+            // Keep first 3 digits of nanoseconds
+            const msDigitsLdt = `substr(${fractionalPartLdt} || '000000000', 1, 3)`;
+            const truncatedMsLdt = `(CAST(${msDigitsLdt} AS INTEGER) * 1000000)`;
+            if (overrideNanosecond) {
+              const finalMsLdt = `(${truncatedMsLdt} + ${overrideNanosecond})`;
+              timeExprLdt = `(printf('%02d:%02d:%02d', ${hourSqlLdt}, ${minuteSqlLdt}, ${secondSqlLdt}) || '.' || printf('%09d', ${finalMsLdt}))`;
+            } else {
+              timeExprLdt = `(printf('%02d:%02d:%02d', ${hourSqlLdt}, ${minuteSqlLdt}, ${secondSqlLdt}) || '.' || ${msDigitsLdt})`;
+            }
+            break;
+          }
+          case "microsecond": {
+            // Keep first 6 digits of nanoseconds
+            const usDigitsLdt = `substr(${fractionalPartLdt} || '000000000', 1, 6)`;
+            const truncatedUsLdt = `(CAST(${usDigitsLdt} AS INTEGER) * 1000)`;
+            if (overrideNanosecond) {
+              const finalUsLdt = `(${truncatedUsLdt} + ${overrideNanosecond})`;
+              timeExprLdt = `(printf('%02d:%02d:%02d', ${hourSqlLdt}, ${minuteSqlLdt}, ${secondSqlLdt}) || '.' || printf('%09d', ${finalUsLdt}))`;
+            } else {
+              timeExprLdt = `(printf('%02d:%02d:%02d', ${hourSqlLdt}, ${minuteSqlLdt}, ${secondSqlLdt}) || '.' || ${usDigitsLdt})`;
+            }
+            break;
+          }
+          default:
+            timeExprLdt = `'00:00:00'`;
+        }
+        // Override the timeSql with the time-truncated version
+        timeSql = timeExprLdt;
+        truncatedDateExpr = dateSql;
+        break;
+      }
+      default:
+        throw new Error(`Unsupported unit for localdatetime.truncate: ${unit}`);
+    }
+
+    // Combine all in a subquery that evaluates temporalSql once
+    const sql = `(SELECT ${truncatedDateExpr} || 'T' || ${timeSql} FROM (SELECT ${temporalSql} AS _val))`;
+
+    return { sql, tables, params };
+  }
+
+  private translateTimeTruncate(
+    unit: string, temporalSql: string, overrideTimezone: string | null,
+    overrideHour: string | null, overrideMinute: string | null,
+    overrideSecond: string | null, overrideNanosecond: string | null,
+    tables: string[], params: unknown[]
+  ): { sql: string; tables: string[]; params: unknown[] } {
+    // Use a subquery to evaluate temporalSql once to avoid parameter duplication
+    // _val is the evaluated temporal value
+
+    // Extract time components from _val
+    const timePart = `CASE WHEN _val LIKE '%T%' THEN substr(_val, instr(_val, 'T') + 1) ELSE _val END`;
+    const hourSql = `CAST(substr(${timePart}, 1, 2) AS INTEGER)`;
+    const minuteSql = `CAST(substr(${timePart}, 4, 2) AS INTEGER)`;
+    const secondSql = `CAST(substr(${timePart}, 7, 2) AS INTEGER)`;
+
+    let truncatedTimeExpr: string;
+
+    switch (unit) {
+      case "millennium":
+      case "century":
+      case "decade":
+      case "year":
+      case "weekyear":
+      case "quarter":
+      case "month":
+      case "week":
+      case "day": {
+        // Truncate to 00:00 with optional overrides
+        const h = overrideHour || "0";
+        const m = overrideMinute || "0";
+        const s = overrideSecond || "0";
+        if (overrideNanosecond) {
+          truncatedTimeExpr = `(printf('%02d:%02d:%02d', ${h}, ${m}, ${s}) || '.' || printf('%09d', ${overrideNanosecond}))`;
+        } else if (overrideSecond) {
+          truncatedTimeExpr = `printf('%02d:%02d:%02d', ${h}, ${m}, ${s})`;
+        } else {
+          // Format: HH:MM (no seconds for truncation without second/nanosecond override)
+          truncatedTimeExpr = `printf('%02d:%02d', ${h}, ${m})`;
+        }
+        break;
+      }
+
+      case "hour":
+        if (overrideNanosecond) {
+          truncatedTimeExpr = `(printf('%02d:00:00', COALESCE(${overrideHour || 'NULL'}, ${hourSql})) || '.' || printf('%09d', ${overrideNanosecond}))`;
+        } else {
+          // Format: HH:00 (no seconds for hour truncation without nanosecond override)
+          truncatedTimeExpr = `printf('%02d:00', COALESCE(${overrideHour || 'NULL'}, ${hourSql}))`;
+        }
+        break;
+
+      case "minute":
+        if (overrideNanosecond) {
+          truncatedTimeExpr = `(printf('%02d:%02d:00', COALESCE(${overrideHour || 'NULL'}, ${hourSql}), COALESCE(${overrideMinute || 'NULL'}, ${minuteSql})) || '.' || printf('%09d', ${overrideNanosecond}))`;
+        } else {
+          // Format: HH:MM (no seconds for minute truncation without nanosecond override)
+          truncatedTimeExpr = `printf('%02d:%02d', COALESCE(${overrideHour || 'NULL'}, ${hourSql}), COALESCE(${overrideMinute || 'NULL'}, ${minuteSql}))`;
+        }
+        break;
+
+      case "second":
+        if (overrideNanosecond) {
+          truncatedTimeExpr = `(printf('%02d:%02d:%02d', COALESCE(${overrideHour || 'NULL'}, ${hourSql}), COALESCE(${overrideMinute || 'NULL'}, ${minuteSql}), COALESCE(${overrideSecond || 'NULL'}, ${secondSql})) || '.' || printf('%09d', ${overrideNanosecond}))`;
+        } else {
+          truncatedTimeExpr = `printf('%02d:%02d:%02d', COALESCE(${overrideHour || 'NULL'}, ${hourSql}), COALESCE(${overrideMinute || 'NULL'}, ${minuteSql}), COALESCE(${overrideSecond || 'NULL'}, ${secondSql}))`;
+        }
+        break;
+
+      case "millisecond": {
+        // Keep milliseconds (first 3 digits of nanoseconds), truncate the rest
+        // Extract the fractional part from the time (after the decimal point, before timezone)
+        const fractionalPartMs = `CASE
+          WHEN ${timePart} LIKE '%.%' THEN
+            CASE
+              WHEN ${timePart} LIKE '%+%' THEN substr(${timePart}, instr(${timePart}, '.') + 1, instr(${timePart}, '+') - instr(${timePart}, '.') - 1)
+              WHEN ${timePart} LIKE '%-%' AND instr(${timePart}, '-') > 6 THEN substr(${timePart}, instr(${timePart}, '.') + 1, instr(substr(${timePart}, 9), '-') + 7 - instr(${timePart}, '.'))
+              WHEN ${timePart} LIKE '%Z' OR ${timePart} LIKE '%z' THEN substr(${timePart}, instr(${timePart}, '.') + 1, length(${timePart}) - instr(${timePart}, '.') - 1)
+              WHEN ${timePart} LIKE '%[%' THEN substr(${timePart}, instr(${timePart}, '.') + 1, instr(${timePart}, '[') - instr(${timePart}, '.') - 1)
+              ELSE substr(${timePart}, instr(${timePart}, '.') + 1)
+            END
+          ELSE '000000000'
+        END`;
+        // Truncate to milliseconds (keep first 3 digits, zero out rest 6)
+        const truncatedNsMs = `(CAST(substr(${fractionalPartMs} || '000000000', 1, 3) AS INTEGER) * 1000000)`;
+        // Apply override nanosecond if provided - show 9 digits; otherwise show 3 digits
+        if (overrideNanosecond) {
+          const finalNsMs = `(${truncatedNsMs} + ${overrideNanosecond})`;
+          truncatedTimeExpr = `(printf('%02d:%02d:%02d', ${hourSql}, ${minuteSql}, ${secondSql}) || '.' || printf('%09d', ${finalNsMs}))`;
+        } else {
+          // Show only 3 digits for millisecond precision (no override)
+          const msDigits = `substr(${fractionalPartMs} || '000000000', 1, 3)`;
+          truncatedTimeExpr = `(printf('%02d:%02d:%02d', ${hourSql}, ${minuteSql}, ${secondSql}) || '.' || ${msDigits})`;
+        }
+        break;
+      }
+
+      case "microsecond": {
+        // Keep microseconds (first 6 digits of nanoseconds), truncate the rest
+        const fractionalPartUs = `CASE
+          WHEN ${timePart} LIKE '%.%' THEN
+            CASE
+              WHEN ${timePart} LIKE '%+%' THEN substr(${timePart}, instr(${timePart}, '.') + 1, instr(${timePart}, '+') - instr(${timePart}, '.') - 1)
+              WHEN ${timePart} LIKE '%-%' AND instr(${timePart}, '-') > 6 THEN substr(${timePart}, instr(${timePart}, '.') + 1, instr(substr(${timePart}, 9), '-') + 7 - instr(${timePart}, '.'))
+              WHEN ${timePart} LIKE '%Z' OR ${timePart} LIKE '%z' THEN substr(${timePart}, instr(${timePart}, '.') + 1, length(${timePart}) - instr(${timePart}, '.') - 1)
+              WHEN ${timePart} LIKE '%[%' THEN substr(${timePart}, instr(${timePart}, '.') + 1, instr(${timePart}, '[') - instr(${timePart}, '.') - 1)
+              ELSE substr(${timePart}, instr(${timePart}, '.') + 1)
+            END
+          ELSE '000000000'
+        END`;
+        // Truncate to microseconds (keep first 6 digits, zero out last 3)
+        const truncatedNsUs = `(CAST(substr(${fractionalPartUs} || '000000000', 1, 6) AS INTEGER) * 1000)`;
+        // Apply override nanosecond if provided - show 9 digits; otherwise show 6 digits
+        if (overrideNanosecond) {
+          const finalNsUs = `(${truncatedNsUs} + ${overrideNanosecond})`;
+          truncatedTimeExpr = `(printf('%02d:%02d:%02d', ${hourSql}, ${minuteSql}, ${secondSql}) || '.' || printf('%09d', ${finalNsUs}))`;
+        } else {
+          // Show only 6 digits for microsecond precision (no override)
+          const usDigits = `substr(${fractionalPartUs} || '000000000', 1, 6)`;
+          truncatedTimeExpr = `(printf('%02d:%02d:%02d', ${hourSql}, ${minuteSql}, ${secondSql}) || '.' || ${usDigits})`;
+        }
+        break;
+      }
+
+      default:
+        throw new Error(`Unsupported unit for time.truncate: ${unit}`);
+    }
+
+    // Build timezone extraction
+    let timezoneSql: string;
+    let tzSubquerySql: string | null = null;
+    if (overrideTimezone) {
+      // Override timezone is provided - we'll add it as _tz column in subquery to avoid parameter order issues
+      tzSubquerySql = overrideTimezone;
+      timezoneSql = `_tz`;
+    } else {
+      // Extract timezone from _val (time format: HH:MM:SS.nnnnnnnnn+HH:MM or HH:MM:SSZ)
+      // Time values don't have a 'T' separator like datetimes
+      // Look for timezone after position 8 (after HH:MM:SS)
+      timezoneSql = `CASE
+          WHEN _val LIKE '%Z' OR _val LIKE '%z' THEN 'Z'
+          WHEN instr(_val, '+') > 8 THEN substr(_val, instr(_val, '+'))
+          WHEN length(_val) > 8 AND instr(substr(_val, 9), '-') > 0
+               THEN substr(_val, 8 + instr(substr(_val, 9), '-'))
+          ELSE 'Z'
+        END`;
+    }
+
+    // Wrap in subquery to evaluate temporalSql once
+    // If override timezone is provided, include it as _tz column in the inner subquery
+    let innerSelect = `SELECT ${temporalSql} AS _val`;
+    if (tzSubquerySql) {
+      innerSelect += `, ${tzSubquerySql} AS _tz`;
+    }
+    const sql = `(SELECT ${truncatedTimeExpr} || ${timezoneSql} FROM (${innerSelect}))`;
+
+    return { sql, tables, params };
+  }
+
+  private translateLocaltimeTruncate(
+    unit: string, temporalSql: string,
+    overrideHour: string | null, overrideMinute: string | null,
+    overrideSecond: string | null, overrideNanosecond: string | null,
+    tables: string[], params: unknown[]
+  ): { sql: string; tables: string[]; params: unknown[] } {
+    // Use a subquery to evaluate temporalSql once and consume its params
+    // _val is the evaluated temporal value
+
+    // Extract time components from _val
+    const timePart = `CASE WHEN _val LIKE '%T%' THEN substr(_val, instr(_val, 'T') + 1) ELSE _val END`;
+    const hourSql = `CAST(substr(${timePart}, 1, 2) AS INTEGER)`;
+    const minuteSql = `CAST(substr(${timePart}, 4, 2) AS INTEGER)`;
+    const secondSql = `CAST(substr(${timePart}, 7, 2) AS INTEGER)`;
+
+    let truncatedTimeExpr: string;
+
+    switch (unit) {
+      case "millennium":
+      case "century":
+      case "decade":
+      case "year":
+      case "weekyear":
+      case "quarter":
+      case "month":
+      case "week":
+      case "day": {
+        // Truncate to 00:00 with optional overrides
+        const h = overrideHour || "0";
+        const m = overrideMinute || "0";
+        const s = overrideSecond || "0";
+        if (overrideNanosecond) {
+          truncatedTimeExpr = `(printf('%02d:%02d:%02d', ${h}, ${m}, ${s}) || '.' || printf('%09d', ${overrideNanosecond}))`;
+        } else if (overrideSecond) {
+          truncatedTimeExpr = `printf('%02d:%02d:%02d', ${h}, ${m}, ${s})`;
+        } else {
+          // Format: HH:MM (no seconds for truncation without second/nanosecond override)
+          truncatedTimeExpr = `printf('%02d:%02d', ${h}, ${m})`;
+        }
+        break;
+      }
+
+      case "hour":
+        if (overrideNanosecond) {
+          truncatedTimeExpr = `(printf('%02d:00:00', COALESCE(${overrideHour || 'NULL'}, ${hourSql})) || '.' || printf('%09d', ${overrideNanosecond}))`;
+        } else {
+          // Format: HH:00 (no seconds for hour truncation without nanosecond override)
+          truncatedTimeExpr = `printf('%02d:00', COALESCE(${overrideHour || 'NULL'}, ${hourSql}))`;
+        }
+        break;
+
+      case "minute":
+        if (overrideNanosecond) {
+          truncatedTimeExpr = `(printf('%02d:%02d:00', COALESCE(${overrideHour || 'NULL'}, ${hourSql}), COALESCE(${overrideMinute || 'NULL'}, ${minuteSql})) || '.' || printf('%09d', ${overrideNanosecond}))`;
+        } else {
+          // Format: HH:MM (no seconds for minute truncation without nanosecond override)
+          truncatedTimeExpr = `printf('%02d:%02d', COALESCE(${overrideHour || 'NULL'}, ${hourSql}), COALESCE(${overrideMinute || 'NULL'}, ${minuteSql}))`;
+        }
+        break;
+
+      case "second":
+        if (overrideNanosecond) {
+          truncatedTimeExpr = `(printf('%02d:%02d:%02d', COALESCE(${overrideHour || 'NULL'}, ${hourSql}), COALESCE(${overrideMinute || 'NULL'}, ${minuteSql}), COALESCE(${overrideSecond || 'NULL'}, ${secondSql})) || '.' || printf('%09d', ${overrideNanosecond}))`;
+        } else {
+          truncatedTimeExpr = `printf('%02d:%02d:%02d', COALESCE(${overrideHour || 'NULL'}, ${hourSql}), COALESCE(${overrideMinute || 'NULL'}, ${minuteSql}), COALESCE(${overrideSecond || 'NULL'}, ${secondSql}))`;
+        }
+        break;
+
+      case "millisecond": {
+        // Extract fractional part from localdatetime (format: YYYY-MM-DDTHH:MM:SS.nnnnnnnnn)
+        const fractionalPartMsLt = `CASE
+          WHEN _val LIKE '%T%.%' THEN substr(_val, instr(_val, '.') + 1)
+          WHEN _val LIKE '%.%' AND _val NOT LIKE '%T%' THEN substr(_val, instr(_val, '.') + 1)
+          ELSE '000000000'
+        END`;
+        // Truncate to milliseconds (keep first 3 digits, zero out rest 6)
+        const truncatedNsMsLt = `(CAST(substr(${fractionalPartMsLt} || '000000000', 1, 3) AS INTEGER) * 1000000)`;
+        if (overrideNanosecond) {
+          const finalNsMsLt = `(${truncatedNsMsLt} + ${overrideNanosecond})`;
+          truncatedTimeExpr = `(printf('%02d:%02d:%02d', ${hourSql}, ${minuteSql}, ${secondSql}) || '.' || printf('%09d', ${finalNsMsLt}))`;
+        } else {
+          // Show only 3 digits for millisecond precision (no override)
+          const msDigitsLt = `substr(${fractionalPartMsLt} || '000000000', 1, 3)`;
+          truncatedTimeExpr = `(printf('%02d:%02d:%02d', ${hourSql}, ${minuteSql}, ${secondSql}) || '.' || ${msDigitsLt})`;
+        }
+        break;
+      }
+
+      case "microsecond": {
+        // Extract fractional part from localdatetime (format: YYYY-MM-DDTHH:MM:SS.nnnnnnnnn)
+        const fractionalPartUsLt = `CASE
+          WHEN _val LIKE '%T%.%' THEN substr(_val, instr(_val, '.') + 1)
+          WHEN _val LIKE '%.%' AND _val NOT LIKE '%T%' THEN substr(_val, instr(_val, '.') + 1)
+          ELSE '000000000'
+        END`;
+        // Truncate to microseconds (keep first 6 digits, zero out last 3)
+        const truncatedNsUsLt = `(CAST(substr(${fractionalPartUsLt} || '000000000', 1, 6) AS INTEGER) * 1000)`;
+        if (overrideNanosecond) {
+          const finalNsUsLt = `(${truncatedNsUsLt} + ${overrideNanosecond})`;
+          truncatedTimeExpr = `(printf('%02d:%02d:%02d', ${hourSql}, ${minuteSql}, ${secondSql}) || '.' || printf('%09d', ${finalNsUsLt}))`;
+        } else {
+          // Show only 6 digits for microsecond precision (no override)
+          const usDigitsLt = `substr(${fractionalPartUsLt} || '000000000', 1, 6)`;
+          truncatedTimeExpr = `(printf('%02d:%02d:%02d', ${hourSql}, ${minuteSql}, ${secondSql}) || '.' || ${usDigitsLt})`;
+        }
+        break;
+      }
+
+      default:
+        throw new Error(`Unsupported unit for localtime.truncate: ${unit}`);
+    }
+
+    // Wrap in subquery to evaluate temporalSql once and consume params
+    const sql = `(SELECT ${truncatedTimeExpr} FROM (SELECT ${temporalSql} AS _val))`;
+
+    return { sql, tables, params };
   }
 
   private generateId(): string {
