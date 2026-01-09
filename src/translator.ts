@@ -8474,7 +8474,7 @@ SELECT COALESCE(json_group_array(CAST(n AS INTEGER)), json_array()) FROM r)`,
               const rawMonths = monthsSql?.sql ?? "0";
               const totalMonthsSql = `(${rawMonths} + ${monthsFromYearsFracSql})`;
               const finalMonthsSql = `CAST(${totalMonthsSql} AS INTEGER)`;
-              const daysFromMonthsFracSql = `((${totalMonthsSql} - CAST(${totalMonthsSql} AS INTEGER)) * 30)`; // 30 days/month per Cypher spec
+              const daysFromMonthsFracSql = `((${totalMonthsSql} - CAST(${totalMonthsSql} AS INTEGER)) * (365.2425 / 12.0))`; // 30.436875 days/month (Gregorian average)
               
               // Weeks stay as-is (integer only in Cypher)
               const rawWeeks = weeksSql?.sql ?? "0";
@@ -13891,7 +13891,7 @@ SELECT COALESCE(json_group_array(CAST(n AS INTEGER)), json_array()) FROM r)`,
             
             // Normalize fractional values:
             // - 0.5 years = 6 months (12 months/year)
-            // - 0.5 months = 15 days (30 days/month per Cypher spec)
+            // - 0.5 months = 15.21875 days (30.436875 days/month, Gregorian average)
             // - 0.5 days = 12 hours (24 hours/day)
             // - 0.5 hours = 30 minutes
             // - 0.5 minutes = 30 seconds
@@ -13902,7 +13902,7 @@ SELECT COALESCE(json_group_array(CAST(n AS INTEGER)), json_array()) FROM r)`,
             
             const rawMonths = Number(map.months ?? 0) + monthsFromYearsFrac;
             const finalMonths = Math.trunc(rawMonths);
-            const daysFromMonthsFrac = (rawMonths - finalMonths) * 30; // 30 days/month per Cypher spec
+            const daysFromMonthsFrac = (rawMonths - finalMonths) * (365.2425 / 12); // 30.436875 days/month (Gregorian average)
             
             const weeks = Number(map.weeks ?? 0);
             const finalWeeks = Math.trunc(weeks);
