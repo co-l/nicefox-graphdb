@@ -5814,6 +5814,28 @@ END FROM (SELECT json_group_array(${valueExpr}) as sv))`,
                 params
               };
             }
+            // Special case: if the argument is a boolean expression (comparison, AND, OR, NOT, etc.),
+            // convert the 0/1 result to 'false'/'true' strings
+            const isBooleanExpr = (e: Expression): boolean => {
+              if (e.type === "comparison") return true;
+              if (e.type === "binary" && ["AND", "OR"].includes((e as { operator?: string }).operator?.toUpperCase() ?? "")) return true;
+              if (e.type === "unary" && (e as { operator?: string }).operator?.toUpperCase() === "NOT") return true;
+              if (e.type === "function") {
+                const fn = (e as { functionName?: string }).functionName?.toUpperCase() ?? "";
+                if (["EXISTS", "ISNAN", "TOBOOLEAN"].includes(fn)) return true;
+              }
+              return false;
+            };
+            if (isBooleanExpr(arg)) {
+              const argResult = this.translateFunctionArg(arg);
+              tables.push(...argResult.tables);
+              params.push(...argResult.params);
+              return {
+                sql: `(SELECT CASE WHEN _v IS NULL THEN NULL WHEN _v THEN json_quote('true') ELSE json_quote('false') END FROM (SELECT ${argResult.sql} AS _v))`,
+                tables,
+                params
+              };
+            }
             const argResult = this.translateFunctionArg(arg);
             tables.push(...argResult.tables);
             params.push(...argResult.params);
@@ -5821,8 +5843,10 @@ END FROM (SELECT json_group_array(${valueExpr}) as sv))`,
             // toString(null) should return SQL NULL, not the string 'null'
             // For non-null values, use json_quote(CAST()) to produce a proper JSON string
             // that won't be re-parsed as a number/boolean by deepParseJson
+            // Special case: if value is exactly 0 or 1 (integer), treat as boolean and convert to 'false'/'true'
+            // This handles boolean properties stored in JSON (json_extract returns 0/1 for false/true)
             return {
-              sql: `(SELECT CASE WHEN _v IS NULL THEN NULL ELSE json_quote(CAST(_v AS TEXT)) END FROM (SELECT ${argResult.sql} AS _v))`,
+              sql: `(SELECT CASE WHEN _v IS NULL THEN NULL WHEN typeof(_v) = 'integer' AND _v = 1 THEN json_quote('true') WHEN typeof(_v) = 'integer' AND _v = 0 THEN json_quote('false') ELSE json_quote(CAST(_v AS TEXT)) END FROM (SELECT ${argResult.sql} AS _v))`,
               tables,
               params
             };
