@@ -48,6 +48,7 @@ export interface ResourceUsage {
 export interface DatabaseResult {
   database: DatabaseType;
   version: string;
+  totalDurationSeconds: number;
   load: LoadResult;
   beforeQueries: ResourceUsage;
   afterQueries: ResourceUsage;

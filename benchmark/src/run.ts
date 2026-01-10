@@ -154,6 +154,7 @@ async function benchmarkDatabase(
   console.log("-".repeat(60));
 
   const isDockerDb = db === "neo4j" || db === "memgraph";
+  const dbStartTime = performance.now();
 
   try {
     // Start Docker container if needed
@@ -209,12 +210,20 @@ async function benchmarkDatabase(
     const queryResults: QueryResult[] = [];
     const readQueries = getReadQueries(queries);
     const writeQueries = getWriteQueries(queries);
+    const allQueries = [...readQueries, ...writeQueries];
+    const totalQueries = allQueries.length;
 
     // Read queries
-    console.log("  Running read queries...");
-    for (const query of readQueries) {
+    console.log(`  Running read queries (${readQueries.length} queries)...`);
+    for (let qIdx = 0; qIdx < readQueries.length; qIdx++) {
+      const query = readQueries[qIdx];
+      const queryNum = qIdx + 1;
+      const elapsed = formatSeconds((performance.now() - dbStartTime) / 1000);
+      process.stdout.write(`    [${queryNum}/${totalQueries}] ${query.name}...`);
+      
       resetQueryRng();
       const times: number[] = [];
+      const queryStart = performance.now();
 
       // Warmup
       for (let i = 0; i < BENCHMARK_CONFIG.warmupIterations; i++) {
@@ -234,11 +243,12 @@ async function benchmarkDatabase(
           times.push(performance.now() - start);
         } catch (err) {
           if (i === 0) {
-            console.log(`    ${query.name}: Error - ${err instanceof Error ? err.message : err}`);
+            console.log(` Error - ${err instanceof Error ? err.message : err}`);
           }
         }
       }
 
+      const queryDuration = (performance.now() - queryStart) / 1000;
       if (times.length > 0) {
         const stats = calculateStats(times);
         queryResults.push({
@@ -246,15 +256,22 @@ async function benchmarkDatabase(
           category: query.category,
           timing: stats,
         });
-        console.log(`    ${query.name}: p50=${formatMs(stats.p50)}, p95=${formatMs(stats.p95)}`);
+        console.log(` p50=${formatMs(stats.p50)}, p95=${formatMs(stats.p95)} (${formatSeconds(queryDuration)})`);
+      } else {
+        console.log(` no successful runs`);
       }
     }
 
     // Write queries
-    console.log("  Running write queries...");
-    for (const query of writeQueries) {
+    console.log(`  Running write queries (${writeQueries.length} queries)...`);
+    for (let qIdx = 0; qIdx < writeQueries.length; qIdx++) {
+      const query = writeQueries[qIdx];
+      const queryNum = readQueries.length + qIdx + 1;
+      process.stdout.write(`    [${queryNum}/${totalQueries}] ${query.name}...`);
+      
       resetQueryRng();
       const times: number[] = [];
+      const queryStart = performance.now();
 
       // Warmup
       for (let i = 0; i < BENCHMARK_CONFIG.warmupIterations; i++) {
@@ -274,11 +291,12 @@ async function benchmarkDatabase(
           times.push(performance.now() - start);
         } catch (err) {
           if (i === 0) {
-            console.log(`    ${query.name}: Error - ${err instanceof Error ? err.message : err}`);
+            console.log(` Error - ${err instanceof Error ? err.message : err}`);
           }
         }
       }
 
+      const queryDuration = (performance.now() - queryStart) / 1000;
       if (times.length > 0) {
         const stats = calculateStats(times);
         queryResults.push({
@@ -286,7 +304,9 @@ async function benchmarkDatabase(
           category: query.category,
           timing: stats,
         });
-        console.log(`    ${query.name}: p50=${formatMs(stats.p50)}, p95=${formatMs(stats.p95)}`);
+        console.log(` p50=${formatMs(stats.p50)}, p95=${formatMs(stats.p95)} (${formatSeconds(queryDuration)})`);
+      } else {
+        console.log(` no successful runs`);
       }
     }
 
@@ -307,11 +327,14 @@ async function benchmarkDatabase(
       cleanupLeanGraphDb();
     }
 
+    const totalDurationSeconds = (performance.now() - dbStartTime) / 1000;
+    console.log(`  Total duration: ${formatSeconds(totalDurationSeconds)}`);
     console.log();
 
     return {
       database: db,
       version,
+      totalDurationSeconds,
       load: {
         timeSeconds: loadTimeSeconds,
         nodesLoaded: getTotalNodes(config),
@@ -373,11 +396,11 @@ runBenchmark()
     console.log();
     console.log("Summary:");
     for (const db of results.databases) {
-      console.log(`  ${db.database}:`);
+      console.log(`  ${db.database}: (total: ${formatSeconds(db.totalDurationSeconds)})`);
       console.log(`    Version: ${db.version}`);
       console.log(`    Load time: ${formatSeconds(db.load.timeSeconds)}`);
-      console.log(`    Before queries - Disk: ${formatBytes(db.beforeQueries.diskBytes)}, RAM: ${formatBytes(db.beforeQueries.ramBytes)}`);
-      console.log(`    After queries  - Disk: ${formatBytes(db.afterQueries.diskBytes)}, RAM: ${formatBytes(db.afterQueries.ramBytes)}`);
+      console.log(`    Disk: ${formatBytes(db.beforeQueries.diskBytes)} -> ${formatBytes(db.afterQueries.diskBytes)}`);
+      console.log(`    RAM: ${formatBytes(db.beforeQueries.ramBytes)} -> ${formatBytes(db.afterQueries.ramBytes)}`);
       console.log(`    Cold start: ${formatMs(db.coldStartMs)}`);
 
       // Average p50 by category

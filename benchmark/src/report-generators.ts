@@ -1,7 +1,7 @@
 import * as fs from "fs";
 import * as path from "path";
 import type { BenchmarkResult } from "./types.js";
-import { formatBytes, formatMs } from "./measure.js";
+import { formatBytes, formatMs, formatSeconds } from "./measure.js";
 
 /**
  * Generate Markdown report
@@ -22,6 +22,8 @@ export function generateMarkdown(results: BenchmarkResult): string {
   lines.push("|--------|" + results.databases.map(() => "--------").join("|") + "|");
 
   lines.push("| Version | " + results.databases.map((d) => d.version).join(" | ") + " |");
+  lines.push("| **Total Duration** | " + results.databases.map((d) => `**${formatSeconds(d.totalDurationSeconds)}**`).join(" | ") + " |");
+  lines.push("| Load Time | " + results.databases.map((d) => formatSeconds(d.load.timeSeconds)).join(" | ") + " |");
   lines.push("| Disk (before) | " + results.databases.map((d) => formatBytes(d.beforeQueries.diskBytes)).join(" | ") + " |");
   lines.push("| Disk (after) | " + results.databases.map((d) => formatBytes(d.afterQueries.diskBytes)).join(" | ") + " |");
   lines.push("| RAM (before) | " + results.databases.map((d) => formatBytes(d.beforeQueries.ramBytes)).join(" | ") + " |");
@@ -109,6 +111,14 @@ export function generateHtml(results: BenchmarkResult): string {
       <tr>
         <td class="metric">Version</td>
         ${results.databases.map((d) => `<td>${d.version}</td>`).join("\n        ")}
+      </tr>
+      <tr>
+        <td class="metric"><strong>Total Duration</strong></td>
+        ${results.databases.map((d) => `<td><strong>${formatSeconds(d.totalDurationSeconds)}</strong></td>`).join("\n        ")}
+      </tr>
+      <tr>
+        <td class="metric">Load Time</td>
+        ${results.databases.map((d) => `<td>${formatSeconds(d.load.timeSeconds)}</td>`).join("\n        ")}
       </tr>
       <tr>
         <td class="metric">Disk (before)</td>
