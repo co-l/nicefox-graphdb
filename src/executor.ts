@@ -155,9 +155,27 @@ export type QueryResponse = ExecutionResult | ExecutionError;
 
 export class Executor {
   private db: GraphDatabase;
+  private propertyCache = new Map<string, Record<string, unknown>>();
 
   constructor(db: GraphDatabase) {
     this.db = db;
+  }
+
+  /**
+   * Get node properties from cache or parse from JSON string and cache them
+   */
+  private getNodeProperties(nodeId: string, propsJson: string | object): Record<string, unknown> {
+    let props = this.propertyCache.get(nodeId);
+    if (!props) {
+      props = typeof propsJson === "string" ? JSON.parse(propsJson) : propsJson;
+      if (props && typeof props === "object" && !Array.isArray(props)) {
+        this.propertyCache.set(nodeId, props);
+      } else {
+        // Fallback for invalid data
+        props = {};
+      }
+    }
+    return props || {};
   }
 
   /**
@@ -165,6 +183,8 @@ export class Executor {
    */
   execute(cypher: string, params: Record<string, unknown> = {}): QueryResponse {
     const startTime = performance.now();
+    // Clear property cache at start of each query execution
+    this.propertyCache.clear();
 
     try {
       // 1. Parse the Cypher query
@@ -1648,9 +1668,10 @@ export class Executor {
         const outputRow = new Map(inputRow);
         
         if (pattern.variable) {
-          const nodeProps = typeof row.properties === "string" 
-            ? JSON.parse(row.properties) 
-            : row.properties;
+           const nodeProps = this.getNodeProperties(
+             typeof row.id === "string" ? row.id : "", 
+             typeof row.properties === "string" || (typeof row.properties === "object" && row.properties !== null) ? row.properties : "{}"
+           );
           const nodeObj = { ...nodeProps, _nf_id: row.id };
           outputRow.set(pattern.variable, nodeObj);
         }
@@ -6570,7 +6591,10 @@ export class Executor {
             matchedNodes.set(nodePattern.variable, {
               id: row.id as string,
               label: row.label as string,
-              properties: typeof row.properties === "string" ? JSON.parse(row.properties) : row.properties,
+              properties: this.getNodeProperties(
+                typeof row.id === "string" ? row.id : "",
+                typeof row.properties === "string" || (typeof row.properties === "object" && row.properties !== null) ? row.properties : "{}"
+              ),
             });
           }
         }

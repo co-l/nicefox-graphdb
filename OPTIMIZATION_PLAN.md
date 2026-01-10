@@ -12,7 +12,7 @@ This document outlines actionable performance optimizations for LeanGraph, prior
 | P1 | Label index | 5-20x | Low | [x] |
 | P1 | Variable-length path early termination | 10-100x | Medium | [x] |
 | P1 | Batch INSERTs for UNWIND+CREATE | 10-100x | Medium | [x] |
-| P2 | JSON property parse caching | 2-5x | Low | [ ] |
+| P2 | JSON property parse caching | 2-5x | Low | [x] |
 | P2 | Reduce context cloning | 2-3x | Medium | [ ] |
 | P2 | Single-pass query classifier | 5-10x | Medium | [ ] |
 | P3 | Tokenizer string allocation | 30-50% | Low | [ ] |
