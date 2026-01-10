@@ -1,6 +1,6 @@
-# CLAUDE.md
+# AGENTS.md
 
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+This file provides guidance to AI coding agents when working with code in this repository.
 
 ## Project Overview
 
@@ -61,6 +61,21 @@ npm run tck:failing -- --full     # Detailed list with queries
 npm run tck:failing -- --errors   # Only tests expecting errors
 npm run tck:failing -- --category match  # Filter by category
 ```
+
+### Benchmark
+
+Compare LeanGraph performance against Neo4j 3.5 and Memgraph:
+
+```bash
+npm run benchmark                          # All 3 DBs, quick scale (170K nodes)
+npm run benchmark -- -s micro              # Fast test (8K nodes, ~1 min)
+npm run benchmark -- -s full               # Production benchmark (17M nodes)
+npm run benchmark -- -d leangraph          # LeanGraph only
+npm run benchmark -- -d leangraph,neo4j    # Skip Memgraph
+npm run benchmark:report                   # Generate reports from latest results
+```
+
+Docker is auto-started/stopped for Neo4j and Memgraph.
 
 ## Key Patterns
 
