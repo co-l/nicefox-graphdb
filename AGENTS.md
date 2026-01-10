@@ -77,6 +77,11 @@ npm run benchmark:report                   # Generate reports from latest result
 
 Docker is auto-started/stopped for Neo4j and Memgraph.
 
+For faster iteration when developing benchmarks:
+```bash
+cd benchmark && npm run benchmark -- -s micro -d leangraph
+```
+
 ## Key Patterns
 
 - Parser produces AST (see interfaces in `parser.ts`: `Query`, `Clause`, `Expression`, etc.)
