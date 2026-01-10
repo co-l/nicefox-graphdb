@@ -31,10 +31,7 @@ npm install leangraph better-sqlite3
 ```typescript
 import { LeanGraph } from 'leangraph';
 
-const db = await LeanGraph({
-  project: 'myapp',       // or process.env.LEANGRAPH_PROJECT
-  apiKey: 'lg_xxx',      // or process.env.LEANGRAPH_API_KEY
-});
+const db = await LeanGraph({ project: 'myapp' });
 
 // Create nodes and relationships
 await db.execute(`
@@ -54,37 +51,20 @@ LeanGraph automatically adapts based on the `NODE_ENV` environment variable:
 
 | Mode | `NODE_ENV` | Behavior |
 |------|-----------|----------|
-| **Development** | `development` | Uses local SQLite database. `url` and `apiKey` are ignored. |
-| **Production** | `production` (or unset) | Connects to remote server via HTTP. `url` and `apiKey` are required. |
+| **Development** | unset or `development` | Uses local SQLite database. `url` and `apiKey` are ignored. |
+| **Production** | `production` | Connects to remote server via HTTP. |
 
-This means you can use the **exact same code** in both environments:
+### Development Mode (default)
 
-```typescript
-// Works in both development and production!
-const db = await LeanGraph({ project: 'myapp' });
-```
-
-### Development Mode
-
-When `NODE_ENV=development`:
-- A local SQLite database is created automatically
+By default, LeanGraph uses a local SQLite database:
 - No server setup required
-- `url` and `apiKey` parameters are ignored
-- Data persists at `./data/{env}/{project}.db` by default
-
-```bash
-# Run your app in development mode
-NODE_ENV=development node app.js
-```
+- Data persists at `./data/development/{project}.db`
 
 ### Production Mode
 
-When `NODE_ENV=production` (or unset):
-- Connects to a remote LeanGraph server via HTTP
-- `url` and `apiKey` are required
+Set `NODE_ENV=production` to connect to a remote server:
 
 ```bash
-# Run your app in production mode
 NODE_ENV=production LEANGRAPH_API_KEY=xxx node app.js
 ```
 
@@ -95,34 +75,30 @@ NODE_ENV=production LEANGRAPH_API_KEY=xxx node app.js
 | `url` | `string` | No | `LEANGRAPH_URL` or `https://leangraph.io` | Base URL of the LeanGraph server (production only) |
 | `project` | `string` | Yes | `LEANGRAPH_PROJECT` | Project name |
 | `apiKey` | `string` | No | `LEANGRAPH_API_KEY` | API key for authentication (production only) |
-| `env` | `string` | No | `NODE_ENV` or `production` | Environment (determines database isolation) |
+| `env` | `string` | No | `NODE_ENV` or `development` | Environment (determines database isolation) |
 | `dataPath` | `string` | No | `LEANGRAPH_DATA_PATH` or `./data` | Path for local data storage (development only). Use `':memory:'` for in-memory database |
 
 ### Examples
 
-**Production** (default when `NODE_ENV` is unset or `production`):
+**Development** (default):
+```typescript
+const db = await LeanGraph({ project: 'myapp' });
+```
+
+**Production** (NODE_ENV=production):
 ```typescript
 const db = await LeanGraph({
-  project: 'myapp',           // or process.env.LEANGRAPH_PROJECT
-  apiKey: 'lg_xxx',          // or process.env.LEANGRAPH_API_KEY
-  url: 'https://my-server',   // or process.env.LEANGRAPH_URL (default: leangraph.io)
+  project: 'myapp',
+  apiKey: 'lg_xxx',
+  url: 'https://my-server',
 });
 ```
 
-**Development** (when `NODE_ENV=development`):
+**Testing** (in-memory):
 ```typescript
 const db = await LeanGraph({
-  project: 'myapp',           // or process.env.LEANGRAPH_PROJECT
-  dataPath: './local-data',   // or process.env.LEANGRAPH_DATA_PATH (default: ./data)
-});
-// url and apiKey are ignored - uses local SQLite
-```
-
-**Testing** (when `NODE_ENV=development`):
-```typescript
-const db = await LeanGraph({
-  project: 'test-project',
-  dataPath: ':memory:',       // in-memory database, resets on each run
+  project: 'test',
+  dataPath: ':memory:',
 });
 ```
 

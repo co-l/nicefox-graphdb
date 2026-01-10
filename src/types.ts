@@ -34,7 +34,7 @@ export interface GraphDBOptions {
 
   /**
    * Environment name for data isolation.
-   * @default NODE_ENV or 'production'
+   * @default NODE_ENV or 'development'
    */
   env?: string;
 

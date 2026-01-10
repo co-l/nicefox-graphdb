@@ -89,20 +89,7 @@ export const VERSION: string = pkg.version;
 /**
  * Create a LeanGraph client.
  *
- * All options support environment variable defaults:
- * - `url`: LEANGRAPH_URL (default: 'https://leangraph.io')
- * - `project`: LEANGRAPH_PROJECT (required)
- * - `env`: NODE_ENV (default: 'production')
- * - `apiKey`: LEANGRAPH_API_KEY
- * - `dataPath`: LEANGRAPH_DATA_PATH (default: './data')
- *
- * **Development Mode** (NODE_ENV=development):
- * - Uses a local SQLite database
- * - `url` and `apiKey` are ignored
- * - Data is stored at `dataPath/{env}/{project}.db`
- *
- * **Production Mode** (NODE_ENV=production or unset):
- * - Connects to a remote server via HTTP
+ * By default uses local SQLite. Set NODE_ENV=production for remote mode.
  *
  * @example
  * ```typescript
@@ -110,13 +97,9 @@ export const VERSION: string = pkg.version;
  *
  * const db = await LeanGraph({ project: 'myapp' });
  *
- * // Create nodes
  * await db.execute('CREATE (n:User {name: "Alice"})');
- *
- * // Query
  * const users = await db.query('MATCH (n:User) RETURN n');
  *
- * // Always close when done
  * db.close();
  * ```
  */

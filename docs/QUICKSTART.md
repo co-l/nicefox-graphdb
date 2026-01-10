@@ -57,12 +57,7 @@ Save the API keys - you'll need them to authenticate.
 ```typescript
 import { LeanGraph } from 'leangraph';
 
-const db = await LeanGraph({
-  url: 'http://localhost:3000',
-  project: 'myapp',
-  env: 'test',  // Use 'production' for prod
-  apiKey: 'your-api-key-here'
-});
+const db = await LeanGraph({ project: 'myapp' });
 
 // Create some data
 await db.execute(`
@@ -220,10 +215,8 @@ If authentication is enabled, provide your API key:
 
 ```typescript
 const db = await LeanGraph({
-  url: 'http://localhost:3000',
   project: 'myapp',
-  env: 'test',
-  apiKey: 'your-api-key'  // Required when auth is enabled
+  apiKey: 'your-api-key',  // Required when auth is enabled
 });
 ```
 

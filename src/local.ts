@@ -21,7 +21,7 @@ import { GraphDBError } from "./types.js";
 export function createLocalClient(options: GraphDBOptions = {}): GraphDBClient {
   const dataPath = options.dataPath ?? process.env.LEANGRAPH_DATA_PATH ?? "./data";
   const project = options.project ?? process.env.LEANGRAPH_PROJECT;
-  const env = options.env ?? process.env.NODE_ENV ?? "production";
+  const env = options.env ?? process.env.NODE_ENV ?? "development";
 
   if (!project) {
     throw new Error("Project is required. Set via options.project or LEANGRAPH_PROJECT env var.");
