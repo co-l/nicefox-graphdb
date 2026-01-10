@@ -1,8 +1,8 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
-import { GraphDB, GraphDBError } from "../src/index.js";
+import { LeanGraph, GraphDBError } from "../src/index.js";
 import type { GraphDBClient } from "../src/types.js";
 
-describe("GraphDB Factory", () => {
+describe("LeanGraph Factory", () => {
   describe("Development Mode (Local Client)", () => {
     let db: GraphDBClient;
 
@@ -10,7 +10,7 @@ describe("GraphDB Factory", () => {
       // Set NODE_ENV to development
       vi.stubEnv("NODE_ENV", "development");
 
-      db = await GraphDB({
+      db = await LeanGraph({
         url: "https://example.com", // ignored in dev mode
         project: "test-project",
         apiKey: "ignored-key", // ignored in dev mode
@@ -175,14 +175,14 @@ describe("GraphDB Factory", () => {
       
       // Remote client will fail to connect, but we can verify it tries HTTP
       await expect(
-        GraphDB({
+        LeanGraph({
           url: "http://localhost:99999", // non-existent server
           project: "test",
         })
       ).resolves.toBeDefined();
       
       // The client is created but will fail on first query
-      const db = await GraphDB({
+      const db = await LeanGraph({
         url: "http://localhost:99999",
         project: "test",
       });
@@ -196,7 +196,7 @@ describe("GraphDB Factory", () => {
     it("should use local client when NODE_ENV is empty string", async () => {
       vi.stubEnv("NODE_ENV", "");
       
-      const db = await GraphDB({
+      const db = await LeanGraph({
         url: "http://localhost:99999", // ignored for local client
         project: "test",
         dataPath: ":memory:",
@@ -220,7 +220,7 @@ describe("GraphDB Factory", () => {
     });
 
     it("should default env to production", async () => {
-      const db = await GraphDB({
+      const db = await LeanGraph({
         url: "http://example.com",
         project: "test",
         dataPath: ":memory:",
@@ -232,7 +232,7 @@ describe("GraphDB Factory", () => {
     });
 
     it("should accept test environment", async () => {
-      const db = await GraphDB({
+      const db = await LeanGraph({
         url: "http://example.com",
         project: "test",
         env: "test",

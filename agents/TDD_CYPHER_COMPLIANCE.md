@@ -73,8 +73,8 @@ After implementing a fix, use `./scripts/comment-fixed-tests.sh` automatically u
 ```bash
 cd /home/conrad/dev/leangraph && LEANGRAPH_PROJECT=test-debug tsx -e "
 (async () => {
-  const { GraphDB } = require('./src/index.ts');
-  const db = await GraphDB({ dataPath: ':memory:' });
+  const { LeanGraph } = require('./src/index.ts');
+  const db = await LeanGraph({ dataPath: ':memory:' });
   // Setup
   await db.execute('CREATE (a:A), (b:B)');
   await db.execute('MATCH (a:A), (b:B) CREATE (a)-[:T1]->(b), (b)-[:T2]->(a)');

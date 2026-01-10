@@ -10,7 +10,7 @@ LeanGraph is a SQLite-based graph database with full Cypher query support. It ac
 
 ```
 src/
-├── index.ts       # Main entry, factory function (GraphDB)
+├── index.ts       # Main entry, factory function (LeanGraph)
 ├── local.ts       # Local embedded SQLite client
 ├── remote.ts      # Remote HTTP client
 ├── types.ts       # Shared types

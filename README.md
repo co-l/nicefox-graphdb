@@ -29,9 +29,9 @@ npm install leangraph better-sqlite3
 ## Quick Start
 
 ```typescript
-import { GraphDB } from 'leangraph';
+import { LeanGraph } from 'leangraph';
 
-const db = await GraphDB({
+const db = await LeanGraph({
   project: 'myapp',       // or process.env.LEANGRAPH_PROJECT
   apiKey: 'lg_xxx',      // or process.env.LEANGRAPH_API_KEY
 });
@@ -61,7 +61,7 @@ This means you can use the **exact same code** in both environments:
 
 ```typescript
 // Works in both development and production!
-const db = await GraphDB({ project: 'myapp' });
+const db = await LeanGraph({ project: 'myapp' });
 ```
 
 ### Development Mode
@@ -80,7 +80,7 @@ NODE_ENV=development node app.js
 ### Production Mode
 
 When `NODE_ENV=production` (or unset):
-- Connects to a remote GraphDB server via HTTP
+- Connects to a remote LeanGraph server via HTTP
 - `url` and `apiKey` are required
 
 ```bash
@@ -92,7 +92,7 @@ NODE_ENV=production LEANGRAPH_API_KEY=xxx node app.js
 
 | Option | Type | Required | Default | Description |
 |--------|------|----------|---------|-------------|
-| `url` | `string` | No | `LEANGRAPH_URL` or `https://leangraph.io` | Base URL of the GraphDB server (production only) |
+| `url` | `string` | No | `LEANGRAPH_URL` or `https://leangraph.io` | Base URL of the LeanGraph server (production only) |
 | `project` | `string` | Yes | `LEANGRAPH_PROJECT` | Project name |
 | `apiKey` | `string` | No | `LEANGRAPH_API_KEY` | API key for authentication (production only) |
 | `env` | `string` | No | `NODE_ENV` or `production` | Environment (determines database isolation) |
@@ -102,7 +102,7 @@ NODE_ENV=production LEANGRAPH_API_KEY=xxx node app.js
 
 **Production** (default when `NODE_ENV` is unset or `production`):
 ```typescript
-const db = await GraphDB({
+const db = await LeanGraph({
   project: 'myapp',           // or process.env.LEANGRAPH_PROJECT
   apiKey: 'lg_xxx',          // or process.env.LEANGRAPH_API_KEY
   url: 'https://my-server',   // or process.env.LEANGRAPH_URL (default: leangraph.io)
@@ -111,7 +111,7 @@ const db = await GraphDB({
 
 **Development** (when `NODE_ENV=development`):
 ```typescript
-const db = await GraphDB({
+const db = await LeanGraph({
   project: 'myapp',           // or process.env.LEANGRAPH_PROJECT
   dataPath: './local-data',   // or process.env.LEANGRAPH_DATA_PATH (default: ./data)
 });
@@ -120,7 +120,7 @@ const db = await GraphDB({
 
 **Testing** (when `NODE_ENV=development`):
 ```typescript
-const db = await GraphDB({
+const db = await LeanGraph({
   project: 'test-project',
   dataPath: ':memory:',       // in-memory database, resets on each run
 });
@@ -128,9 +128,9 @@ const db = await GraphDB({
 
 ## API Reference
 
-### `GraphDB(options): Promise<GraphDBClient>`
+### `LeanGraph(options): Promise<GraphDBClient>`
 
-Create a new GraphDB client. Returns a promise that resolves to a client instance.
+Create a new LeanGraph client. Returns a promise that resolves to a client instance.
 
 ### `db.query<T>(cypher, params?): Promise<T[]>`
 
@@ -218,7 +218,7 @@ Check server health. In development mode, always returns `{ status: 'ok', ... }`
 Close the client and release resources. **Always call this when done.**
 
 ```typescript
-const db = await GraphDB({ ... });
+const db = await LeanGraph({ ... });
 try {
   // ... use db
 } finally {

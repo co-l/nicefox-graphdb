@@ -55,9 +55,9 @@ Save the API keys - you'll need them to authenticate.
 ## 4. Connect from Your Application
 
 ```typescript
-import { GraphDB } from 'leangraph';
+import { LeanGraph } from 'leangraph';
 
-const db = await GraphDB({
+const db = await LeanGraph({
   url: 'http://localhost:3000',
   project: 'myapp',
   env: 'test',  // Use 'production' for prod
@@ -219,7 +219,7 @@ npx leangraph create myapp --data ./graphdb-data
 If authentication is enabled, provide your API key:
 
 ```typescript
-const db = await GraphDB({
+const db = await LeanGraph({
   url: 'http://localhost:3000',
   project: 'myapp',
   env: 'test',

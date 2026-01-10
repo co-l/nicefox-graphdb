@@ -87,7 +87,7 @@ export const VERSION: string = pkg.version;
 // ============================================================================
 
 /**
- * Create a GraphDB client.
+ * Create a LeanGraph client.
  *
  * All options support environment variable defaults:
  * - `url`: LEANGRAPH_URL (default: 'https://leangraph.io')
@@ -106,16 +106,9 @@ export const VERSION: string = pkg.version;
  *
  * @example
  * ```typescript
- * import { GraphDB } from 'leangraph';
+ * import { LeanGraph } from 'leangraph';
  *
- * // Using environment variables (set LEANGRAPH_PROJECT, LEANGRAPH_API_KEY)
- * const db = await GraphDB();
- *
- * // Or with explicit options
- * const db = await GraphDB({
- *   project: 'myapp',
- *   apiKey: process.env.LEANGRAPH_API_KEY,
- * });
+ * const db = await LeanGraph({ project: 'myapp' });
  *
  * // Create nodes
  * await db.execute('CREATE (n:User {name: "Alice"})');
@@ -127,7 +120,7 @@ export const VERSION: string = pkg.version;
  * db.close();
  * ```
  */
-export async function GraphDB(options: GraphDBOptions = {}): Promise<GraphDBClient> {
+export async function LeanGraph(options: GraphDBOptions = {}): Promise<GraphDBClient> {
   const isProduction = process.env.NODE_ENV === "production";
 
   if (isProduction) {
@@ -150,4 +143,4 @@ export async function GraphDB(options: GraphDBOptions = {}): Promise<GraphDBClie
 }
 
 // Default export
-export default GraphDB;
+export default LeanGraph;
