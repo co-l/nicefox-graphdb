@@ -90,11 +90,11 @@ export const VERSION: string = pkg.version;
  * Create a GraphDB client.
  *
  * All options support environment variable defaults:
- * - `url`: GRAPHDB_URL (default: 'https://leangraph.io')
- * - `project`: GRAPHDB_PROJECT (required)
+ * - `url`: LEANGRAPH_URL (default: 'https://leangraph.io')
+ * - `project`: LEANGRAPH_PROJECT (required)
  * - `env`: NODE_ENV (default: 'production')
- * - `apiKey`: GRAPHDB_API_KEY
- * - `dataPath`: GRAPHDB_DATA_PATH (default: './data')
+ * - `apiKey`: LEANGRAPH_API_KEY
+ * - `dataPath`: LEANGRAPH_DATA_PATH (default: './data')
  *
  * **Development Mode** (NODE_ENV=development):
  * - Uses a local SQLite database
@@ -108,13 +108,13 @@ export const VERSION: string = pkg.version;
  * ```typescript
  * import { GraphDB } from 'leangraph';
  *
- * // Using environment variables (set GRAPHDB_PROJECT, GRAPHDB_API_KEY)
+ * // Using environment variables (set LEANGRAPH_PROJECT, LEANGRAPH_API_KEY)
  * const db = await GraphDB();
  *
  * // Or with explicit options
  * const db = await GraphDB({
  *   project: 'myapp',
- *   apiKey: process.env.GRAPHDB_API_KEY,
+ *   apiKey: process.env.LEANGRAPH_API_KEY,
  * });
  *
  * // Create nodes

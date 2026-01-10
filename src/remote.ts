@@ -15,13 +15,13 @@ import { GraphDBError } from "./types.js";
  */
 export function createRemoteClient(options: GraphDBOptions = {}): GraphDBClient {
   // Resolve options with environment variable defaults
-  const rawUrl = options.url ?? process.env.GRAPHDB_URL ?? "https://leangraph.io";
-  const project = options.project ?? process.env.GRAPHDB_PROJECT;
+  const rawUrl = options.url ?? process.env.LEANGRAPH_URL ?? "https://leangraph.io";
+  const project = options.project ?? process.env.LEANGRAPH_PROJECT;
   const env = options.env ?? process.env.NODE_ENV ?? "production";
-  const apiKey = options.apiKey ?? process.env.GRAPHDB_API_KEY;
+  const apiKey = options.apiKey ?? process.env.LEANGRAPH_API_KEY;
 
   if (!project) {
-    throw new Error("Project is required. Set via options.project or GRAPHDB_PROJECT env var.");
+    throw new Error("Project is required. Set via options.project or LEANGRAPH_PROJECT env var.");
   }
 
   // Normalize URL (remove trailing slash)

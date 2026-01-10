@@ -12,7 +12,7 @@ export interface GraphDBOptions {
   /**
    * Base URL of the GraphDB server.
    * Used in production mode. Ignored in development mode.
-   * @default GRAPHDB_URL env var or 'https://leangraph.io'
+   * @default LEANGRAPH_URL env var or 'https://leangraph.io'
    * @example 'https://my-graphdb.example.com'
    */
   url?: string;
@@ -21,14 +21,14 @@ export interface GraphDBOptions {
    * Project name.
    * In production: used as part of the API endpoint path.
    * In development: used as the database filename.
-   * @default GRAPHDB_PROJECT env var (required)
+   * @default LEANGRAPH_PROJECT env var (required)
    */
   project?: string;
 
   /**
    * API key for authentication.
    * Used in production mode. Ignored in development mode.
-   * @default GRAPHDB_API_KEY env var
+   * @default LEANGRAPH_API_KEY env var
    */
   apiKey?: string;
 
@@ -42,7 +42,7 @@ export interface GraphDBOptions {
    * Path for local data storage.
    * Only used in development mode (when NODE_ENV=development).
    * - Use ':memory:' for an in-memory database (resets on restart)
-   * @default GRAPHDB_DATA_PATH env var or './data'
+   * @default LEANGRAPH_DATA_PATH env var or './data'
    */
   dataPath?: string;
 }

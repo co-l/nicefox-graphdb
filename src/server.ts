@@ -47,7 +47,7 @@ if (import.meta.url === `file://${process.argv[1]}`) {
   const { createServer } = await import("./routes");
 
   const port = parseInt(process.env.PORT || "3000", 10);
-  const dataPath = process.env.DATA_PATH || "./data";
+  const dataPath = process.env.LEANGRAPH_DATA_PATH || "./data";
 
   const { app, dbManager } = createServer({ port, dataPath });
 

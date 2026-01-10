@@ -19,12 +19,12 @@ import { GraphDBError } from "./types.js";
  * This client uses SQLite directly without any HTTP layer.
  */
 export function createLocalClient(options: GraphDBOptions = {}): GraphDBClient {
-  const dataPath = options.dataPath ?? process.env.GRAPHDB_DATA_PATH ?? "./data";
-  const project = options.project ?? process.env.GRAPHDB_PROJECT;
+  const dataPath = options.dataPath ?? process.env.LEANGRAPH_DATA_PATH ?? "./data";
+  const project = options.project ?? process.env.LEANGRAPH_PROJECT;
   const env = options.env ?? process.env.NODE_ENV ?? "production";
 
   if (!project) {
-    throw new Error("Project is required. Set via options.project or GRAPHDB_PROJECT env var.");
+    throw new Error("Project is required. Set via options.project or LEANGRAPH_PROJECT env var.");
   }
 
   // Determine database path

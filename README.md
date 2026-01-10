@@ -32,8 +32,8 @@ npm install leangraph better-sqlite3
 import { GraphDB } from 'leangraph';
 
 const db = await GraphDB({
-  project: 'myapp',       // or process.env.GRAPHDB_PROJECT
-  apiKey: 'lg_xxx',      // or process.env.GRAPHDB_API_KEY
+  project: 'myapp',       // or process.env.LEANGRAPH_PROJECT
+  apiKey: 'lg_xxx',      // or process.env.LEANGRAPH_API_KEY
 });
 
 // Create nodes and relationships
@@ -85,35 +85,35 @@ When `NODE_ENV=production` (or unset):
 
 ```bash
 # Run your app in production mode
-NODE_ENV=production GRAPHDB_API_KEY=xxx node app.js
+NODE_ENV=production LEANGRAPH_API_KEY=xxx node app.js
 ```
 
 ## Configuration Options
 
 | Option | Type | Required | Default | Description |
 |--------|------|----------|---------|-------------|
-| `url` | `string` | No | `GRAPHDB_URL` or `https://leangraph.io` | Base URL of the GraphDB server (production only) |
-| `project` | `string` | Yes | `GRAPHDB_PROJECT` | Project name |
-| `apiKey` | `string` | No | `GRAPHDB_API_KEY` | API key for authentication (production only) |
+| `url` | `string` | No | `LEANGRAPH_URL` or `https://leangraph.io` | Base URL of the GraphDB server (production only) |
+| `project` | `string` | Yes | `LEANGRAPH_PROJECT` | Project name |
+| `apiKey` | `string` | No | `LEANGRAPH_API_KEY` | API key for authentication (production only) |
 | `env` | `string` | No | `NODE_ENV` or `production` | Environment (determines database isolation) |
-| `dataPath` | `string` | No | `GRAPHDB_DATA_PATH` or `./data` | Path for local data storage (development only). Use `':memory:'` for in-memory database |
+| `dataPath` | `string` | No | `LEANGRAPH_DATA_PATH` or `./data` | Path for local data storage (development only). Use `':memory:'` for in-memory database |
 
 ### Examples
 
 **Production** (default when `NODE_ENV` is unset or `production`):
 ```typescript
 const db = await GraphDB({
-  project: 'myapp',           // or process.env.GRAPHDB_PROJECT
-  apiKey: 'lg_xxx',          // or process.env.GRAPHDB_API_KEY
-  url: 'https://my-server',   // or process.env.GRAPHDB_URL (default: leangraph.io)
+  project: 'myapp',           // or process.env.LEANGRAPH_PROJECT
+  apiKey: 'lg_xxx',          // or process.env.LEANGRAPH_API_KEY
+  url: 'https://my-server',   // or process.env.LEANGRAPH_URL (default: leangraph.io)
 });
 ```
 
 **Development** (when `NODE_ENV=development`):
 ```typescript
 const db = await GraphDB({
-  project: 'myapp',           // or process.env.GRAPHDB_PROJECT
-  dataPath: './local-data',   // or process.env.GRAPHDB_DATA_PATH (default: ./data)
+  project: 'myapp',           // or process.env.LEANGRAPH_PROJECT
+  dataPath: './local-data',   // or process.env.LEANGRAPH_DATA_PATH (default: ./data)
 });
 // url and apiKey are ignored - uses local SQLite
 ```

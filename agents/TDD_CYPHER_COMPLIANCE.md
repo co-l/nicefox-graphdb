@@ -71,7 +71,7 @@ After implementing a fix, use `./scripts/comment-fixed-tests.sh` automatically u
 ## Example for debugging
 
 ```bash
-cd /home/conrad/dev/leangraph && GRAPHDB_PROJECT=test-debug tsx -e "
+cd /home/conrad/dev/leangraph && LEANGRAPH_PROJECT=test-debug tsx -e "
 (async () => {
   const { GraphDB } = require('./src/index.ts');
   const db = await GraphDB({ dataPath: ':memory:' });
@@ -100,7 +100,7 @@ cd /home/conrad/dev/leangraph && GRAPHDB_PROJECT=test-debug tsx -e "
 ```
 
 ```bash
-cd /home/conrad/dev/leangraph && GRAPHDB_PROJECT=test-debug tsx -e "
+cd /home/conrad/dev/leangraph && LEANGRAPH_PROJECT=test-debug tsx -e "
 const Database = require('better-sqlite3');
 const db = new Database(':memory:');
 // Test SQLite directly
@@ -112,7 +112,7 @@ console.log('json_type null:', db.prepare(\"SELECT json_type(json_array(NULL), '
 ```
 
 ```bash
-cd /home/conrad/dev/leangraph && GRAPHDB_PROJECT=test-debug tsx -e "
+cd /home/conrad/dev/leangraph && LEANGRAPH_PROJECT=test-debug tsx -e "
 const { Translator } = require('./src/translator.ts');
 const { parse } = require('./src/parser.ts');
 const query = \`
