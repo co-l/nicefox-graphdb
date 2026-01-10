@@ -1,0 +1,39 @@
+services:
+  neo4j:
+    image: neo4j:3.5
+    container_name: benchmark-neo4j
+    ports:
+      - "7474:7474"  # HTTP (browser)
+      - "7687:7687"  # Bolt
+    environment:
+      NEO4J_AUTH: neo4j/benchmark123
+      # Neo4j 3.5 uses underscores in env vars, not dots
+      NEO4J_dbms_memory_heap_initial__size: 1G
+      NEO4J_dbms_memory_heap_max__size: 2G
+    volumes:
+      - neo4j-data:/data
+    healthcheck:
+      # Use wget since curl may not be available in Neo4j 3.5 image
+      test: ["CMD-SHELL", "wget --spider -q http://localhost:7474 || exit 1"]
+      interval: 5s
+      timeout: 10s
+      retries: 30
+      start_period: 10s
+
+  memgraph:
+    image: memgraph/memgraph:latest
+    container_name: benchmark-memgraph
+    ports:
+      - "7688:7687"  # Bolt on different port
+    volumes:
+      - memgraph-data:/var/lib/memgraph
+    healthcheck:
+      test: ["CMD-SHELL", "echo 'RETURN 1;' | mgconsole || exit 1"]
+      interval: 5s
+      timeout: 10s
+      retries: 30
+      start_period: 5s
+
+volumes:
+  neo4j-data:
+  memgraph-data:

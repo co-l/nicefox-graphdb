@@ -1,0 +1,16 @@
+{
+  "timestamp": "2026-01-10T00:00:00.000Z",
+  "scale": "quick",
+  "config": {
+    "users": 20000,
+    "items": 50000,
+    "events": 100000,
+    "ownsEdges": 50000,
+    "triggeredEdges": 100000,
+    "relatedToEdges": 30000
+  },
+  "totalNodes": 170000,
+  "totalEdges": 180000,
+  "databases": [],
+  "_comment": "Placeholder baseline. Run 'npm run benchmark:quick' to generate real results."
+}

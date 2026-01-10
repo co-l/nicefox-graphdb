@@ -32,7 +32,11 @@
     "tck": "node --import tsx test/tck/run-test.ts",
     "tck:failing": "node --import tsx test/tck/list-failing-tests.ts",
     "tck:check-fixed": "TCK_TEST_ALL=1 npm test 2>&1 | grep -A 50 'from FAILING_TESTS that now PASS'",
-    "prepublishOnly": "npm run build"
+    "prepublishOnly": "npm run build",
+    "benchmark": "npm run benchmark --prefix benchmark",
+    "benchmark:quick": "npm run benchmark:quick --prefix benchmark",
+    "benchmark:full": "npm run benchmark:full --prefix benchmark",
+    "benchmark:report": "npm run report --prefix benchmark"
   },
   "dependencies": {
     "@hono/node-server": "^1.13.0",

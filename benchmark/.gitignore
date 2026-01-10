@@ -1,0 +1,10 @@
+node_modules/
+dist/
+
+# Results - ignore all except baseline
+results/*.json
+!results/baseline.json
+
+# Temp data files
+*.tmp
+*.csv
