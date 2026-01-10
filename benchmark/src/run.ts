@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 
 import { parseArgs } from "util";
+import { fileURLToPath } from "url";
 import { SCALES, BENCHMARK_CONFIG, getTotalNodes, getTotalEdges } from "./config.js";
 import { createQueries, getReadQueries, getWriteQueries } from "./queries.js";
 import { resetQueryRng } from "./generator.js";
@@ -32,6 +33,10 @@ import type {
 } from "./types.js";
 import * as fs from "fs";
 import * as path from "path";
+
+// Get benchmark directory path (works regardless of CWD)
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const BENCHMARK_DIR = path.resolve(__dirname, "..");
 
 // Parse CLI arguments
 const { values } = parseArgs({
@@ -342,7 +347,7 @@ runBenchmark()
     }
 
     // Save results
-    const outputPath = outputFile || `results/benchmark-${Date.now()}.json`;
+    const outputPath = outputFile || path.join(BENCHMARK_DIR, `results/benchmark-${Date.now()}.json`);
     const dir = path.dirname(outputPath);
     if (!fs.existsSync(dir)) {
       fs.mkdirSync(dir, { recursive: true });

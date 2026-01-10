@@ -1,4 +1,10 @@
 import type { Scale, ScaleConfig } from "./types.js";
+import * as path from "path";
+import { fileURLToPath } from "url";
+
+// Get benchmark directory path (works regardless of CWD)
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const BENCHMARK_DIR = path.resolve(__dirname, "..");
 
 export const SCALES: Record<Scale, ScaleConfig> = {
   micro: {
@@ -50,8 +56,8 @@ export const BENCHMARK_CONFIG = {
     password: "",
   },
 
-  // LeanGraph data path
-  leangraphDataPath: "./benchmark-data/leangraph.db",
+  // LeanGraph data path (relative to benchmark directory)
+  leangraphDataPath: path.join(BENCHMARK_DIR, "benchmark-data/leangraph.db"),
 
   // Categories for items
   categories: [

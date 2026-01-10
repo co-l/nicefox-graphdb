@@ -25,6 +25,12 @@ Thumbs.db
 # Data
 data/
 *.db
+*.db-shm
+*.db-wal
+
+# Benchmark outputs (when run from root)
+benchmark-data/
+results/
 
 # Logs
 *.log
