@@ -90,6 +90,7 @@ const { values } = parseArgs({
     databases: { type: "string", short: "d", default: "leangraph,neo4j,memgraph" },
     skipLoad: { type: "boolean", default: false },
     output: { type: "string", short: "o" },
+    name: { type: "string", short: "n" },
     help: { type: "boolean", short: "h" },
   },
 });
@@ -103,6 +104,7 @@ Usage: npm run benchmark [options]
 Options:
   -s, --scale <scale>          Dataset scale: micro, quick, full (default: quick)
   -d, --databases <list>       Comma-separated databases (default: leangraph,neo4j,memgraph)
+  -n, --name <tag>             Name this run for later comparison (e.g., baseline, optimized)
   --skipLoad                   Skip data loading (use existing data)
   -o, --output <file>          Output file for results JSON
   -h, --help                   Show this help
@@ -113,9 +115,10 @@ Scales:
   full    17M nodes, 18M edges    (production benchmark)
 
 Examples:
-  npm run benchmark -- -s micro                    # Fast test with all databases
-  npm run benchmark -- -s micro -d leangraph       # Fast test, LeanGraph only
-  npm run benchmark -- -s full -o results.json     # Full benchmark
+  npm run benchmark -- -s micro                       # Fast test with all databases
+  npm run benchmark -- -s micro -d leangraph          # Fast test, LeanGraph only
+  npm run benchmark -- -s micro --name baseline       # Save as 'baseline' for comparison
+  npm run benchmark -- -s full -o results.json        # Full benchmark
 `);
   process.exit(0);
 }
@@ -418,13 +421,19 @@ runBenchmark()
     // Save results and generate reports
     const version = getLeanGraphVersion();
     const timestamp = formatTimestamp();
+    const runName = values.name as string | undefined;
     const outputDir = outputFile
       ? path.dirname(outputFile)
       : path.join(BENCHMARK_DIR, `results/${version}`);
     const baseName = outputFile
       ? path.basename(outputFile, ".json")
-      : timestamp;
+      : runName || timestamp;
     const outputPrefix = path.join(outputDir, baseName);
+    
+    if (runName) {
+      console.log(`\nSaved as: ${runName}`);
+      console.log(`Compare with: npm run benchmark:compare ${runName} <other-name>`);
+    }
 
     console.log();
     console.log("Generating reports...");

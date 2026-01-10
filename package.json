@@ -34,7 +34,8 @@
     "tck:check-fixed": "TCK_TEST_ALL=1 npm test 2>&1 | grep -A 50 'from FAILING_TESTS that now PASS'",
     "prepublishOnly": "npm run build",
     "benchmark": "node --import tsx benchmark/src/run.ts",
-    "benchmark:report": "node --import tsx benchmark/src/report.ts"
+    "benchmark:report": "node --import tsx benchmark/src/report.ts",
+    "benchmark:compare": "node --import tsx benchmark/src/compare.ts"
   },
   "dependencies": {
     "@hono/node-server": "^1.13.0",
