@@ -1496,7 +1496,9 @@ export class Translator {
     
     if (hasVariableLengthPattern && relPatterns) {
       // Use recursive CTE for variable-length paths
-      return this.translateVariableLengthPath(clause, relPatterns, selectParts, returnColumns, exprParams, whereParams);
+      // Pass the limit value for early termination optimization
+      const limitValue = clause.limit !== undefined && typeof clause.limit === 'number' ? clause.limit : undefined;
+      return this.translateVariableLengthPath(clause, relPatterns, selectParts, returnColumns, exprParams, whereParams, limitValue);
     }
 
     if (relPatterns && relPatterns.length > 0) {
@@ -3314,7 +3316,8 @@ export class Translator {
     selectParts: string[],
     returnColumns: string[],
     exprParams: unknown[],
-    whereParams: unknown[]
+    whereParams: unknown[],
+    limitValue?: number
   ): { statements: SqlStatement[]; returnColumns: string[] } {
     // For variable-length paths, we use SQLite's recursive CTEs
     // Pattern: WITH RECURSIVE path(start_id, end_id, depth) AS (
@@ -3338,7 +3341,7 @@ export class Translator {
     const fixedPatternsBefore = relPatterns.slice(0, varLengthIndex);
     const fixedPatternsAfter = relPatterns.slice(varLengthIndex + 1);
 
-    const minHops = varLengthPattern.minHops ?? 1;
+     const minHops = varLengthPattern.minHops ?? 1;
     // For unbounded paths (*), use a reasonable default max
     // For fixed length (*2), maxHops equals minHops
     // Default of 50 handles most real-world graphs; increase if needed for deep chains
@@ -3347,6 +3350,11 @@ export class Translator {
     const edgeProperties = varLengthPattern.edge.properties;
     const varLengthSourceAlias = varLengthPattern.sourceAlias;
     const varLengthTargetAlias = varLengthPattern.targetAlias;
+
+    // Early termination optimization: if there's a LIMIT clause, use it to bound recursion
+    // This prevents the CTE from generating millions of paths only to return a few
+    const effectiveLimit = limitValue ?? 1000; // Default limit for safety
+    const earlyTerminationLimit = Math.min(effectiveLimit * 10, 10000); // Cap at 10k for safety
 
     const allParams: unknown[] = [...exprParams];
     
@@ -3468,42 +3476,43 @@ export class Translator {
       if (isUndirected) {
         // For undirected with minHops=0, traverse edges in both directions with edge tracking
         if (edgeType) {
-          cte = `WITH RECURSIVE ${pathCteName}(start_id, end_id, depth, edge_ids) AS (
-  SELECT id, id, 0, json_array() FROM nodes${minHops0SourceFilter}
+          cte = `WITH RECURSIVE ${pathCteName}(start_id, end_id, depth, edge_ids, row_num) AS (
+  SELECT id, id, 0, json_array(), ROW_NUMBER() OVER () FROM nodes${minHops0SourceFilter}
   UNION ALL
-  SELECT p.start_id, CASE WHEN p.end_id = e.source_id THEN e.target_id ELSE e.source_id END, p.depth + 1, json_insert(p.edge_ids, '$[#]', json_object('id', e.id, 'type', e.type, 'source_id', e.source_id, 'target_id', e.target_id, 'properties', json(e.properties)))
+  SELECT p.start_id, CASE WHEN p.end_id = e.source_id THEN e.target_id ELSE e.source_id END, p.depth + 1, json_insert(p.edge_ids, '$[#]', json_object('id', e.id, 'type', e.type, 'source_id', e.source_id, 'target_id', e.target_id, 'properties', json(e.properties))), p.row_num + 1
   FROM ${pathCteName} p
   JOIN edges e ON (p.end_id = e.source_id OR p.end_id = e.target_id)
-  WHERE p.depth < ? AND e.type = ? AND NOT EXISTS (SELECT 1 FROM json_each(p.edge_ids) WHERE json_extract(value, '$.id') = e.id)
+  WHERE p.depth < ? AND e.type = ? AND NOT EXISTS (SELECT 1 FROM json_each(p.edge_ids) WHERE json_extract(value, '$.id') = e.id) AND p.row_num < ?
 )`;
           allParams.push(...sourceFilterParams); // for base case
-          allParams.push(maxHops, edgeType);
+          allParams.push(maxHops, edgeType, earlyTerminationLimit);
         } else {
-          cte = `WITH RECURSIVE ${pathCteName}(start_id, end_id, depth, edge_ids) AS (
-  SELECT id, id, 0, json_array() FROM nodes${minHops0SourceFilter}
+          cte = `WITH RECURSIVE ${pathCteName}(start_id, end_id, depth, edge_ids, row_num) AS (
+  SELECT id, id, 0, json_array(), ROW_NUMBER() OVER () FROM nodes${minHops0SourceFilter}
   UNION ALL
-  SELECT p.start_id, CASE WHEN p.end_id = e.source_id THEN e.target_id ELSE e.source_id END, p.depth + 1, json_insert(p.edge_ids, '$[#]', json_object('id', e.id, 'type', e.type, 'source_id', e.source_id, 'target_id', e.target_id, 'properties', json(e.properties)))
+  SELECT p.start_id, CASE WHEN p.end_id = e.source_id THEN e.target_id ELSE e.source_id END, p.depth + 1, json_insert(p.edge_ids, '$[#]', json_object('id', e.id, 'type', e.type, 'source_id', e.source_id, 'target_id', e.target_id, 'properties', json(e.properties))), p.row_num + 1
   FROM ${pathCteName} p
   JOIN edges e ON (p.end_id = e.source_id OR p.end_id = e.target_id)
-  WHERE p.depth < ? AND NOT EXISTS (SELECT 1 FROM json_each(p.edge_ids) WHERE json_extract(value, '$.id') = e.id)
+  WHERE p.depth < ? AND NOT EXISTS (SELECT 1 FROM json_each(p.edge_ids) WHERE json_extract(value, '$.id') = e.id) AND p.row_num < ?
 )`;
           allParams.push(...sourceFilterParams); // for base case
-          allParams.push(maxHops);
+          allParams.push(maxHops, earlyTerminationLimit);
         }
       } else {
-        cte = `WITH RECURSIVE ${pathCteName}(start_id, end_id, depth, edge_ids) AS (
-  SELECT id, id, 0, json_array() FROM nodes${minHops0SourceFilter}
+        cte = `WITH RECURSIVE ${pathCteName}(start_id, end_id, depth, edge_ids, row_num) AS (
+  SELECT id, id, 0, json_array(), ROW_NUMBER() OVER () FROM nodes${minHops0SourceFilter}
   UNION ALL
-  SELECT p.start_id, e.target_id, p.depth + 1, json_insert(p.edge_ids, '$[#]', json_object('id', e.id, 'type', e.type, 'source_id', e.source_id, 'target_id', e.target_id, 'properties', json(e.properties)))
+  SELECT p.start_id, e.target_id, p.depth + 1, json_insert(p.edge_ids, '$[#]', json_object('id', e.id, 'type', e.type, 'source_id', e.source_id, 'target_id', e.target_id, 'properties', json(e.properties))), p.row_num + 1
   FROM ${pathCteName} p
   JOIN edges e ON p.end_id = e.source_id
-  WHERE p.depth < ?${edgeType ? " AND e.type = ?" : ""}
+  WHERE p.depth < ?${edgeType ? " AND e.type = ?" : ""} AND p.row_num < ?
 )`;
         allParams.push(...sourceFilterParams); // for base case
         allParams.push(maxHops);
         if (edgeType) {
           allParams.push(edgeType);
         }
+        allParams.push(earlyTerminationLimit);
       }
     } else {
       // Base condition for edges (only used in normal CTE case)
@@ -3519,43 +3528,43 @@ export class Translator {
         // The base case includes both directions, and recursive step does too
         // We need to avoid revisiting the same edge (tracked in edge_ids)
         if (edgeType) {
-          cte = `WITH RECURSIVE ${pathCteName}(start_id, end_id, depth, edge_ids) AS (
-  SELECT source_id, target_id, 1, json_array(json_object('id', id, 'type', type, 'source_id', source_id, 'target_id', target_id, 'properties', json(properties))) FROM edges WHERE ${edgeCondition}${sourceFilterSubquery}
+           cte = `WITH RECURSIVE ${pathCteName}(start_id, end_id, depth, edge_ids, row_num) AS (
+  SELECT source_id, target_id, 1, json_array(json_object('id', id, 'type', type, 'source_id', source_id, 'target_id', target_id, 'properties', json(properties))), ROW_NUMBER() OVER () FROM edges WHERE ${edgeCondition}${sourceFilterSubquery}
   UNION ALL
-  SELECT target_id, source_id, 1, json_array(json_object('id', id, 'type', type, 'source_id', source_id, 'target_id', target_id, 'properties', json(properties))) FROM edges WHERE type = ?${sourceFilterSubqueryReverse}
+  SELECT target_id, source_id, 1, json_array(json_object('id', id, 'type', type, 'source_id', source_id, 'target_id', target_id, 'properties', json(properties))), ROW_NUMBER() OVER () FROM edges WHERE type = ?${sourceFilterSubqueryReverse}
   UNION ALL
-  SELECT p.start_id, CASE WHEN p.end_id = e.source_id THEN e.target_id ELSE e.source_id END, p.depth + 1, json_insert(p.edge_ids, '$[#]', json_object('id', e.id, 'type', e.type, 'source_id', e.source_id, 'target_id', e.target_id, 'properties', json(e.properties)))
+  SELECT p.start_id, CASE WHEN p.end_id = e.source_id THEN e.target_id ELSE e.source_id END, p.depth + 1, json_insert(p.edge_ids, '$[#]', json_object('id', e.id, 'type', e.type, 'source_id', e.source_id, 'target_id', e.target_id, 'properties', json(e.properties))), p.row_num + 1
   FROM ${pathCteName} p
   JOIN edges e ON (p.end_id = e.source_id OR p.end_id = e.target_id)
-  WHERE p.depth < ? AND e.type = ? AND NOT EXISTS (SELECT 1 FROM json_each(p.edge_ids) WHERE json_extract(value, '$.id') = e.id)
+  WHERE p.depth < ? AND e.type = ? AND NOT EXISTS (SELECT 1 FROM json_each(p.edge_ids) WHERE json_extract(value, '$.id') = e.id) AND p.row_num < ?
 )`;
           allParams.push(...sourceFilterParams); // for forward base case
           allParams.push(edgeType); // for reverse base case
           allParams.push(...sourceFilterParams); // for reverse base case
-          allParams.push(maxHops, edgeType); // for recursive
+          allParams.push(maxHops, edgeType, earlyTerminationLimit); // for recursive
         } else {
-          cte = `WITH RECURSIVE ${pathCteName}(start_id, end_id, depth, edge_ids) AS (
-  SELECT source_id, target_id, 1, json_array(json_object('id', id, 'type', type, 'source_id', source_id, 'target_id', target_id, 'properties', json(properties))) FROM edges WHERE 1=1${sourceFilterSubquery}
+           cte = `WITH RECURSIVE ${pathCteName}(start_id, end_id, depth, edge_ids, row_num) AS (
+  SELECT source_id, target_id, 1, json_array(json_object('id', id, 'type', type, 'source_id', source_id, 'target_id', target_id, 'properties', json(properties))), ROW_NUMBER() OVER () FROM edges WHERE 1=1${sourceFilterSubquery}
   UNION ALL
-  SELECT target_id, source_id, 1, json_array(json_object('id', id, 'type', type, 'source_id', source_id, 'target_id', target_id, 'properties', json(properties))) FROM edges WHERE 1=1${sourceFilterSubqueryReverse}
+  SELECT target_id, source_id, 1, json_array(json_object('id', id, 'type', type, 'source_id', source_id, 'target_id', target_id, 'properties', json(properties))), ROW_NUMBER() OVER () FROM edges WHERE 1=1${sourceFilterSubqueryReverse}
   UNION ALL
-  SELECT p.start_id, CASE WHEN p.end_id = e.source_id THEN e.target_id ELSE e.source_id END, p.depth + 1, json_insert(p.edge_ids, '$[#]', json_object('id', e.id, 'type', e.type, 'source_id', e.source_id, 'target_id', e.target_id, 'properties', json(e.properties)))
+  SELECT p.start_id, CASE WHEN p.end_id = e.source_id THEN e.target_id ELSE e.source_id END, p.depth + 1, json_insert(p.edge_ids, '$[#]', json_object('id', e.id, 'type', e.type, 'source_id', e.source_id, 'target_id', e.target_id, 'properties', json(e.properties))), p.row_num + 1
   FROM ${pathCteName} p
   JOIN edges e ON (p.end_id = e.source_id OR p.end_id = e.target_id)
-  WHERE p.depth < ? AND NOT EXISTS (SELECT 1 FROM json_each(p.edge_ids) WHERE json_extract(value, '$.id') = e.id)
+  WHERE p.depth < ? AND NOT EXISTS (SELECT 1 FROM json_each(p.edge_ids) WHERE json_extract(value, '$.id') = e.id) AND p.row_num < ?
 )`;
           allParams.push(...sourceFilterParams); // for forward base case
           allParams.push(...sourceFilterParams); // for reverse base case
-          allParams.push(maxHops); // for recursive
+          allParams.push(maxHops, earlyTerminationLimit); // for recursive
         }
       } else {
-        cte = `WITH RECURSIVE ${pathCteName}(start_id, end_id, depth, edge_ids) AS (
-  SELECT source_id, target_id, 1, json_array(json_object('id', id, 'type', type, 'source_id', source_id, 'target_id', target_id, 'properties', json(properties))) FROM edges WHERE ${edgeCondition}${basePropCondition}${sourceFilterSubquery}
+        cte = `WITH RECURSIVE ${pathCteName}(start_id, end_id, depth, edge_ids, row_num) AS (
+  SELECT source_id, target_id, 1, json_array(json_object('id', id, 'type', type, 'source_id', source_id, 'target_id', target_id, 'properties', json(properties))), ROW_NUMBER() OVER () FROM edges WHERE ${edgeCondition}${basePropCondition}${sourceFilterSubquery}
   UNION ALL
-  SELECT p.start_id, e.target_id, p.depth + 1, json_insert(p.edge_ids, '$[#]', json_object('id', e.id, 'type', e.type, 'source_id', e.source_id, 'target_id', e.target_id, 'properties', json(e.properties)))
+  SELECT p.start_id, e.target_id, p.depth + 1, json_insert(p.edge_ids, '$[#]', json_object('id', e.id, 'type', e.type, 'source_id', e.source_id, 'target_id', e.target_id, 'properties', json(e.properties))), p.row_num + 1
   FROM ${pathCteName} p
   JOIN edges e ON p.end_id = e.source_id
-  WHERE p.depth < ?${edgeType ? " AND e.type = ?" : ""}${recursivePropCondition} AND NOT EXISTS (SELECT 1 FROM json_each(p.edge_ids) WHERE json_extract(value, '$.id') = e.id)
+  WHERE p.depth < ?${edgeType ? " AND e.type = ?" : ""}${recursivePropCondition} AND NOT EXISTS (SELECT 1 FROM json_each(p.edge_ids) WHERE json_extract(value, '$.id') = e.id) AND p.row_num < ?
 )`;
         // For maxHops=2, we need depth to reach 2, so recursion limit should be maxHops
         allParams.push(...edgePropParams); // for base case
@@ -3565,6 +3574,7 @@ export class Translator {
           allParams.push(edgeType);
         }
         allParams.push(...edgePropParams); // for recursive case
+        allParams.push(earlyTerminationLimit);
       }
     }
 

@@ -8,9 +8,9 @@ This document outlines actionable performance optimizations for LeanGraph, prior
 |----------|--------------|---------|--------|--------|
 | P0 | SQLite performance pragmas | 2-3x | Low | [x] |
 | P0 | Prepared statement cache | 2-5x | Low | [x] |
-| P0 | Composite edge indexes | 5-20x | Low | [ ] |
-| P1 | Label index | 5-20x | Low | [ ] |
-| P1 | Variable-length path early termination | 10-100x | Medium | [ ] |
+| P0 | Composite edge indexes | 5-20x | Low | [x] |
+| P1 | Label index | 5-20x | Low | [x] |
+| P1 | Variable-length path early termination | 10-100x | Medium | [x] |
 | P1 | Batch INSERTs for UNWIND+CREATE | 10-100x | Medium | [ ] |
 | P2 | JSON property parse caching | 2-5x | Low | [ ] |
 | P2 | Reduce context cloning | 2-3x | Medium | [ ] |
