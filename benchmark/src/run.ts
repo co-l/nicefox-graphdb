@@ -32,8 +32,20 @@ import type {
   Runner,
   ResourceUsage,
 } from "./types.js";
+import { writeReports, formatTimestamp } from "./report-generators.js";
 import * as fs from "fs";
 import * as path from "path";
+
+// Get LeanGraph version from package.json
+function getLeanGraphVersion(): string {
+  try {
+    const pkgPath = path.resolve(import.meta.dirname, "../../package.json");
+    const pkg = JSON.parse(fs.readFileSync(pkgPath, "utf-8"));
+    return pkg.version;
+  } catch {
+    return "unknown";
+  }
+}
 
 // Helper to clean up LeanGraph database file
 function cleanupLeanGraphDb(): void {
@@ -380,15 +392,23 @@ runBenchmark()
       }
     }
 
-    // Save results
-    const outputPath = outputFile || path.join(BENCHMARK_DIR, `results/benchmark-${Date.now()}.json`);
-    const dir = path.dirname(outputPath);
-    if (!fs.existsSync(dir)) {
-      fs.mkdirSync(dir, { recursive: true });
-    }
-    fs.writeFileSync(outputPath, JSON.stringify(results, null, 2));
+    // Save results and generate reports
+    const version = getLeanGraphVersion();
+    const timestamp = formatTimestamp();
+    const outputDir = outputFile
+      ? path.dirname(outputFile)
+      : path.join(BENCHMARK_DIR, `results/${version}`);
+    const baseName = outputFile
+      ? path.basename(outputFile, ".json")
+      : timestamp;
+    const outputPrefix = path.join(outputDir, baseName);
+
     console.log();
-    console.log(`Results saved to: ${outputPath}`);
+    console.log("Generating reports...");
+    const written = writeReports(results, outputPrefix);
+    for (const file of written) {
+      console.log(`  ${file}`);
+    }
   })
   .catch((err) => {
     console.error("Benchmark failed:", err);
