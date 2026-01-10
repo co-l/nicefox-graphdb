@@ -321,8 +321,13 @@ function analyzeSingleRun(name: string, topN: number = 5): void {
 
   // Next steps
   printHeader("RECOMMENDED NEXT STEPS");
-  console.log(`  1. Debug slowest query:`);
-  console.log(`     ${colors.cyan}npm run tck '${topQueries[0]?.name || "query"}' -- --sql${colors.reset}`);
+  const slowestQuery = topQueries[0]?.name || "query";
+  const queryText = QUERY_CYPHER[slowestQuery] || "";
+  console.log(`  1. Debug slowest query (${slowestQuery}):`);
+  console.log(`     See agents/PERFORMANCE_OPTIMIZATION.md "Debugging Queries" section`);
+  if (queryText) {
+    console.log(`     Query: ${colors.dim}${queryText.replace(/\s+/g, " ").slice(0, 60)}...${colors.reset}`);
+  }
   console.log();
   console.log(`  2. Check generated SQL and EXPLAIN plan`);
   console.log();

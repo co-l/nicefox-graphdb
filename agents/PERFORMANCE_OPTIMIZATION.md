@@ -98,8 +98,8 @@ const query = \`MATCH (u:User {id: 'u1'})-[:OWNS]->(i:Item) RETURN i\`;
 const ast = parse(query);
 const translator = new Translator({});
 const result = translator.translate(ast.query);
-console.log('SQL:', result.sql);
-console.log('Params:', result.params);
+console.log('SQL:', result.statements[0].sql);
+console.log('Params:', result.statements[0].params);
 "
 
 # Run EXPLAIN on generated SQL
