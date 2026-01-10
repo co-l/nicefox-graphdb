@@ -1,10 +1,15 @@
 #!/usr/bin/env node
 
 import { parseArgs } from "util";
+import { fileURLToPath } from "url";
 import * as fs from "fs";
 import * as path from "path";
 import type { BenchmarkResult } from "./types.js";
 import { formatBytes, formatMs, formatSeconds } from "./measure.js";
+
+// Get benchmark directory path (works regardless of CWD)
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const BENCHMARK_DIR = path.resolve(__dirname, "..");
 
 const { values } = parseArgs({
   options: {
@@ -32,7 +37,7 @@ Options:
 
 // Find latest results file if not specified
 function findLatestResults(): string | null {
-  const dir = "results";
+  const dir = path.join(BENCHMARK_DIR, "results");
   if (!fs.existsSync(dir)) return null;
 
   const files = fs.readdirSync(dir)
@@ -51,7 +56,7 @@ if (!inputFile || !fs.existsSync(inputFile)) {
 
 const results: BenchmarkResult = JSON.parse(fs.readFileSync(inputFile, "utf-8"));
 const format = values.format as string;
-const outputPrefix = (values.output as string) || "results/report";
+const outputPrefix = (values.output as string) || path.join(BENCHMARK_DIR, "results/report");
 
 console.log(`Generating report from: ${inputFile}`);
 console.log(`Format: ${format}`);
@@ -75,8 +80,10 @@ function generateMarkdown(results: BenchmarkResult): string {
   lines.push("|--------|" + results.databases.map(() => "--------").join("|") + "|");
 
   lines.push("| Version | " + results.databases.map((d) => d.version).join(" | ") + " |");
-  lines.push("| Disk Usage | " + results.databases.map((d) => formatBytes(d.diskBytes)).join(" | ") + " |");
-  lines.push("| RAM Usage | " + results.databases.map((d) => formatBytes(d.ramBytes)).join(" | ") + " |");
+  lines.push("| Disk (before) | " + results.databases.map((d) => formatBytes(d.beforeQueries.diskBytes)).join(" | ") + " |");
+  lines.push("| Disk (after) | " + results.databases.map((d) => formatBytes(d.afterQueries.diskBytes)).join(" | ") + " |");
+  lines.push("| RAM (before) | " + results.databases.map((d) => formatBytes(d.beforeQueries.ramBytes)).join(" | ") + " |");
+  lines.push("| RAM (after) | " + results.databases.map((d) => formatBytes(d.afterQueries.ramBytes)).join(" | ") + " |");
   lines.push("| Cold Start | " + results.databases.map((d) => formatMs(d.coldStartMs)).join(" | ") + " |");
   lines.push("");
 
@@ -120,9 +127,11 @@ function generateMarkdown(results: BenchmarkResult): string {
 // Generate HTML Report
 // ============================================================
 function generateHtml(results: BenchmarkResult): string {
-  // Find best values for highlighting
-  const bestDisk = Math.min(...results.databases.map((d) => d.diskBytes || Infinity));
-  const bestRam = Math.min(...results.databases.map((d) => d.ramBytes || Infinity));
+  // Find best values for highlighting (use afterQueries for final state)
+  const bestDiskBefore = Math.min(...results.databases.map((d) => d.beforeQueries.diskBytes || Infinity));
+  const bestDiskAfter = Math.min(...results.databases.map((d) => d.afterQueries.diskBytes || Infinity));
+  const bestRamBefore = Math.min(...results.databases.map((d) => d.beforeQueries.ramBytes || Infinity));
+  const bestRamAfter = Math.min(...results.databases.map((d) => d.afterQueries.ramBytes || Infinity));
 
   let html = `<!DOCTYPE html>
 <html>
@@ -160,12 +169,20 @@ function generateHtml(results: BenchmarkResult): string {
         ${results.databases.map((d) => `<td>${d.version}</td>`).join("\n        ")}
       </tr>
       <tr>
-        <td class="metric">Disk Usage</td>
-        ${results.databases.map((d) => `<td${d.diskBytes === bestDisk ? ' class="best"' : ''}>${formatBytes(d.diskBytes)}</td>`).join("\n        ")}
+        <td class="metric">Disk (before)</td>
+        ${results.databases.map((d) => `<td${d.beforeQueries.diskBytes === bestDiskBefore ? ' class="best"' : ''}>${formatBytes(d.beforeQueries.diskBytes)}</td>`).join("\n        ")}
       </tr>
       <tr>
-        <td class="metric">RAM Usage</td>
-        ${results.databases.map((d) => `<td${d.ramBytes === bestRam ? ' class="best"' : ''}>${formatBytes(d.ramBytes)}</td>`).join("\n        ")}
+        <td class="metric">Disk (after)</td>
+        ${results.databases.map((d) => `<td${d.afterQueries.diskBytes === bestDiskAfter ? ' class="best"' : ''}>${formatBytes(d.afterQueries.diskBytes)}</td>`).join("\n        ")}
+      </tr>
+      <tr>
+        <td class="metric">RAM (before)</td>
+        ${results.databases.map((d) => `<td${d.beforeQueries.ramBytes === bestRamBefore ? ' class="best"' : ''}>${formatBytes(d.beforeQueries.ramBytes)}</td>`).join("\n        ")}
+      </tr>
+      <tr>
+        <td class="metric">RAM (after)</td>
+        ${results.databases.map((d) => `<td${d.afterQueries.ramBytes === bestRamAfter ? ' class="best"' : ''}>${formatBytes(d.afterQueries.ramBytes)}</td>`).join("\n        ")}
       </tr>
       <tr>
         <td class="metric">Cold Start</td>
@@ -240,7 +257,7 @@ function generateHtml(results: BenchmarkResult): string {
 // Generate Landing Page HTML Snippet
 // ============================================================
 function generateLandingPageSnippet(results: BenchmarkResult): string {
-  // Find best values
+  // Find best values (use afterQueries for final state)
   const findBest = (getter: (d: typeof results.databases[0]) => number) => {
     let best = Infinity;
     let bestDb = "";
@@ -254,8 +271,8 @@ function generateLandingPageSnippet(results: BenchmarkResult): string {
     return bestDb;
   };
 
-  const bestDisk = findBest((d) => d.diskBytes);
-  const bestRam = findBest((d) => d.ramBytes);
+  const bestDisk = findBest((d) => d.afterQueries.diskBytes);
+  const bestRam = findBest((d) => d.afterQueries.ramBytes);
 
   // Get average p50 for lookups
   const getAvgLookupP50 = (db: typeof results.databases[0]) => {
@@ -277,11 +294,11 @@ ${results.databases.map((d) => `      <th>${d.database.charAt(0).toUpperCase() +
   <tbody>
     <tr>
       <td>Disk Usage (${results.scale})</td>
-${results.databases.map((d) => `      <td${d.database === bestDisk ? ' class="check"' : ''}>${formatBytes(d.diskBytes)}</td>`).join("\n")}
+${results.databases.map((d) => `      <td${d.database === bestDisk ? ' class="check"' : ''}>${formatBytes(d.afterQueries.diskBytes)}</td>`).join("\n")}
     </tr>
     <tr>
       <td>RAM Usage</td>
-${results.databases.map((d) => `      <td${d.database === bestRam ? ' class="check"' : ''}>${formatBytes(d.ramBytes)}</td>`).join("\n")}
+${results.databases.map((d) => `      <td${d.database === bestRam ? ' class="check"' : ''}>${formatBytes(d.afterQueries.ramBytes)}</td>`).join("\n")}
     </tr>
     <tr>
       <td>Lookup Query p50</td>

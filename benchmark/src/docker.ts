@@ -1,5 +1,7 @@
 import { execSync, spawnSync } from "child_process";
+import * as fs from "fs";
 import * as path from "path";
+import { BENCHMARK_CONFIG } from "./config.js";
 
 const BENCHMARK_DIR = path.dirname(new URL(import.meta.url).pathname);
 const COMPOSE_FILE = path.join(BENCHMARK_DIR, "..", "docker-compose.yml");
@@ -9,7 +11,69 @@ const CONTAINERS = {
   memgraph: "benchmark-memgraph",
 } as const;
 
+const DATA_PATHS = {
+  neo4j: BENCHMARK_CONFIG.neo4jDataPath,
+  memgraph: BENCHMARK_CONFIG.memgraphDataPath,
+} as const;
+
 type ContainerName = keyof typeof CONTAINERS;
+
+/**
+ * Ensure data directory exists and is empty for a database.
+ */
+function ensureDataDirectory(name: ContainerName): void {
+  const dataPath = DATA_PATHS[name];
+  
+  // Remove existing directory if present (use Docker to handle permissions)
+  if (fs.existsSync(dataPath)) {
+    cleanupDataDirectory(name);
+  }
+  
+  // Create fresh directory
+  fs.mkdirSync(dataPath, { recursive: true, mode: 0o777 });
+  
+  // Set proper ownership for Memgraph (runs as uid=100, gid=101)
+  if (name === "memgraph") {
+    try {
+      execSync(
+        `docker run --rm -v "${dataPath}:/data" alpine chown 100:101 /data`,
+        { encoding: "utf-8", stdio: ["pipe", "pipe", "pipe"] }
+      );
+    } catch {
+      // Ignore - might work anyway depending on permissions
+    }
+  }
+}
+
+/**
+ * Remove data directory for a database.
+ * Uses a Docker container to delete files (handles permission issues from container-created files).
+ */
+function cleanupDataDirectory(name: ContainerName): void {
+  const dataPath = DATA_PATHS[name];
+  
+  if (!fs.existsSync(dataPath)) {
+    return;
+  }
+  
+  try {
+    // Use Alpine container to delete with root permissions
+    // Mount parent directory and delete the specific folder
+    const parentDir = path.dirname(dataPath);
+    const folderName = path.basename(dataPath);
+    execSync(
+      `docker run --rm -v "${parentDir}:/cleanup" alpine rm -rf "/cleanup/${folderName}"`,
+      { encoding: "utf-8", stdio: ["pipe", "pipe", "pipe"] }
+    );
+  } catch {
+    // Fallback: try direct deletion (works if we have permissions)
+    try {
+      fs.rmSync(dataPath, { recursive: true, force: true });
+    } catch {
+      // Ignore - directory may already be gone or permissions issue
+    }
+  }
+}
 
 /**
  * Check if Docker is installed and daemon is running.
@@ -140,6 +204,10 @@ export async function ensureContainerReady(
   checkDockerAvailable();
 
   if (!isContainerRunning(name)) {
+    // Ensure clean data directory before starting
+    log(`  Preparing data directory...`);
+    ensureDataDirectory(name);
+    
     log(`  Starting Docker containers...`);
     await startContainers();
   }
@@ -162,24 +230,18 @@ export async function stopAndCleanup(
   log(`  Stopping ${name} container...`);
 
   try {
-    // Stop and remove the specific service with its volumes
+    // Stop and remove the specific service
     execSync(`docker compose -f "${COMPOSE_FILE}" rm -fsv ${name}`, {
       encoding: "utf-8",
       stdio: ["pipe", "pipe", "pipe"],
     });
-
-    // Remove the associated volume
-    const volumeName = name === "neo4j" 
-      ? "benchmark_neo4j-data" 
-      : "benchmark_memgraph-data";
-    
-    execSync(`docker volume rm ${volumeName} 2>/dev/null || true`, {
-      encoding: "utf-8",
-      stdio: ["pipe", "pipe", "pipe"],
-    });
   } catch {
-    // Ignore cleanup errors
+    // Ignore container cleanup errors
   }
+
+  // Clean up data directory
+  log(`  Cleaning up data directory...`);
+  cleanupDataDirectory(name);
 }
 
 function sleep(ms: number): Promise<void> {

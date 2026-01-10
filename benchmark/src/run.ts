@@ -30,9 +30,42 @@ import type {
   DatabaseResult,
   QueryResult,
   Runner,
+  ResourceUsage,
 } from "./types.js";
 import * as fs from "fs";
 import * as path from "path";
+
+// Helper to clean up LeanGraph database file
+function cleanupLeanGraphDb(): void {
+  const dbPath = BENCHMARK_CONFIG.leangraphDataPath;
+  try {
+    if (fs.existsSync(dbPath)) fs.unlinkSync(dbPath);
+    if (fs.existsSync(dbPath + "-wal")) fs.unlinkSync(dbPath + "-wal");
+    if (fs.existsSync(dbPath + "-shm")) fs.unlinkSync(dbPath + "-shm");
+  } catch {
+    // Ignore cleanup errors
+  }
+}
+
+// Helper to measure resources for a database
+async function measureResources(db: DatabaseType): Promise<ResourceUsage> {
+  if (db === "leangraph") {
+    return {
+      diskBytes: getDiskUsage(BENCHMARK_CONFIG.leangraphDataPath),
+      ramBytes: getProcessRam(),
+    };
+  } else if (db === "neo4j") {
+    return {
+      diskBytes: getDiskUsage(BENCHMARK_CONFIG.neo4jDataPath),
+      ramBytes: await getDockerRam("benchmark-neo4j"),
+    };
+  } else {
+    return {
+      diskBytes: getDiskUsage(BENCHMARK_CONFIG.memgraphDataPath),
+      ramBytes: await getDockerRam("benchmark-memgraph"),
+    };
+  }
+}
 
 // Get benchmark directory path (works regardless of CWD)
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -136,23 +169,17 @@ async function benchmarkDatabase(
 
     // Create runner and connect
     let runner: Runner;
-    let diskBytes = 0;
-    let ramBytes = 0;
 
     const connectStart = performance.now();
     if (db === "leangraph") {
       runner = new LeanGraphRunner();
       await runner.connect();
-      diskBytes = getDiskUsage(BENCHMARK_CONFIG.leangraphDataPath);
-      ramBytes = getProcessRam();
     } else if (db === "neo4j") {
       runner = new Neo4jRunner();
       await runner.connect();
-      ramBytes = await getDockerRam("benchmark-neo4j");
     } else if (db === "memgraph") {
       runner = new MemgraphRunner();
       await runner.connect();
-      ramBytes = await getDockerRam("benchmark-memgraph");
     } else {
       throw new Error(`Unknown database: ${db}`);
     }
@@ -160,8 +187,10 @@ async function benchmarkDatabase(
     const coldStartMs = performance.now() - connectStart;
     const version = await runner.getVersion();
 
+    // Measure resources BEFORE queries
+    const beforeQueries = await measureResources(db);
     console.log(`  Version: ${version}`);
-    console.log(`  Disk: ${formatBytes(diskBytes)}, RAM: ${formatBytes(ramBytes)}`);
+    console.log(`  Before queries - Disk: ${formatBytes(beforeQueries.diskBytes)}, RAM: ${formatBytes(beforeQueries.ramBytes)}`);
     console.log(`  Cold start: ${formatMs(coldStartMs)}`);
 
     // Run queries
@@ -249,18 +278,21 @@ async function benchmarkDatabase(
       }
     }
 
-    // Update RAM measurement after queries (for LeanGraph)
-    if (db === "leangraph") {
-      ramBytes = getProcessRam();
-    }
+    // Measure resources AFTER queries
+    const afterQueries = await measureResources(db);
+    console.log(`  After queries - Disk: ${formatBytes(afterQueries.diskBytes)}, RAM: ${formatBytes(afterQueries.ramBytes)}`);
 
     // Close connection
     console.log("  Closing connection...");
     await runner.disconnect();
 
-    // Stop Docker container and cleanup volumes
+    // Cleanup
     if (isDockerDb) {
       await stopAndCleanup(db);
+    } else if (db === "leangraph") {
+      // Clean up LeanGraph database file for consistency
+      console.log("  Cleaning up database file...");
+      cleanupLeanGraphDb();
     }
 
     console.log();
@@ -273,8 +305,8 @@ async function benchmarkDatabase(
         nodesLoaded: getTotalNodes(config),
         edgesLoaded: getTotalEdges(config),
       },
-      diskBytes,
-      ramBytes,
+      beforeQueries,
+      afterQueries,
       coldStartMs,
       queries: queryResults,
     };
@@ -289,6 +321,8 @@ async function benchmarkDatabase(
       } catch {
         // Ignore cleanup errors
       }
+    } else if (db === "leangraph") {
+      cleanupLeanGraphDb();
     }
 
     return null;
@@ -330,8 +364,8 @@ runBenchmark()
       console.log(`  ${db.database}:`);
       console.log(`    Version: ${db.version}`);
       console.log(`    Load time: ${formatSeconds(db.load.timeSeconds)}`);
-      console.log(`    Disk: ${formatBytes(db.diskBytes)}`);
-      console.log(`    RAM: ${formatBytes(db.ramBytes)}`);
+      console.log(`    Before queries - Disk: ${formatBytes(db.beforeQueries.diskBytes)}, RAM: ${formatBytes(db.beforeQueries.ramBytes)}`);
+      console.log(`    After queries  - Disk: ${formatBytes(db.afterQueries.diskBytes)}, RAM: ${formatBytes(db.afterQueries.ramBytes)}`);
       console.log(`    Cold start: ${formatMs(db.coldStartMs)}`);
 
       // Average p50 by category

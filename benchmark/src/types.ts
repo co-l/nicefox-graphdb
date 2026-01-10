@@ -40,12 +40,17 @@ export interface LoadResult {
   edgesLoaded: number;
 }
 
+export interface ResourceUsage {
+  diskBytes: number;
+  ramBytes: number;
+}
+
 export interface DatabaseResult {
   database: DatabaseType;
   version: string;
   load: LoadResult;
-  diskBytes: number;
-  ramBytes: number;
+  beforeQueries: ResourceUsage;
+  afterQueries: ResourceUsage;
   coldStartMs: number;
   queries: QueryResult[];
 }

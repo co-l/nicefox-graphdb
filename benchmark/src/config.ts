@@ -56,8 +56,10 @@ export const BENCHMARK_CONFIG = {
     password: "",
   },
 
-  // LeanGraph data path (relative to benchmark directory)
+  // Data paths (relative to benchmark directory)
   leangraphDataPath: path.join(BENCHMARK_DIR, "benchmark-data/leangraph.db"),
+  neo4jDataPath: path.join(BENCHMARK_DIR, "benchmark-data/neo4j"),
+  memgraphDataPath: path.join(BENCHMARK_DIR, "benchmark-data/memgraph"),
 
   // Categories for items
   categories: [
