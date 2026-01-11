@@ -575,18 +575,25 @@ export class GraphDatabase {
 
   /**
    * Get a cached prepared statement, or create and cache a new one
+   * Uses LRU eviction: recently accessed entries are moved to end of Map
    */
   private getCachedStatement(sql: string): Database.Statement {
     let stmt = this.stmtCache.get(sql);
-    if (!stmt) {
-      stmt = this.db.prepare(sql);
-      if (this.stmtCache.size >= this.STMT_CACHE_MAX) {
-        // Evict oldest entry (FIFO)
-        const firstKey = this.stmtCache.keys().next().value;
-        if (firstKey) this.stmtCache.delete(firstKey);
-      }
+    if (stmt) {
+      // Move to end for LRU (delete and re-add)
+      this.stmtCache.delete(sql);
       this.stmtCache.set(sql, stmt);
+      return stmt;
     }
+    
+    // Not cached - prepare and add
+    stmt = this.db.prepare(sql);
+    if (this.stmtCache.size >= this.STMT_CACHE_MAX) {
+      // Evict least recently used (first entry)
+      const firstKey = this.stmtCache.keys().next().value;
+      if (firstKey) this.stmtCache.delete(firstKey);
+    }
+    this.stmtCache.set(sql, stmt);
     return stmt;
   }
 

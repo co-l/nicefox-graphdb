@@ -11,7 +11,7 @@ These optimizations address gaps and improvements identified in Phase 1 implemen
 | P0 | Expand property cache usage | 2-5x | Low | [x] |
 | P0 | Fix label index utilization | 5-20x | Low | [x] |
 | P1 | Batch edge INSERTs | 5-10x | Medium | [x] |
-| P1 | Statement cache LRU eviction | ~20% | Low | [ ] |
+| P1 | Statement cache LRU eviction | ~20% | Low | [x] |
 | P2 | Secondary CTE early termination | 10-100x | Medium | [ ] |
 | P2 | Expand batch edge lookups | 2-5x | Medium | [ ] |
 
