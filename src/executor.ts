@@ -251,6 +251,53 @@ export class Executor {
   }
 
   /**
+   * Extract edge ID from various representations (object with _nf_id/id, JSON string, or raw ID)
+   */
+  private extractEdgeId(rel: unknown): string | null {
+    if (typeof rel === "object" && rel !== null) {
+      const relObj = rel as Record<string, unknown>;
+      return (relObj._nf_id || relObj.id) as string | null;
+    } else if (typeof rel === "string") {
+      try {
+        const parsed = JSON.parse(rel);
+        if (typeof parsed === "object" && parsed !== null) {
+          return (parsed._nf_id || parsed.id) as string | null;
+        }
+      } catch {
+        // Not JSON, assume it's a raw ID
+        return rel;
+      }
+    }
+    return null;
+  }
+
+  /**
+   * Batch fetch edge info for multiple edge IDs in a single query
+   * Returns a Map from edge ID to edge info (id, source_id, target_id)
+   */
+  private batchGetEdgeInfo(edgeIds: string[]): Map<string, { id: string; source_id: string; target_id: string }> {
+    const result = new Map<string, { id: string; source_id: string; target_id: string }>();
+    if (edgeIds.length === 0) return result;
+
+    // Batch query with IN clause
+    const placeholders = edgeIds.map(() => '?').join(',');
+    const queryResult = this.db.execute(
+      `SELECT id, source_id, target_id FROM edges WHERE id IN (${placeholders})`,
+      edgeIds
+    );
+
+    for (const row of queryResult.rows) {
+      result.set(row.id as string, {
+        id: row.id as string,
+        source_id: row.source_id as string,
+        target_id: row.target_id as string
+      });
+    }
+
+    return result;
+  }
+
+  /**
    * Execute a Cypher query and return formatted results
    */
   execute(cypher: string, params: Record<string, unknown> = {}): QueryResponse {
@@ -3110,6 +3157,16 @@ export class Executor {
       // Follow the sequence of relationships to find the path endpoints
       // Each relationship in the list is either an edge object or edge ID
       
+      // Batch collect all edge IDs first
+      const edgeIds: string[] = [];
+      for (const rel of relList) {
+        const edgeId = this.extractEdgeId(rel);
+        if (edgeId) edgeIds.push(edgeId);
+      }
+      
+      // Batch fetch all edge info in a single query
+      const edgeInfoMap = this.batchGetEdgeInfo(edgeIds);
+      
       let currentNodeId: string | null = null;
       let firstNodeId: string | null = null;
       let lastNodeId: string | null = null;
@@ -3118,57 +3175,9 @@ export class Executor {
       for (let i = 0; i < relList.length; i++) {
         const rel = relList[i];
         
-        // Extract edge info - could be object with id, source_id, target_id or string ID
-        let edgeInfo: { id: string; source_id: string; target_id: string } | null = null;
-        
-        if (typeof rel === "object" && rel !== null) {
-          // Edge object from MATCH - may have _nf_id instead of id
-          const relObj = rel as Record<string, unknown>;
-          const edgeId = (relObj._nf_id || relObj.id) as string;
-          if (edgeId) {
-            // Look up the edge to get source/target
-            const edgeResult = this.db.execute(
-              "SELECT id, source_id, target_id FROM edges WHERE id = ?",
-              [edgeId]
-            );
-            if (edgeResult.rows.length > 0) {
-              const row = edgeResult.rows[0];
-              edgeInfo = {
-                id: row.id as string,
-                source_id: row.source_id as string,
-                target_id: row.target_id as string
-              };
-            }
-          }
-        } else if (typeof rel === "string") {
-          // Could be a JSON string like '{"_nf_id":"uuid"}' or a raw UUID string
-          let edgeId: string | null = null;
-          
-          try {
-            const parsed = JSON.parse(rel);
-            if (typeof parsed === "object" && parsed !== null) {
-              edgeId = (parsed._nf_id || parsed.id) as string;
-            }
-          } catch {
-            // Not JSON, assume it's a raw ID
-            edgeId = rel;
-          }
-          
-          if (edgeId) {
-            const edgeResult = this.db.execute(
-              "SELECT id, source_id, target_id FROM edges WHERE id = ?",
-              [edgeId]
-            );
-            if (edgeResult.rows.length > 0) {
-              const row = edgeResult.rows[0];
-              edgeInfo = {
-                id: row.id as string,
-                source_id: row.source_id as string,
-                target_id: row.target_id as string
-              };
-            }
-          }
-        }
+        // Extract edge ID and get info from batch result
+        const edgeId = this.extractEdgeId(rel);
+        const edgeInfo = edgeId ? edgeInfoMap.get(edgeId) : null;
         
         if (!edgeInfo) {
           valid = false;
@@ -6596,6 +6605,16 @@ export class Executor {
       
       if (relList.length === 0) continue;
       
+      // Batch collect all edge IDs first
+      const edgeIds: string[] = [];
+      for (const rel of relList) {
+        const edgeId = this.extractEdgeId(rel);
+        if (edgeId) edgeIds.push(edgeId);
+      }
+      
+      // Batch fetch all edge info in a single query
+      const edgeInfoMap = this.batchGetEdgeInfo(edgeIds);
+      
       // Follow the sequence of relationships to find endpoints
       let currentNodeId: string | null = null;
       let firstNodeId: string | null = null;
@@ -6605,51 +6624,9 @@ export class Executor {
       for (let i = 0; i < relList.length; i++) {
         const rel = relList[i];
         
-        // Extract edge info
-        let edgeInfo: { id: string; source_id: string; target_id: string } | null = null;
-        
-        if (typeof rel === "object" && rel !== null) {
-          const relObj = rel as Record<string, unknown>;
-          const edgeId = (relObj._nf_id || relObj.id) as string;
-          if (edgeId) {
-            const edgeResult = this.db.execute(
-              "SELECT id, source_id, target_id FROM edges WHERE id = ?",
-              [edgeId]
-            );
-            if (edgeResult.rows.length > 0) {
-              const r = edgeResult.rows[0];
-              edgeInfo = {
-                id: r.id as string,
-                source_id: r.source_id as string,
-                target_id: r.target_id as string
-              };
-            }
-          }
-        } else if (typeof rel === "string") {
-          // Could be a JSON string like '{"_nf_id":"uuid"}' or a raw edge ID
-          let edgeId = rel;
-          try {
-            const parsed = JSON.parse(rel);
-            if (typeof parsed === "object" && parsed !== null && (parsed._nf_id || parsed.id)) {
-              edgeId = (parsed._nf_id || parsed.id) as string;
-            }
-          } catch {
-            // Not JSON, use as-is
-          }
-          
-          const edgeResult = this.db.execute(
-            "SELECT id, source_id, target_id FROM edges WHERE id = ?",
-            [edgeId]
-          );
-          if (edgeResult.rows.length > 0) {
-            const r = edgeResult.rows[0];
-            edgeInfo = {
-              id: r.id as string,
-              source_id: r.source_id as string,
-              target_id: r.target_id as string
-            };
-          }
-        }
+        // Extract edge ID and get info from batch result
+        const edgeId = this.extractEdgeId(rel);
+        const edgeInfo = edgeId ? edgeInfoMap.get(edgeId) : null;
         
         if (!edgeInfo) {
           valid = false;

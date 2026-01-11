@@ -16,7 +16,7 @@ This document outlines actionable performance optimizations for LeanGraph, prior
 | P2 | Reduce context cloning | 2-3x | Medium | [x] |
 | P2 | Single-pass query classifier | 5-10x | Medium | [x] |
 | P3 | Tokenizer string allocation | 30-50% | Low | [x] |
-| P3 | Batch edge lookups in paths | 5-20x | Medium | [ ] |
+| P3 | Batch edge lookups in paths | 5-20x | Medium | [x] |
 
 ---
 
