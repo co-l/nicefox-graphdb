@@ -91,17 +91,6 @@ When `LEANGRAPH_MODE=remote` is set, LeanGraph automatically connects via HTTP i
 
 > **Tip:** Remote mode doesn't use `better-sqlite3`, so installing it as a dev dependency speeds up production deploys by skipping native module compilation.
 
-All options can also be passed explicitly:
-
-```typescript
-const db = await LeanGraph({
-  mode: 'remote',
-  project: 'myapp',
-  apiKey: 'lg_xxx',
-  url: 'https://my-server',
-});
-```
-
 ### Test Mode
 
 Uses an in-memory SQLite database that resets when the process exits.
