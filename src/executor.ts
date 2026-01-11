@@ -274,13 +274,19 @@ export class Executor {
       }
 
       // 2. Classify query with single-pass and dispatch to appropriate handler
-      const { pattern } = this.classifyQuery(parseResult.query);
+      const { pattern, flags } = this.classifyQuery(parseResult.query);
       
-      // 3. Run semantic validations (these were previously inside tryPhasedExecution
-      //    but must run for ALL query patterns to detect undefined variables)
-      this.validateMergeVariables(parseResult.query);
-      this.validateSetClauseValueVariables(parseResult.query, params);
-      this.validateOrderByVariables(parseResult.query, params);
+      // 3. Run semantic validations only when relevant clauses are present
+      //    (avoids extra iteration overhead for simple queries)
+      if (flags.hasMerge) {
+        this.validateMergeVariables(parseResult.query);
+      }
+      if (flags.hasSet) {
+        this.validateSetClauseValueVariables(parseResult.query, params);
+      }
+      if (flags.hasWith || flags.hasReturn) {
+        this.validateOrderByVariables(parseResult.query, params);
+      }
       
       // Helper to return successful result
       const makeResult = (data: Record<string, unknown>[]): QueryResponse => {
