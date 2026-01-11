@@ -2,11 +2,13 @@
 
 The optimization plan is in `/OPTIMIZATION_PLAN.md`. This guide explains the workflow for implementing those optimizations.
 
+**Phase 1 is complete.** All 11 original optimizations have been implemented. Phase 2 addresses gaps and improvements found in the Phase 1 implementations.
+
 ## Workflow
 
 Follow this workflow exactly:
 
-1. **Pick an optimization** from `OPTIMIZATION_PLAN.md` (start with P0)
+1. **Pick an optimization** from `OPTIMIZATION_PLAN.md` Phase 2 (start with P0)
 2. **Run baseline benchmark** - `npm run benchmark -- -s micro -d leangraph`
 3. **Implement the fix** - follow the code changes in the plan
 4. **Run tests** - `npm test` - must pass!
@@ -21,11 +23,11 @@ Follow this workflow exactly:
 ### Example
 
 ```markdown
-// In OPTIMIZATION_PLAN.md, change:
-| P0 | SQLite performance pragmas | 2-3x | Low | [ ] |
+// In OPTIMIZATION_PLAN.md Phase 2, change:
+| P0 | Expand property cache usage | 2-5x | Low | [ ] |
 
 // To:
-| P0 | SQLite performance pragmas | 2-3x | Low | [x] |
+| P0 | Expand property cache usage | 2-5x | Low | [x] |
 ```
 
 ## Quick Commands
@@ -109,16 +111,13 @@ cd /home/conrad/dev/leangraph && tsx -e "
 "
 ```
 
-## Key Files
+## Key Files (Phase 2)
 
 | File | What to Optimize |
 |------|------------------|
-| `src/db.ts:549-555` | SQLite pragmas, indexes |
-| `src/db.ts:47-67` | Schema, index definitions |
-| `src/db.ts:570-592` | Statement execution (add caching) |
-| `src/executor.ts` | Query execution, batching, context cloning |
-| `src/translator.ts` | SQL generation, join order |
-| `src/parser.ts` | Tokenizer string allocation |
+| `src/executor.ts` | Property cache usage (27 locations), batch edge INSERTs, batch edge lookups |
+| `src/db.ts` | Label index queries (getNodesByLabel), statement cache LRU |
+| `src/translator.ts` | Label filter SQL, secondary CTE early termination |
 
 ## EXPLAIN Output Guide
 
@@ -129,39 +128,46 @@ USE TEMP B-TREE           -- OK for small sorts, bad for large
 CORRELATED SUBQUERY       -- Often slow, try to flatten
 ```
 
-## Common Patterns
+## Common Patterns (Phase 2)
 
-### Adding a SQLite Index
+### Replacing Direct JSON.parse with Cache
 
 ```typescript
-// In src/db.ts SCHEMA constant:
-CREATE INDEX IF NOT EXISTS idx_edges_source_type ON edges(source_id, type);
+// Before (appears ~27 times in executor.ts):
+const props = typeof row.properties === "string" 
+  ? JSON.parse(row.properties) 
+  : row.properties;
+
+// After:
+const props = this.getNodeProperties(row.id, row.properties);
 ```
 
-### Adding Statement Caching
+### Batching INSERTs
 
 ```typescript
-// In src/db.ts GraphDatabase class:
-private stmtCache = new Map<string, Database.Statement>();
+// Before (one at a time):
+for (const edge of edges) {
+  this.db.execute("INSERT INTO edges ... VALUES (?, ?, ?, ?, ?)", [...]);
+}
 
-private getCachedStatement(sql: string): Database.Statement {
-  let stmt = this.stmtCache.get(sql);
-  if (!stmt) {
-    stmt = this.db.prepare(sql);
-    this.stmtCache.set(sql, stmt);
-  }
-  return stmt;
+// After (batched):
+const BATCH_SIZE = 500;
+for (let i = 0; i < edges.length; i += BATCH_SIZE) {
+  const batch = edges.slice(i, i + BATCH_SIZE);
+  const placeholders = batch.map(() => '(?, ?, ?, ?, ?)').join(',');
+  const values = batch.flatMap(e => [e.id, e.type, e.sourceId, e.targetId, e.propsJson]);
+  this.db.execute(`INSERT INTO edges ... VALUES ${placeholders}`, values);
 }
 ```
 
-### Adding SQLite Pragmas
+### Using Label Index
 
 ```typescript
-// In src/db.ts constructor:
-this.db.pragma("synchronous = NORMAL");
-this.db.pragma("cache_size = -64000");
-this.db.pragma("temp_store = MEMORY");
-this.db.pragma("mmap_size = 268435456");
+// Before (doesn't use index):
+"SELECT * FROM nodes WHERE EXISTS (SELECT 1 FROM json_each(label) WHERE value = ?)"
+
+// After (uses idx_nodes_primary_label):
+"SELECT * FROM nodes WHERE json_extract(label, '$[0]') = ?"
 ```
 
 ## Verification Checklist
@@ -217,7 +223,7 @@ If the benchmark shows **no regression**, the optimization is still valid - it m
 For optimizations that don't show in standard benchmarks:
 
 ```bash
-# Test UNWIND+CREATE performance specifically
+# Test UNWIND+CREATE with nodes (Phase 1)
 cd /home/conrad/dev/leangraph && LEANGRAPH_PROJECT=test tsx -e "
 (async () => {
   const { LeanGraph } = require('./src/index.ts');
@@ -227,11 +233,31 @@ cd /home/conrad/dev/leangraph && LEANGRAPH_PROJECT=test tsx -e "
   await db.query('UNWIND range(1, 1000) AS i CREATE (n:Item {num: i})');
   const end = performance.now();
   
-  console.log('UNWIND+CREATE 1000 items:');
+  console.log('UNWIND+CREATE 1000 nodes:');
   console.log('  Time:', (end - start).toFixed(2), 'ms');
   
-  const result = await db.query('MATCH (n:Item) RETURN count(n) as count');
-  console.log('  Count:', result[0].count);
+  db.close();
+})();
+"
+
+# Test label index utilization (Phase 2)
+cd /home/conrad/dev/leangraph && LEANGRAPH_PROJECT=test tsx -e "
+(async () => {
+  const { LeanGraph } = require('./src/index.ts');
+  const db = await LeanGraph({ dataPath: ':memory:' });
+  
+  // Create many nodes
+  await db.query('UNWIND range(1, 5000) AS i CREATE (n:User {id: i})');
+  
+  // Time label lookup
+  const start = performance.now();
+  for (let i = 0; i < 100; i++) {
+    await db.query('MATCH (n:User) RETURN count(n)');
+  }
+  const end = performance.now();
+  
+  console.log('100 label lookups on 5K nodes:');
+  console.log('  Avg:', ((end - start) / 100).toFixed(2), 'ms per query');
   
   db.close();
 })();

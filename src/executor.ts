@@ -228,6 +228,7 @@ interface QueryFlags {
 export class Executor {
   private db: GraphDatabase;
   private propertyCache = new Map<string, Record<string, unknown>>();
+  private edgePropertyCache = new Map<string, Record<string, unknown>>();
 
   constructor(db: GraphDatabase) {
     this.db = db;
@@ -248,6 +249,31 @@ export class Executor {
       }
     }
     return props || {};
+  }
+
+  /**
+   * Get edge properties from cache or parse from JSON string and cache them
+   */
+  private getEdgeProperties(edgeId: string, propsJson: string | object): Record<string, unknown> {
+    let props = this.edgePropertyCache.get(edgeId);
+    if (!props) {
+      props = typeof propsJson === "string" ? JSON.parse(propsJson) : propsJson;
+      if (props && typeof props === "object" && !Array.isArray(props)) {
+        this.edgePropertyCache.set(edgeId, props);
+      } else {
+        // Fallback for invalid data
+        props = {};
+      }
+    }
+    return props || {};
+  }
+
+  /**
+   * Invalidate cached properties for a node or edge after it has been updated
+   */
+  private invalidatePropertyCache(id: string): void {
+    this.propertyCache.delete(id);
+    this.edgePropertyCache.delete(id);
   }
 
   /**
@@ -302,8 +328,9 @@ export class Executor {
    */
   execute(cypher: string, params: Record<string, unknown> = {}): QueryResponse {
     const startTime = performance.now();
-    // Clear property cache at start of each query execution
+    // Clear property caches at start of each query execution
     this.propertyCache.clear();
+    this.edgePropertyCache.clear();
 
     try {
       // 1. Parse the Cypher query
@@ -2109,9 +2136,7 @@ export class Executor {
         const outputRow = new Map(inputRow);
         
         if (pattern.edge.variable) {
-          const props = typeof edgeRow.properties === "string"
-            ? JSON.parse(edgeRow.properties)
-            : edgeRow.properties;
+          const props = this.getEdgeProperties(edgeRow.id as string, edgeRow.properties as string | object);
           // Include _nf_start and _nf_end for startNode() and endNode() functions
           // Use the actual source/target from the found edge (may be reversed for undirected)
           outputRow.set(pattern.edge.variable, { 
@@ -2803,9 +2828,7 @@ export class Executor {
             const matchRow = new Map<string, unknown>();
             
             if (edgeVar) {
-              const edgeProps = typeof row.properties === "string"
-                ? JSON.parse(row.properties)
-                : row.properties;
+              const edgeProps = this.getEdgeProperties(row.id as string, row.properties as string | object);
               matchRow.set(edgeVar, { ...edgeProps, _nf_id: row.id });
             }
             
@@ -3272,12 +3295,8 @@ export class Executor {
       const lastNode = lastNodeResult.rows[0];
       
       // Format nodes like the translator does (with _nf_id embedded)
-      const firstProps = typeof firstNode.properties === "string" 
-        ? JSON.parse(firstNode.properties) 
-        : firstNode.properties;
-      const lastProps = typeof lastNode.properties === "string"
-        ? JSON.parse(lastNode.properties)
-        : lastNode.properties;
+      const firstProps = this.getNodeProperties(firstNode.id as string, firstNode.properties as string | object);
+      const lastProps = this.getNodeProperties(lastNode.id as string, lastNode.properties as string | object);
       
       outputRow.set(boundInfo.sourceVar, { ...firstProps, _nf_id: firstNode.id });
       outputRow.set(boundInfo.targetVar, { ...lastProps, _nf_id: lastNode.id });
@@ -3492,6 +3511,8 @@ export class Executor {
             `UPDATE nodes SET properties = json_set(properties, '$.${assignment.property}', json(?)) WHERE id = ?`,
             [JSON.stringify(value), nodeId]
           );
+          // Invalidate cache after UPDATE
+          this.invalidatePropertyCache(nodeId);
         }
       }
     }
@@ -3872,9 +3893,7 @@ export class Executor {
         );
         
         if (nodeResult.rows.length > 0) {
-          const nodeProps = typeof nodeResult.rows[0].properties === "string"
-            ? JSON.parse(nodeResult.rows[0].properties)
-            : nodeResult.rows[0].properties;
+          const nodeProps = this.getNodeProperties(nodeResult.rows[0].id as string, nodeResult.rows[0].properties as string | object);
           return { ...nodeProps, _nf_id: nodeResult.rows[0].id };
         }
         return null;
@@ -3911,9 +3930,7 @@ export class Executor {
         );
         
         if (nodeResult.rows.length > 0) {
-          const nodeProps = typeof nodeResult.rows[0].properties === "string"
-            ? JSON.parse(nodeResult.rows[0].properties)
-            : nodeResult.rows[0].properties;
+          const nodeProps = this.getNodeProperties(nodeResult.rows[0].id as string, nodeResult.rows[0].properties as string | object);
           return { ...nodeProps, _nf_id: nodeResult.rows[0].id };
         }
         return null;
@@ -4567,21 +4584,22 @@ export class Executor {
                 const id = createdIds.get(aggInfo.argVariable);
                 if (id) {
                   let result = this.db.execute(
-                    "SELECT properties FROM nodes WHERE id = ?",
+                    "SELECT id, properties FROM nodes WHERE id = ?",
                     [id]
                   );
+                  let isNode = result.rows.length > 0;
                   
-                  if (result.rows.length === 0) {
+                  if (!isNode) {
                     result = this.db.execute(
-                      "SELECT properties FROM edges WHERE id = ?",
+                      "SELECT id, properties FROM edges WHERE id = ?",
                       [id]
                     );
                   }
                   
                   if (result.rows.length > 0) {
-                    const props = typeof result.rows[0].properties === "string"
-                      ? JSON.parse(result.rows[0].properties)
-                      : result.rows[0].properties;
+                    const props = isNode 
+                      ? this.getNodeProperties(result.rows[0].id as string, result.rows[0].properties as string | object)
+                      : this.getEdgeProperties(result.rows[0].id as string, result.rows[0].properties as string | object);
                     
                     if (aggInfo.argProperty) {
                       // Collect property value
@@ -4623,23 +4641,24 @@ export class Executor {
                       if (id) {
                         // Try nodes first, then edges
                         let result = this.db.execute(
-                          "SELECT properties FROM nodes WHERE id = ?",
+                          "SELECT id, properties FROM nodes WHERE id = ?",
                           [id]
                         );
+                        let isNode = result.rows.length > 0;
                         
-                        if (result.rows.length === 0) {
+                        if (!isNode) {
                           // Try edges table
                           result = this.db.execute(
-                            "SELECT properties FROM edges WHERE id = ?",
+                            "SELECT id, properties FROM edges WHERE id = ?",
                             [id]
                           );
                         }
                         
                         if (result.rows.length > 0) {
-                          const props = typeof result.rows[0].properties === "string"
-                            ? JSON.parse(result.rows[0].properties)
-                            : result.rows[0].properties;
-                          value = props[property];
+                          const props = isNode
+                            ? this.getNodeProperties(result.rows[0].id as string, result.rows[0].properties as string | object)
+                            : this.getEdgeProperties(result.rows[0].id as string, result.rows[0].properties as string | object);
+                          value = props[property] as number;
                         }
                       }
                     }
@@ -4680,9 +4699,7 @@ export class Executor {
                   if (nodeResult.rows.length > 0) {
                     const row = nodeResult.rows[0];
                     // Neo4j 3.5 format: return properties directly
-                    resultRow[alias] = typeof row.properties === "string"
-                      ? JSON.parse(row.properties)
-                      : row.properties;
+                    resultRow[alias] = this.getNodeProperties(row.id as string, row.properties as string | object);
                   }
                 }
               } else if (item.expression.type === "property") {
@@ -4694,22 +4711,23 @@ export class Executor {
                 if (id) {
                   // Try nodes first, then edges
                   let nodeResult = this.db.execute(
-                    "SELECT properties FROM nodes WHERE id = ?",
+                    "SELECT id, properties FROM nodes WHERE id = ?",
                     [id]
                   );
+                  let isNode = nodeResult.rows.length > 0;
                   
-                  if (nodeResult.rows.length === 0) {
+                  if (!isNode) {
                     // Try edges table
                     nodeResult = this.db.execute(
-                      "SELECT properties FROM edges WHERE id = ?",
+                      "SELECT id, properties FROM edges WHERE id = ?",
                       [id]
                     );
                   }
                   
                   if (nodeResult.rows.length > 0) {
-                    const props = typeof nodeResult.rows[0].properties === "string"
-                      ? JSON.parse(nodeResult.rows[0].properties)
-                      : nodeResult.rows[0].properties;
+                    const props = isNode
+                      ? this.getNodeProperties(nodeResult.rows[0].id as string, nodeResult.rows[0].properties as string | object)
+                      : this.getEdgeProperties(nodeResult.rows[0].id as string, nodeResult.rows[0].properties as string | object);
                     resultRow[alias] = props[property];
                   }
                 }
@@ -4937,21 +4955,22 @@ export class Executor {
       if (id) {
         // Try nodes first, then edges
         let result = this.db.execute(
-          "SELECT properties FROM nodes WHERE id = ?",
+          "SELECT id, properties FROM nodes WHERE id = ?",
           [id]
         );
+        let isNode = result.rows.length > 0;
         
-        if (result.rows.length === 0) {
+        if (!isNode) {
           result = this.db.execute(
-            "SELECT properties FROM edges WHERE id = ?",
+            "SELECT id, properties FROM edges WHERE id = ?",
             [id]
           );
         }
         
         if (result.rows.length > 0) {
-          const props = typeof result.rows[0].properties === "string"
-            ? JSON.parse(result.rows[0].properties)
-            : result.rows[0].properties;
+          const props = isNode
+            ? this.getNodeProperties(result.rows[0].id as string, result.rows[0].properties as string | object)
+            : this.getEdgeProperties(result.rows[0].id as string, result.rows[0].properties as string | object);
           return props[property];
         }
       }
@@ -4993,22 +5012,23 @@ export class Executor {
       if (id) {
         // Try nodes first, then edges
         let result = this.db.execute(
-          "SELECT properties FROM nodes WHERE id = ?",
+          "SELECT id, properties FROM nodes WHERE id = ?",
           [id]
         );
+        let isNode = result.rows.length > 0;
         
-        if (result.rows.length === 0) {
+        if (!isNode) {
           // Try edges table
           result = this.db.execute(
-            "SELECT properties FROM edges WHERE id = ?",
+            "SELECT id, properties FROM edges WHERE id = ?",
             [id]
           );
         }
         
         if (result.rows.length > 0) {
-          const props = typeof result.rows[0].properties === "string"
-            ? JSON.parse(result.rows[0].properties)
-            : result.rows[0].properties;
+          const props = isNode
+            ? this.getNodeProperties(result.rows[0].id as string, result.rows[0].properties as string | object)
+            : this.getEdgeProperties(result.rows[0].id as string, result.rows[0].properties as string | object);
           return props[property];
         }
       }
@@ -6321,9 +6341,7 @@ export class Executor {
           if (nodeResult.rows.length > 0) {
             const row = nodeResult.rows[0];
             // Neo4j 3.5 format: return properties directly
-            resultRow[alias] = typeof row.properties === "string" 
-              ? JSON.parse(row.properties) 
-              : row.properties;
+            resultRow[alias] = this.getNodeProperties(row.id as string, row.properties as string | object);
           }
         }
       } else if (item.expression.type === "property") {
@@ -6692,12 +6710,8 @@ export class Executor {
       const firstNode = firstNodeResult.rows[0];
       const lastNode = lastNodeResult.rows[0];
       
-      const firstProps = typeof firstNode.properties === "string"
-        ? JSON.parse(firstNode.properties)
-        : firstNode.properties;
-      const lastProps = typeof lastNode.properties === "string"
-        ? JSON.parse(lastNode.properties)
-        : lastNode.properties;
+      const firstProps = this.getNodeProperties(firstNode.id as string, firstNode.properties as string | object);
+      const lastProps = this.getNodeProperties(lastNode.id as string, lastNode.properties as string | object);
       
       // Build result based on RETURN items
       const resultRow: Record<string, unknown> = {};
@@ -6988,6 +7002,8 @@ export class Executor {
             `UPDATE nodes SET properties = json_set(properties, '$.${assignment.property}', json(?)) WHERE id = ?`,
             [JSON.stringify(value), nodeId]
           );
+          // Invalidate cache after UPDATE
+          this.invalidatePropertyCache(nodeId);
         }
       }
     }
@@ -7000,7 +7016,7 @@ export class Executor {
         matchedNodes.set(pattern.variable, {
           id: row.id as string,
           label: row.label as string,
-          properties: typeof row.properties === "string" ? JSON.parse(row.properties) : row.properties,
+          properties: this.getNodeProperties(row.id as string, row.properties as string | object),
         });
       }
     }
@@ -7089,7 +7105,7 @@ export class Executor {
           type: row.type as string,
           source_id: row.source_id as string,
           target_id: row.target_id as string,
-          properties: typeof row.properties === "string" ? JSON.parse(row.properties) : row.properties,
+          properties: this.getEdgeProperties(row.id as string, row.properties as string | object),
         });
       }
     }
@@ -7407,7 +7423,7 @@ export class Executor {
               newRow.set(nodePattern.variable, {
                 id: sqlRow.id as string,
                 label: labelValue,
-                properties: typeof sqlRow.properties === "string" ? JSON.parse(sqlRow.properties) : sqlRow.properties,
+                properties: this.getNodeProperties(sqlRow.id as string, sqlRow.properties as string | object),
               });
             }
             newMatchRows.push(newRow);
@@ -7593,6 +7609,8 @@ export class Executor {
             `UPDATE nodes SET properties = json_set(properties, '$.${assignment.property}', json(?)) WHERE id = ?`,
             [JSON.stringify(value), nodeId]
           );
+          // Invalidate cache after UPDATE
+          this.invalidatePropertyCache(nodeId);
         }
       }
     }
@@ -7605,7 +7623,7 @@ export class Executor {
         matchedNodes.set(pattern.variable, {
           id: row.id as string,
           label: row.label as string,
-          properties: typeof row.properties === "string" ? JSON.parse(row.properties) : row.properties,
+          properties: this.getNodeProperties(row.id as string, row.properties as string | object),
         });
       }
     }
@@ -7761,7 +7779,7 @@ export class Executor {
           type: row.type as string,
           source_id: row.source_id as string,
           target_id: row.target_id as string,
-          properties: typeof row.properties === "string" ? JSON.parse(row.properties) : row.properties,
+          properties: this.getEdgeProperties(row.id as string, row.properties as string | object),
         });
       }
     }
@@ -8028,6 +8046,8 @@ export class Executor {
             `UPDATE nodes SET properties = json_set(properties, '$.${assignment.property}', json(?)) WHERE id = ?`,
             [JSON.stringify(value), nodeId]
           );
+          // Invalidate cache after UPDATE
+          this.invalidatePropertyCache(nodeId);
         }
       }
     }
@@ -8040,7 +8060,7 @@ export class Executor {
         matchedNodes.set(pattern.variable, {
           id: row.id as string,
           label: row.label as string,
-          properties: typeof row.properties === "string" ? JSON.parse(row.properties) : row.properties,
+          properties: this.getNodeProperties(row.id as string, row.properties as string | object),
         });
       }
     }
@@ -8159,6 +8179,8 @@ export class Executor {
             `UPDATE nodes SET properties = json_set(properties, '$.${assignment.property}', json(?)) WHERE id = ?`,
             [JSON.stringify(value), targetNodeId]
           );
+          // Invalidate cache after UPDATE
+          this.invalidatePropertyCache(targetNodeId);
         }
       }
       
@@ -8181,6 +8203,8 @@ export class Executor {
             `UPDATE nodes SET properties = json_set(properties, '$.${assignment.property}', json(?)) WHERE id = ?`,
             [JSON.stringify(value), targetNodeId]
           );
+          // Invalidate cache after UPDATE
+          this.invalidatePropertyCache(targetNodeId);
         }
       }
     }
@@ -8198,7 +8222,7 @@ export class Executor {
           type: row.type as string,
           source_id: row.source_id as string,
           target_id: row.target_id as string,
-          properties: typeof row.properties === "string" ? JSON.parse(row.properties) : row.properties,
+          properties: this.getEdgeProperties(row.id as string, row.properties as string | object),
         });
       }
     }
@@ -8211,7 +8235,7 @@ export class Executor {
         matchedNodes.set(targetVar, {
           id: row.id as string,
           label: row.label as string,
-          properties: typeof row.properties === "string" ? JSON.parse(row.properties) : row.properties,
+          properties: this.getNodeProperties(row.id as string, row.properties as string | object),
         });
       }
     }
@@ -8257,7 +8281,7 @@ export class Executor {
         return {
           id: row.id as string,
           label: typeof row.label === "string" ? JSON.parse(row.label) : row.label,
-          properties: typeof row.properties === "string" ? JSON.parse(row.properties) : row.properties,
+          properties: this.getNodeProperties(row.id as string, row.properties as string | object),
         };
       }
     }
@@ -9519,12 +9543,12 @@ export class Executor {
                 const nodeId = resolvedIds[varName];
                 if (nodeId) {
                   const nodeResult = this.db.execute(
-                    "SELECT properties FROM nodes WHERE id = ?",
+                    "SELECT id, properties FROM nodes WHERE id = ?",
                     [nodeId]
                   );
                   if (nodeResult.rows.length > 0) {
                     const row = nodeResult.rows[0];
-                    values.push(typeof row.properties === "string" ? JSON.parse(row.properties) : row.properties);
+                    values.push(this.getNodeProperties(row.id as string, row.properties as string | object));
                   }
                 }
               }
@@ -9639,9 +9663,7 @@ export class Executor {
               if (nodeResult.rows.length > 0) {
                 const row = nodeResult.rows[0];
                 // Neo4j 3.5 format: return properties directly
-                resultRow[alias] = typeof row.properties === "string"
-                  ? JSON.parse(row.properties)
-                  : row.properties;
+                resultRow[alias] = this.getNodeProperties(row.id as string, row.properties as string | object);
               } else {
                 // Try edges
                 const edgeResult = this.db.execute(
@@ -9651,9 +9673,7 @@ export class Executor {
                 if (edgeResult.rows.length > 0) {
                   const row = edgeResult.rows[0];
                   // Neo4j 3.5 format: return properties directly
-                  resultRow[alias] = typeof row.properties === "string"
-                    ? JSON.parse(row.properties)
-                    : row.properties;
+                  resultRow[alias] = this.getEdgeProperties(row.id as string, row.properties as string | object);
                 }
               }
             }
@@ -9898,6 +9918,8 @@ export class Executor {
             [JSON.stringify(filteredProps), nodeId]
           );
         }
+        // Invalidate cache after UPDATE
+        this.invalidatePropertyCache(nodeId);
         continue;
       }
 
@@ -9946,6 +9968,8 @@ export class Executor {
             );
           }
         }
+        // Invalidate cache after UPDATE
+        this.invalidatePropertyCache(nodeId);
         continue;
       }
 
@@ -9988,6 +10012,8 @@ export class Executor {
           );
         }
       }
+      // Invalidate cache after UPDATE
+      this.invalidatePropertyCache(nodeId);
     }
   }
 
