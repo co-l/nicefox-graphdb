@@ -101,29 +101,23 @@ const db = await LeanGraph({ mode: 'test', project: 'myapp' });
 
 ## Configuration
 
-### Options
-
 ```typescript
 interface GraphDBOptions {
-  mode?: "local" | "remote" | "test";  // default: "local"
-  project?: string;                     // required (or set LEANGRAPH_PROJECT)
-  url?: string;                         // default: "https://leangraph.io"
-  apiKey?: string;                      // for remote mode authentication
-  dataPath?: string;                    // default: "./data"
+  mode?: "local" | "remote" | "test";
+  project?: string;
+  url?: string;
+  apiKey?: string;
+  dataPath?: string;
 }
 ```
 
-### Environment Variables
-
-All options can be configured via environment variables:
-
-| Variable | Description |
-|----------|-------------|
-| `LEANGRAPH_MODE` | `local`, `remote`, or `test` |
-| `LEANGRAPH_PROJECT` | Project name |
-| `LEANGRAPH_URL` | Server URL (remote mode) |
-| `LEANGRAPH_API_KEY` | API key (remote mode) |
-| `LEANGRAPH_DATA_PATH` | Data directory (local mode) |
+| Option | Environment Variable | Default | Description |
+|--------|---------------------|---------|-------------|
+| `mode` | `LEANGRAPH_MODE` | `"local"` | `local`, `remote`, or `test` |
+| `project` | `LEANGRAPH_PROJECT` | — | Project name (required) |
+| `url` | `LEANGRAPH_URL` | `"https://leangraph.io"` | Server URL (remote mode) |
+| `apiKey` | `LEANGRAPH_API_KEY` | — | API key (remote mode) |
+| `dataPath` | `LEANGRAPH_DATA_PATH` | `"./data"` | Data directory (local mode) |
 
 Options passed to `LeanGraph()` take precedence over environment variables.
 
