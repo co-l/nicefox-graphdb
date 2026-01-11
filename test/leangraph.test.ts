@@ -1,10 +1,10 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
-import { LeanGraph, GraphDBError } from "../src/index.js";
-import type { GraphDBClient } from "../src/types.js";
+import { LeanGraph, LeanGraphError } from "../src/index.js";
+import type { LeanGraphClient } from "../src/types.js";
 
 describe("LeanGraph Factory", () => {
   describe("Local Mode", () => {
-    let db: GraphDBClient;
+    let db: LeanGraphClient;
 
     beforeEach(async () => {
       db = await LeanGraph({
@@ -78,8 +78,8 @@ describe("LeanGraph Factory", () => {
       expect(response.data).toHaveLength(1);
     });
 
-    it("should throw GraphDBError on invalid query", async () => {
-      await expect(db.execute("INVALID CYPHER QUERY")).rejects.toThrow(GraphDBError);
+    it("should throw LeanGraphError on invalid query", async () => {
+      await expect(db.execute("INVALID CYPHER QUERY")).rejects.toThrow(LeanGraphError);
     });
 
     it("should return health status", async () => {
@@ -234,14 +234,14 @@ describe("LeanGraph Factory", () => {
   });
 });
 
-describe("GraphDBError", () => {
+describe("LeanGraphError", () => {
   it("should have correct name", () => {
-    const error = new GraphDBError("Test error");
-    expect(error.name).toBe("GraphDBError");
+    const error = new LeanGraphError("Test error");
+    expect(error.name).toBe("LeanGraphError");
   });
 
   it("should include position information", () => {
-    const error = new GraphDBError("Syntax error", {
+    const error = new LeanGraphError("Syntax error", {
       position: 10,
       line: 1,
       column: 10,

@@ -89,10 +89,10 @@ export type NodeResult = Record<string, unknown>;
  * GraphDB client interface.
  * Both local and remote clients implement this interface.
  */
-export interface GraphDBClient {
+export interface LeanGraphClient {
   /**
    * Execute a Cypher query and return the data array.
-   * @throws GraphDBError if the query fails
+   * @throws LeanGraphError if the query fails
    */
   query<T = Record<string, unknown>>(
     cypher: string,
@@ -101,7 +101,7 @@ export interface GraphDBClient {
 
   /**
    * Execute a Cypher query and return the full response including metadata.
-   * @throws GraphDBError if the query fails
+   * @throws LeanGraphError if the query fails
    */
   queryRaw<T = Record<string, unknown>>(
     cypher: string,
@@ -110,7 +110,7 @@ export interface GraphDBClient {
 
   /**
    * Execute a mutating query (CREATE, SET, DELETE, MERGE) without expecting return data.
-   * @throws GraphDBError if the query fails
+   * @throws LeanGraphError if the query fails
    */
   execute(cypher: string, params?: Record<string, unknown>): Promise<void>;
 
@@ -174,7 +174,7 @@ export interface GraphDBClient {
  * Error thrown by GraphDB operations.
  * Contains optional position information for Cypher parse errors.
  */
-export class GraphDBError extends Error {
+export class LeanGraphError extends Error {
   public readonly position?: number;
   public readonly line?: number;
   public readonly column?: number;
@@ -188,7 +188,7 @@ export class GraphDBError extends Error {
     }
   ) {
     super(message);
-    this.name = "GraphDBError";
+    this.name = "LeanGraphError";
     this.position = options?.position;
     this.line = options?.line;
     this.column = options?.column;

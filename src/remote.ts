@@ -2,18 +2,18 @@
 // Connects to a remote GraphDB server
 
 import type {
-  GraphDBClient,
+  LeanGraphClient,
   LeanGraphOptions,
   QueryResponse,
   HealthResponse,
   NodeResult,
 } from "./types.js";
-import { GraphDBError } from "./types.js";
+import { LeanGraphError } from "./types.js";
 
 /**
  * Create a remote LeanGraph client that connects via HTTP.
  */
-export function createRemoteClient(options: LeanGraphOptions = {}): GraphDBClient {
+export function createRemoteClient(options: LeanGraphOptions = {}): LeanGraphClient {
   const rawUrl = options.url ?? process.env.LEANGRAPH_URL ?? "https://leangraph.io";
   const project = options.project ?? process.env.LEANGRAPH_PROJECT;
   const apiKey = options.apiKey ?? process.env.LEANGRAPH_API_KEY;
@@ -57,7 +57,7 @@ export function createRemoteClient(options: LeanGraphOptions = {}): GraphDBClien
       const data = (await response.json()) as QueryResponse<T>;
 
       if (!data.success || data.error) {
-        throw new GraphDBError(data.error?.message || "Query failed", {
+        throw new LeanGraphError(data.error?.message || "Query failed", {
           position: data.error?.position,
           line: data.error?.line,
           column: data.error?.column,

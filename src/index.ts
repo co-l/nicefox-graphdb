@@ -3,7 +3,7 @@
 
 import { createRequire } from "module";
 import { createRemoteClient } from "./remote.js";
-import type { LeanGraphOptions, GraphDBClient } from "./types.js";
+import type { LeanGraphOptions, LeanGraphClient } from "./types.js";
 
 const require = createRequire(import.meta.url);
 const pkg = require("../package.json");
@@ -14,13 +14,13 @@ const pkg = require("../package.json");
 
 export type {
   LeanGraphOptions,
-  GraphDBClient,
+  LeanGraphClient,
   QueryResponse,
   HealthResponse,
   NodeResult,
 } from "./types.js";
 
-export { GraphDBError } from "./types.js";
+export { LeanGraphError } from "./types.js";
 
 // ============================================================================
 // Re-export Server Components (for advanced usage)
@@ -101,7 +101,7 @@ export const VERSION: string = pkg.version;
  * db.close();
  * ```
  */
-export async function LeanGraph(options: LeanGraphOptions = {}): Promise<GraphDBClient> {
+export async function LeanGraph(options: LeanGraphOptions = {}): Promise<LeanGraphClient> {
   const mode = options.mode ?? (process.env.LEANGRAPH_MODE as "local" | "remote" | "test") ?? "local";
 
   if (mode === "remote") {

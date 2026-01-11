@@ -6,19 +6,19 @@ import * as path from "path";
 import { GraphDatabase } from "./db.js";
 import { Executor } from "./executor.js";
 import type {
-  GraphDBClient,
+  LeanGraphClient,
   LeanGraphOptions,
   QueryResponse,
   HealthResponse,
   NodeResult,
 } from "./types.js";
-import { GraphDBError } from "./types.js";
+import { LeanGraphError } from "./types.js";
 
 /**
  * Create a local embedded LeanGraph client.
  * This client uses SQLite directly without any HTTP layer.
  */
-export function createLocalClient(options: LeanGraphOptions = {}): GraphDBClient {
+export function createLocalClient(options: LeanGraphOptions = {}): LeanGraphClient {
   const mode = options.mode ?? "local";
   const project = options.project ?? process.env.LEANGRAPH_PROJECT;
 
@@ -51,7 +51,7 @@ export function createLocalClient(options: LeanGraphOptions = {}): GraphDBClient
     ): Promise<T[]> {
       const result = executor.execute(cypher, params);
       if (!result.success) {
-        throw new GraphDBError(result.error.message, {
+        throw new LeanGraphError(result.error.message, {
           position: result.error.position,
           line: result.error.line,
           column: result.error.column,
@@ -66,7 +66,7 @@ export function createLocalClient(options: LeanGraphOptions = {}): GraphDBClient
     ): Promise<QueryResponse<T>> {
       const result = executor.execute(cypher, params);
       if (!result.success) {
-        throw new GraphDBError(result.error.message, {
+        throw new LeanGraphError(result.error.message, {
           position: result.error.position,
           line: result.error.line,
           column: result.error.column,
@@ -85,7 +85,7 @@ export function createLocalClient(options: LeanGraphOptions = {}): GraphDBClient
     ): Promise<void> {
       const result = executor.execute(cypher, params);
       if (!result.success) {
-        throw new GraphDBError(result.error.message, {
+        throw new LeanGraphError(result.error.message, {
           position: result.error.position,
           line: result.error.line,
           column: result.error.column,

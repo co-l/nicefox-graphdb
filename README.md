@@ -123,7 +123,7 @@ Options passed to `LeanGraph()` take precedence over environment variables.
 
 ## API Reference
 
-### `LeanGraph(options): Promise<GraphDBClient>`
+### `LeanGraph(options): Promise<LeanGraphClient>`
 
 Create a new LeanGraph client. Returns a promise that resolves to a client instance.
 
@@ -299,12 +299,12 @@ await db.execute(`
 ### Error Handling
 
 ```typescript
-import { LeanGraph, GraphDBError } from 'leangraph';
+import { LeanGraph, LeanGraphError } from 'leangraph';
 
 try {
   await db.query('MATCH (n:User RETURN n'); // syntax error
 } catch (err) {
-  if (err instanceof GraphDBError) {
+  if (err instanceof LeanGraphError) {
     console.error(`Query failed: ${err.message}`);
     console.error(`Position: line ${err.line}, column ${err.column}`);
   }
