@@ -8,22 +8,35 @@ A lightweight, embeddable graph database with **full Cypher query support**, pow
 
 > **100% openCypher TCK Compliance** — LeanGraph passes all 2,684 test scenarios from the openCypher Technology Compatibility Kit (Neo4j 3.5 baseline). Every Cypher feature that Neo4j 3.5 supports, LeanGraph supports.
 
+## Why LeanGraph?
+
+| Feature | LeanGraph | Neo4j |
+|---------|-----------|-------|
+| **Startup time** | Instant | 30+ seconds |
+| **Memory** | ~50MB | 1GB+ minimum |
+| **Deployment** | Single npm package | JVM + complex setup |
+| **Docker required** | No | Typically yes |
+| **Works offline** | Yes | Server required |
+| **Backup** | Copy the SQLite file | Enterprise license |
+| **Cypher support** | Full (Neo4j 3.5 parity) | Full |
+| **Cost** | Free, MIT license | Free tier limited |
+
+LeanGraph is ideal for:
+- Applications needing graph queries without ops overhead
+- Projects that outgrow JSON but don't need a full graph database
+- Self-hosted deployments where simplicity matters
+- Development and testing with instant local databases
+
 ## Installation
-
-### Remote Mode
-
-For connecting to a remote LeanGraph server, no native dependencies are needed:
-
-```bash
-npm install leangraph
-```
-
-### Local Mode
-
-For local/test mode with embedded SQLite, also install `better-sqlite3`:
 
 ```bash
 npm install leangraph better-sqlite3
+```
+
+For remote-only usage (no native dependencies):
+
+```bash
+npm install leangraph
 ```
 
 ## Quick Start
@@ -64,11 +77,20 @@ const db = await LeanGraph({ project: 'myapp' });
 
 ### Remote Mode
 
-Connects to a LeanGraph server via HTTP.
+Your code can stay identical for local development and production. Just configure environment variables:
 
+**.env**
 ```bash
-LEANGRAPH_MODE=remote LEANGRAPH_API_KEY=lg_xxx node app.js
+LEANGRAPH_MODE=remote
+LEANGRAPH_API_KEY=lg_xxx
 ```
+
+```typescript
+// Same code works locally (dev) and remotely (production)
+const db = await LeanGraph({ project: 'myapp' });
+```
+
+When `LEANGRAPH_MODE=remote` is set, LeanGraph automatically connects via HTTP instead of embedded LeanGraph. All options can also be passed explicitly:
 
 ```typescript
 const db = await LeanGraph({
@@ -87,15 +109,33 @@ Uses an in-memory SQLite database that resets when the process exits.
 const db = await LeanGraph({ mode: 'test', project: 'myapp' });
 ```
 
-## Configuration Options
+## Configuration
 
-| Option | Type | Required | Default | Description |
-|--------|------|----------|---------|-------------|
-| `mode` | `string` | No | `LEANGRAPH_MODE` or `local` | Connection mode: `local`, `remote`, or `test` |
-| `project` | `string` | Yes | `LEANGRAPH_PROJECT` | Project name (used as database filename in local mode) |
-| `url` | `string` | No | `LEANGRAPH_URL` or `https://leangraph.io` | Server URL (remote mode only) |
-| `apiKey` | `string` | No | `LEANGRAPH_API_KEY` | API key (remote mode only) |
-| `dataPath` | `string` | No | `LEANGRAPH_DATA_PATH` or `./data` | Data directory (local mode only) |
+### Options
+
+```typescript
+interface GraphDBOptions {
+  mode?: "local" | "remote" | "test";  // default: "local"
+  project?: string;                     // required (or set LEANGRAPH_PROJECT)
+  url?: string;                         // default: "https://leangraph.io"
+  apiKey?: string;                      // for remote mode authentication
+  dataPath?: string;                    // default: "./data"
+}
+```
+
+### Environment Variables
+
+All options can be configured via environment variables:
+
+| Variable | Description |
+|----------|-------------|
+| `LEANGRAPH_MODE` | `local`, `remote`, or `test` |
+| `LEANGRAPH_PROJECT` | Project name |
+| `LEANGRAPH_URL` | Server URL (remote mode) |
+| `LEANGRAPH_API_KEY` | API key (remote mode) |
+| `LEANGRAPH_DATA_PATH` | Data directory (local mode) |
+
+Options passed to `LeanGraph()` take precedence over environment variables.
 
 ## API Reference
 
@@ -137,47 +177,16 @@ console.log(response.meta.time_ms); // Query execution time in ms
 console.log(response.data);         // Array of results
 ```
 
-### `db.createNode(label, properties?): Promise<string>`
+### Convenience Methods
 
-Create a node and return its ID.
-
-```typescript
-const userId = await db.createNode('User', { name: 'Alice', email: 'alice@example.com' });
-```
-
-### `db.getNode(label, filter): Promise<Record<string, unknown> | null>`
-
-Find a node by label and properties.
+Thin wrappers around common Cypher operations:
 
 ```typescript
-const user = await db.getNode('User', { email: 'alice@example.com' });
-if (user) {
-  console.log(user.name); // 'Alice'
-}
-```
-
-### `db.updateNode(id, properties): Promise<void>`
-
-Update properties on a node.
-
-```typescript
-await db.updateNode(userId, { name: 'Alice Smith', verified: true });
-```
-
-### `db.deleteNode(id): Promise<void>`
-
-Delete a node and all its relationships (DETACH DELETE).
-
-```typescript
-await db.deleteNode(userId);
-```
-
-### `db.createEdge(sourceId, type, targetId, properties?): Promise<void>`
-
-Create a relationship between two nodes.
-
-```typescript
-await db.createEdge(aliceId, 'FOLLOWS', bobId, { since: '2024-01-01' });
+db.createNode(label, properties?): Promise<string>
+db.getNode(label, filter): Promise<Record<string, unknown> | null>
+db.updateNode(id, properties): Promise<void>
+db.deleteNode(id): Promise<void>
+db.createEdge(sourceId, type, targetId, properties?): Promise<void>
 ```
 
 ### `db.health(): Promise<{ status: string; timestamp: string }>`
@@ -195,6 +204,144 @@ try {
 } finally {
   db.close();
 }
+```
+
+## Common Patterns
+
+### CRUD Operations
+
+```typescript
+// Create
+await db.execute(
+  'CREATE (u:User {name: $name, email: $email})',
+  { name: 'Alice', email: 'alice@example.com' }
+);
+
+// Read
+const [user] = await db.query<{ name: string; email: string }>(
+  'MATCH (u:User {email: $email}) RETURN u.name AS name, u.email AS email',
+  { email: 'alice@example.com' }
+);
+
+// Update
+await db.execute(
+  'MATCH (u:User {email: $email}) SET u.verified = true',
+  { email: 'alice@example.com' }
+);
+
+// Delete
+await db.execute(
+  'MATCH (u:User {email: $email}) DETACH DELETE u',
+  { email: 'alice@example.com' }
+);
+```
+
+### Parameterized Queries
+
+Always use parameters for user input:
+
+```typescript
+// Good - parameterized
+const users = await db.query(
+  'MATCH (u:User) WHERE u.email = $email RETURN u',
+  { email: userInput }
+);
+
+// Bad - string interpolation (injection risk)
+const users = await db.query(`MATCH (u:User) WHERE u.email = '${userInput}' RETURN u`);
+```
+
+### Typed Results
+
+```typescript
+interface User {
+  name: string;
+  email: string;
+}
+
+const users = await db.query<User>(
+  'MATCH (u:User) RETURN u.name AS name, u.email AS email'
+);
+
+users[0].name;  // TypeScript knows this is string
+```
+
+### Relationships
+
+```typescript
+// Create a relationship
+await db.execute(`
+  MATCH (a:User {name: $from}), (b:User {name: $to})
+  CREATE (a)-[:FOLLOWS {since: $since}]->(b)
+`, { from: 'Alice', to: 'Bob', since: '2024-01-01' });
+
+// Query relationships
+const following = await db.query<{ name: string }>(`
+  MATCH (:User {name: $name})-[:FOLLOWS]->(friend:User)
+  RETURN friend.name AS name
+`, { name: 'Alice' });
+
+// Variable-length paths (1-3 hops)
+const connections = await db.query<{ name: string }>(`
+  MATCH (:User {name: $name})-[:FOLLOWS*1..3]->(connection:User)
+  RETURN DISTINCT connection.name AS name
+`, { name: 'Alice' });
+```
+
+### Upsert with MERGE
+
+```typescript
+await db.execute(`
+  MERGE (u:User {email: $email})
+  ON CREATE SET u.name = $name, u.createdAt = datetime()
+  ON MATCH SET u.lastSeen = datetime()
+`, { email: 'alice@example.com', name: 'Alice' });
+```
+
+### Batch Insert with UNWIND
+
+```typescript
+const users = [
+  { name: 'Alice', email: 'alice@example.com' },
+  { name: 'Bob', email: 'bob@example.com' },
+];
+
+await db.execute(`
+  UNWIND $users AS data
+  CREATE (u:User {name: data.name, email: data.email})
+`, { users });
+```
+
+### Error Handling
+
+```typescript
+import { LeanGraph, GraphDBError } from 'leangraph';
+
+try {
+  await db.query('MATCH (n:User RETURN n'); // syntax error
+} catch (err) {
+  if (err instanceof GraphDBError) {
+    console.error(`Query failed: ${err.message}`);
+    console.error(`Position: line ${err.line}, column ${err.column}`);
+  }
+}
+```
+
+### Testing
+
+Use test mode for fast, isolated tests:
+
+```typescript
+import { LeanGraph } from 'leangraph';
+
+const db = await LeanGraph({ mode: 'test', project: 'test' });
+
+// Tests run against in-memory database
+await db.execute('CREATE (u:User {name: $name})', { name: 'Test' });
+const [user] = await db.query('MATCH (u:User) RETURN u.name AS name');
+assert(user.name === 'Test');
+
+db.close(); // In-memory DB is discarded
 ```
 
 ## Cypher Quick Reference
@@ -327,22 +474,7 @@ leangraph apikey list
 leangraph apikey remove <prefix>
 ```
 
-## Why LeanGraph?
 
-| Feature | LeanGraph | Neo4j |
-|---------|-----------------|-------|
-| **Deployment** | Single package, zero config | Complex setup, JVM required |
-| **Development** | Local SQLite, no server needed | Server required |
-| **Backup** | Just copy the SQLite file | Enterprise license required |
-| **Resource usage** | ~50MB RAM | 1GB+ RAM minimum |
-| **Cypher support** | Full (Neo4j 3.5 parity) | Full |
-| **Cost** | Free, MIT license | Free tier limited |
-
-LeanGraph is ideal for:
-- Applications needing graph queries without ops burden
-- Projects that outgrow JSON but don't need a full graph database
-- Self-hosted deployments where simplicity matters
-- Development and testing with instant local databases
 
 ## Advanced Usage
 
