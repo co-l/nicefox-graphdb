@@ -154,6 +154,74 @@ export interface ExecutionError {
 export type QueryResponse = ExecutionResult | ExecutionError;
 
 // ============================================================================
+// Query Classification (Single-Pass)
+// ============================================================================
+
+/**
+ * Query execution patterns - determines which execution path to use
+ */
+type QueryPattern =
+  | "PHASED"           // Complex multi-phase execution
+  | "UNWIND_CREATE"    // UNWIND + CREATE (no MATCH)
+  | "UNWIND_MERGE"     // UNWIND + MERGE (no MATCH, no CREATE)
+  | "COLLECT_UNWIND"   // MATCH + WITH(COLLECT) + UNWIND + RETURN
+  | "COLLECT_DELETE"   // MATCH + WITH(COLLECT) + DELETE
+  | "CREATE_RETURN"    // CREATE + RETURN (no MATCH, no MERGE)
+  | "BOUND_REL_LIST"   // MATCH + WITH + MATCH with bound list pattern
+  | "MERGE"            // MERGE with special handling
+  | "MULTI_PHASE"      // MATCH + mutations (CREATE/SET/DELETE)
+  | "STANDARD";        // Standard SQL translation
+
+/**
+ * Pre-collected query flags and categorized clauses from single-pass classification
+ */
+interface QueryFlags {
+  // Clause presence flags
+  hasMatch: boolean;
+  hasOptionalMatch: boolean;
+  hasCreate: boolean;
+  hasMerge: boolean;
+  hasSet: boolean;
+  hasDelete: boolean;
+  hasUnwind: boolean;
+  hasWith: boolean;
+  hasReturn: boolean;
+  
+  // Detailed flags
+  mergeHasSetClauses: boolean;
+  mergeHasRelationshipPattern: boolean;
+  mergeHasPathExpressions: boolean;
+  withHasCollect: boolean;
+  matchHasRelationshipPattern: boolean;
+  hasMutations: boolean;
+  
+  // Counts
+  mergeCount: number;
+  withCount: number;
+  matchCount: number;
+  
+  // Pre-categorized clauses (avoid re-scanning in execution methods)
+  matchClauses: MatchClause[];
+  createClauses: CreateClause[];
+  mergeClauses: MergeClause[];
+  setClauses: SetClause[];
+  deleteClauses: DeleteClause[];
+  withClauses: WithClause[];
+  unwindClauses: UnwindClause[];
+  returnClause: ReturnClause | null;
+  
+  // Merge clause details
+  firstMergeClause: MergeClause | null;
+  
+  // WITH clause details for COLLECT pattern detection
+  singleWithCollectAlias: string | null;
+  
+  // Bound list detection for BOUND_REL_LIST pattern
+  boundListVar: string | null;
+  boundListExprVars: string[];
+}
+
+// ============================================================================
 // Executor
 // ============================================================================
 
@@ -205,132 +273,70 @@ export class Executor {
         };
       }
 
-      // 2. Try phase-based execution for complex multi-phase queries
-      const phasedResult = this.tryPhasedExecution(parseResult.query, params);
-      if (phasedResult !== null) {
+      // 2. Classify query with single-pass and dispatch to appropriate handler
+      const { pattern } = this.classifyQuery(parseResult.query);
+      
+      // Helper to return successful result
+      const makeResult = (data: Record<string, unknown>[]): QueryResponse => {
         const endTime = performance.now();
         return {
           success: true,
-          data: phasedResult,
+          data,
           meta: {
-            count: phasedResult.length,
+            count: data.length,
             time_ms: Math.round((endTime - startTime) * 100) / 100,
           },
         };
-      }
-
-      // 2.1. Check for UNWIND with CREATE pattern (needs special handling)
-      const unwindCreateResult = this.tryUnwindCreateExecution(parseResult.query, params);
-      if (unwindCreateResult !== null) {
-        const endTime = performance.now();
-        return {
-          success: true,
-          data: unwindCreateResult,
-          meta: {
-            count: unwindCreateResult.length,
-            time_ms: Math.round((endTime - startTime) * 100) / 100,
-          },
-        };
-      }
-
-      // 2.2. Check for UNWIND with MERGE pattern (needs special handling)
-      const unwindMergeResult = this.tryUnwindMergeExecution(parseResult.query, params);
-      if (unwindMergeResult !== null) {
-        const endTime = performance.now();
-        return {
-          success: true,
-          data: unwindMergeResult,
-          meta: {
-            count: unwindMergeResult.length,
-            time_ms: Math.round((endTime - startTime) * 100) / 100,
-          },
-        };
-      }
-
-      // 2.3. Check for MATCH+WITH(COLLECT)+UNWIND+RETURN pattern (needs subquery for aggregates)
-      const collectUnwindResult = this.tryCollectUnwindExecution(parseResult.query, params);
-      if (collectUnwindResult !== null) {
-        const endTime = performance.now();
-        return {
-          success: true,
-          data: collectUnwindResult,
-          meta: {
-            count: collectUnwindResult.length,
-            time_ms: Math.round((endTime - startTime) * 100) / 100,
-          },
-        };
-      }
-
-      // 2.4. Check for MATCH+WITH(COLLECT)+DELETE[expr] pattern
-      const collectDeleteResult = this.tryCollectDeleteExecution(parseResult.query, params);
-      if (collectDeleteResult !== null) {
-        const endTime = performance.now();
-        return {
-          success: true,
-          data: collectDeleteResult,
-          meta: {
-            count: collectDeleteResult.length,
-            time_ms: Math.round((endTime - startTime) * 100) / 100,
-          },
-        };
-      }
-
-      // 2.5. Check for CREATE...RETURN pattern (needs special handling)
-      const createReturnResult = this.tryCreateReturnExecution(parseResult.query, params);
-      if (createReturnResult !== null) {
-        const endTime = performance.now();
-        return {
-          success: true,
-          data: createReturnResult,
-          meta: {
-            count: createReturnResult.length,
-            time_ms: Math.round((endTime - startTime) * 100) / 100,
-          },
-        };
-      }
-
-      // 2.5. Check for MERGE with ON CREATE SET / ON MATCH SET (needs special handling)
-      const mergeResult = this.tryMergeExecution(parseResult.query, params);
-      if (mergeResult !== null) {
-        const endTime = performance.now();
-        return {
-          success: true,
-          data: mergeResult,
-          meta: {
-            count: mergeResult.length,
-            time_ms: Math.round((endTime - startTime) * 100) / 100,
-          },
-        };
-      }
-
-      // 2.6. Check for MATCH...WITH...MATCH pattern with bound relationship list
-      // e.g., MATCH ()-[r1]->()-[r2]->() WITH [r1, r2] AS rs MATCH (a)-[rs*]->(b) RETURN a, b
-      const boundRelListResult = this.tryBoundRelationshipListExecution(parseResult.query, params);
-      if (boundRelListResult !== null) {
-        const endTime = performance.now();
-        return {
-          success: true,
-          data: boundRelListResult,
-          meta: {
-            count: boundRelListResult.length,
-            time_ms: Math.round((endTime - startTime) * 100) / 100,
-          },
-        };
-      }
-
-      // 3. Check if this is a pattern that needs multi-phase execution
-      // (MATCH...CREATE, MATCH...SET, MATCH...DELETE with relationship patterns)
-      const multiPhaseResult = this.tryMultiPhaseExecution(parseResult.query, params);
-      if (multiPhaseResult !== null) {
-        const endTime = performance.now();
-        return {
-          success: true,
-          data: multiPhaseResult,
-          meta: {
-            count: multiPhaseResult.length,
-            time_ms: Math.round((endTime - startTime) * 100) / 100,
-          },
-        };
+      };
+      
+      // Dispatch based on pattern (each try* method still validates and may return null)
+      switch (pattern) {
+        case "PHASED": {
+          const result = this.tryPhasedExecution(parseResult.query, params);
+          if (result !== null) return makeResult(result);
+          break;
+        }
+        case "UNWIND_CREATE": {
+          const result = this.tryUnwindCreateExecution(parseResult.query, params);
+          if (result !== null) return makeResult(result);
+          break;
+        }
+        case "UNWIND_MERGE": {
+          const result = this.tryUnwindMergeExecution(parseResult.query, params);
+          if (result !== null) return makeResult(result);
+          break;
+        }
+        case "COLLECT_UNWIND": {
+          const result = this.tryCollectUnwindExecution(parseResult.query, params);
+          if (result !== null) return makeResult(result);
+          break;
+        }
+        case "COLLECT_DELETE": {
+          const result = this.tryCollectDeleteExecution(parseResult.query, params);
+          if (result !== null) return makeResult(result);
+          break;
+        }
+        case "CREATE_RETURN": {
+          const result = this.tryCreateReturnExecution(parseResult.query, params);
+          if (result !== null) return makeResult(result);
+          break;
+        }
+        case "BOUND_REL_LIST": {
+          const result = this.tryBoundRelationshipListExecution(parseResult.query, params);
+          if (result !== null) return makeResult(result);
+          break;
+        }
+        case "MERGE": {
+          const result = this.tryMergeExecution(parseResult.query, params);
+          if (result !== null) return makeResult(result);
+          break;
+        }
+        case "MULTI_PHASE": {
+          const result = this.tryMultiPhaseExecution(parseResult.query, params);
+          if (result !== null) return makeResult(result);
+          break;
+        }
+        // STANDARD falls through to SQL translation below
       }
 
       // 3. Standard single-phase execution: Translate to SQL
@@ -373,6 +379,248 @@ export class Executor {
         },
       };
     }
+  }
+
+  // ============================================================================
+  // Query Classification (Single-Pass)
+  // ============================================================================
+
+  /**
+   * Single-pass query classifier - scans clauses once to determine execution pattern
+   * 
+   * This replaces the sequential try*Execution() calls that each scanned all clauses.
+   * By doing one pass and collecting all needed flags, we avoid O(n*m) complexity
+   * where n is number of clauses and m is number of try* methods.
+   */
+  private classifyQuery(query: Query): { pattern: QueryPattern; flags: QueryFlags } {
+    const flags: QueryFlags = {
+      // Clause presence
+      hasMatch: false,
+      hasOptionalMatch: false,
+      hasCreate: false,
+      hasMerge: false,
+      hasSet: false,
+      hasDelete: false,
+      hasUnwind: false,
+      hasWith: false,
+      hasReturn: false,
+      
+      // Detailed flags
+      mergeHasSetClauses: false,
+      mergeHasRelationshipPattern: false,
+      mergeHasPathExpressions: false,
+      withHasCollect: false,
+      matchHasRelationshipPattern: false,
+      hasMutations: false,
+      
+      // Counts
+      mergeCount: 0,
+      withCount: 0,
+      matchCount: 0,
+      
+      // Pre-categorized clauses
+      matchClauses: [],
+      createClauses: [],
+      mergeClauses: [],
+      setClauses: [],
+      deleteClauses: [],
+      withClauses: [],
+      unwindClauses: [],
+      returnClause: null,
+      
+      // Merge details
+      firstMergeClause: null,
+      
+      // WITH COLLECT detection
+      singleWithCollectAlias: null,
+      
+      // Bound list detection
+      boundListVar: null,
+      boundListExprVars: [],
+    };
+    
+    // Single pass through all clauses
+    for (const clause of query.clauses) {
+      switch (clause.type) {
+        case "MATCH":
+          flags.hasMatch = true;
+          flags.matchCount++;
+          flags.matchClauses.push(clause);
+          // Check for relationship patterns
+          if (clause.patterns.some(p => this.isRelationshipPattern(p))) {
+            flags.matchHasRelationshipPattern = true;
+          }
+          break;
+          
+        case "OPTIONAL_MATCH":
+          flags.hasOptionalMatch = true;
+          flags.matchCount++;
+          // OPTIONAL_MATCH is stored as MatchClause with isOptional flag
+          flags.matchClauses.push(clause as MatchClause);
+          break;
+          
+        case "CREATE":
+          flags.hasCreate = true;
+          flags.createClauses.push(clause);
+          break;
+          
+        case "MERGE": {
+          flags.hasMerge = true;
+          flags.mergeCount++;
+          flags.mergeClauses.push(clause);
+          if (!flags.firstMergeClause) {
+            flags.firstMergeClause = clause;
+          }
+          // Check for ON CREATE SET / ON MATCH SET
+          if (clause.onCreateSet || clause.onMatchSet) {
+            flags.mergeHasSetClauses = true;
+          }
+          // Check for relationship patterns
+          if (clause.patterns.some(p => this.isRelationshipPattern(p))) {
+            flags.mergeHasRelationshipPattern = true;
+          }
+          // Check for path expressions
+          if (clause.pathExpressions && clause.pathExpressions.length > 0) {
+            flags.mergeHasPathExpressions = true;
+          }
+          break;
+        }
+          
+        case "SET":
+          flags.hasSet = true;
+          flags.setClauses.push(clause);
+          break;
+          
+        case "DELETE":
+          flags.hasDelete = true;
+          flags.deleteClauses.push(clause);
+          break;
+          
+        case "UNWIND":
+          flags.hasUnwind = true;
+          flags.unwindClauses.push(clause);
+          break;
+          
+        case "WITH": {
+          flags.hasWith = true;
+          flags.withCount++;
+          flags.withClauses.push(clause);
+          // Check for COLLECT function
+          if (clause.items.length === 1) {
+            const item = clause.items[0];
+            if (item.expression.type === "function" && 
+                item.expression.functionName?.toUpperCase() === "COLLECT" &&
+                item.alias) {
+              flags.withHasCollect = true;
+              flags.singleWithCollectAlias = item.alias;
+            }
+          }
+          // Check for list literal pattern [r1, r2] for bound relationship list detection
+          for (const item of clause.items) {
+            if (item.alias && item.expression.type === "function" && 
+                item.expression.functionName === "LIST" && item.expression.args) {
+              flags.boundListVar = item.alias;
+              flags.boundListExprVars = [];
+              for (const elem of item.expression.args) {
+                if (elem.type === "variable" && elem.variable) {
+                  flags.boundListExprVars.push(elem.variable);
+                }
+              }
+            }
+          }
+          break;
+        }
+          
+        case "RETURN":
+          flags.hasReturn = true;
+          flags.returnClause = clause;
+          break;
+      }
+    }
+    
+    // Derived flags
+    flags.hasMutations = flags.hasCreate || flags.hasSet || flags.hasDelete;
+    
+    // Determine pattern using the collected flags
+    const pattern = this.determineQueryPattern(query, flags);
+    
+    return { pattern, flags };
+  }
+  
+  /**
+   * Determine execution pattern from collected flags
+   * Order matters - patterns are checked in priority order
+   */
+  private determineQueryPattern(query: Query, flags: QueryFlags): QueryPattern {
+    // 1. PHASED - Complex multi-phase queries with phase boundaries
+    const phases = this.detectPhases(query);
+    const needsMergePhasedExecution = (flags.hasMatch || flags.hasCreate) && 
+                                       flags.hasMerge && 
+                                       !flags.mergeHasSetClauses;
+    const needsCreateWithPhasedExecution = flags.hasCreate && flags.hasWith && !flags.hasMatch;
+    
+    if (phases.length > 1 || needsMergePhasedExecution || needsCreateWithPhasedExecution) {
+      return "PHASED";
+    }
+    
+    // 2. UNWIND_CREATE - UNWIND + CREATE without MATCH
+    if (flags.hasUnwind && flags.hasCreate && !flags.hasMatch) {
+      return "UNWIND_CREATE";
+    }
+    
+    // 3. UNWIND_MERGE - UNWIND + MERGE without MATCH or CREATE
+    if (flags.hasUnwind && flags.hasMerge && !flags.hasMatch && !flags.hasCreate) {
+      return "UNWIND_MERGE";
+    }
+    
+    // 4. COLLECT_UNWIND - MATCH + WITH(COLLECT) + UNWIND + RETURN
+    if (flags.hasMatch && flags.withHasCollect && flags.hasUnwind && flags.hasReturn) {
+      // Additional validation: WITH must have exactly one COLLECT item
+      // and UNWIND must reference the COLLECT alias
+      const lastUnwind = flags.unwindClauses[flags.unwindClauses.length - 1];
+      if (lastUnwind && 
+          lastUnwind.expression.type === "variable" && 
+          lastUnwind.expression.variable === flags.singleWithCollectAlias) {
+        return "COLLECT_UNWIND";
+      }
+    }
+    
+    // 5. COLLECT_DELETE - MATCH + WITH(COLLECT) + DELETE
+    if (flags.hasMatch && flags.withHasCollect && flags.hasDelete && 
+        flags.deleteClauses[0]?.expressions && flags.deleteClauses[0].expressions.length > 0) {
+      return "COLLECT_DELETE";
+    }
+    
+    // 6. CREATE_RETURN - CREATE + RETURN without MATCH or MERGE
+    if (flags.hasCreate && flags.hasReturn && !flags.hasMatch && !flags.hasMerge) {
+      return "CREATE_RETURN";
+    }
+    
+    // 7. BOUND_REL_LIST - MATCH + WITH + MATCH with bound list pattern
+    if (flags.matchCount >= 2 && flags.hasWith && flags.boundListVar && 
+        flags.boundListExprVars.length > 0 && flags.hasReturn) {
+      return "BOUND_REL_LIST";
+    }
+    
+    // 8. MERGE - MERGE with special handling needs
+    if (flags.hasMerge) {
+      const hasSpecialMerge = flags.mergeHasRelationshipPattern || 
+                              flags.mergeHasSetClauses || 
+                              flags.mergeHasPathExpressions ||
+                              flags.hasReturn ||
+                              flags.mergeCount > 1;
+      if (hasSpecialMerge) {
+        return "MERGE";
+      }
+    }
+    
+    // 9. MULTI_PHASE - MATCH with mutations (CREATE/SET/DELETE)
+    if (flags.hasMatch && flags.hasMutations) {
+      return "MULTI_PHASE";
+    }
+    
+    // 10. STANDARD - Default SQL translation
+    return "STANDARD";
   }
 
   // ============================================================================
